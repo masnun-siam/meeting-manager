@@ -50,7 +50,13 @@ export interface HealthRequest {
 
 export type NativeRequest = ProcessRequest | RetryRequest | ListJobsRequest | OpenRequest | HealthRequest;
 
-export type NativeErrorCode = 'not_configured' | 'invalid_path' | 'already_processing' | 'unknown_job' | 'missing_file';
+export type NativeErrorCode =
+  | 'not_configured'
+  | 'invalid_path'
+  | 'already_processing'
+  | 'unknown_job'
+  | 'missing_file'
+  | 'bad_request';
 
 export interface NativeError {
   ok: false;
