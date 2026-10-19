@@ -39,6 +39,8 @@ export interface RecorderStatus {
   /** null until the offscreen document has started; false means tab audio only. */
   micIncluded: boolean | null;
   notice: Notice | null;
+  /** The captured tab, so `tabs.onRemoved` still matches after the service worker slept. */
+  tabId: number | null;
 }
 
 export const RECORDER_STATUS_KEY = 'recorder';

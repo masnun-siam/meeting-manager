@@ -1,0 +1,241 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RECORDER_STATUS_KEY, type RecorderStatus } from '../shared/messages';
+import { MIC_PERMISSION_PAGE } from '../shared/micPermission';
+import { handleOffscreenEvent, handlePopupCommand, handleTabRemoved, OFFSCREEN_PAGE } from './recordingControl';
+
+const T0 = new Date('2026-01-01T10:00:00Z').getTime();
+const TAB = 7;
+
+let stored: Record<string, unknown>;
+let hasDocument: boolean;
+let permission: PermissionState;
+const setBadgeText = vi.fn();
+const getMediaStreamId = vi.fn();
+const createDocument = vi.fn();
+const closeDocument = vi.fn();
+const sendMessage = vi.fn();
+const tabsCreate = vi.fn();
+const tabsQuery = vi.fn();
+
+const status = () => stored[RECORDER_STATUS_KEY] as RecorderStatus;
+const sent = () => sendMessage.mock.calls.map(([m]) => m.type);
+
+async function startRecording(): Promise<void> {
+  await handlePopupCommand({ type: 'start', language: 'en' });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(T0);
+  stored = {};
+  hasDocument = false;
+  permission = 'granted';
+  for (const mock of [setBadgeText, getMediaStreamId, createDocument, closeDocument, sendMessage, tabsCreate]) {
+    mock.mockReset();
+  }
+  getMediaStreamId.mockResolvedValue('stream-1');
+  tabsQuery.mockReset().mockResolvedValue([{ id: TAB }]);
+  createDocument.mockImplementation(async () => {
+    hasDocument = true;
+  });
+  closeDocument.mockImplementation(async () => {
+    hasDocument = false;
+  });
+  vi.stubGlobal('navigator', { permissions: { query: async () => ({ state: permission }) } });
+  vi.stubGlobal('chrome', {
+    storage: {
+      session: {
+        get: async (key: string) => ({ [key]: stored[key] }),
+        set: async (items: Record<string, unknown>) => {
+          Object.assign(stored, items);
+        },
+      },
+    },
+    action: { setBadgeText, setBadgeBackgroundColor: vi.fn() },
+    tabs: { query: tabsQuery, create: tabsCreate },
+    tabCapture: { getMediaStreamId },
+    offscreen: {
+      hasDocument: async () => hasDocument,
+      createDocument,
+      closeDocument,
+      Reason: { USER_MEDIA: 'USER_MEDIA' },
+    },
+    runtime: { sendMessage, getURL: (path: string) => `chrome-extension://id/${path}` },
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe('start', () => {
+  it('opens the mic page and does nothing else when the permission is prompt', async () => {
+    permission = 'prompt';
+    await startRecording();
+
+    expect(tabsCreate).toHaveBeenCalledWith({ url: `chrome-extension://id/${MIC_PERMISSION_PAGE}` });
+    expect(createDocument).not.toHaveBeenCalled();
+    expect(stored[RECORDER_STATUS_KEY]).toBeUndefined();
+  });
+
+  it.each(['granted', 'denied'] as const)('records when the permission is %s', async (state) => {
+    permission = state;
+    await startRecording();
+
+    expect(tabsQuery).toHaveBeenCalledWith({ active: true, lastFocusedWindow: true });
+    expect(getMediaStreamId).toHaveBeenCalledWith({ targetTabId: TAB });
+    expect(createDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ url: OFFSCREEN_PAGE, reasons: ['USER_MEDIA'] }),
+    );
+    expect(status()).toEqual({
+      state: { phase: 'recording', startedAt: T0, recordedMs: 0, resumedAt: T0 },
+      language: 'en',
+      micIncluded: null,
+      notice: null,
+      tabId: TAB,
+    });
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: 'REC' });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'offscreen_start',
+      streamId: 'stream-1',
+      language: 'en',
+      startedAt: T0,
+    });
+  });
+
+  it('reuses an existing offscreen document', async () => {
+    hasDocument = true;
+    await startRecording();
+    expect(createDocument).not.toHaveBeenCalled();
+  });
+
+  it('is ignored while a recording is running', async () => {
+    await startRecording();
+    sendMessage.mockClear();
+    await startRecording();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no active tab', () => tabsQuery.mockResolvedValue([]), 'No active tab to record'],
+    [
+      'getMediaStreamId rejects',
+      () => getMediaStreamId.mockRejectedValue(new Error('capture denied')),
+      'capture denied',
+    ],
+    ['createDocument rejects', () => createDocument.mockRejectedValue(new Error('no document')), 'no document'],
+  ])('leaves idle with an error notice when %s', async (_name, arrange, message) => {
+    arrange();
+    await expect(startRecording()).rejects.toThrow(message);
+
+    expect(status().state).toEqual({ phase: 'idle', lastStop: null });
+    expect(status().notice).toEqual({ kind: 'error', message });
+    expect(status().tabId).toBeNull();
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: '' });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('running recording', () => {
+  beforeEach(startRecording);
+
+  it('sets micIncluded on offscreen_started', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    expect(status().micIncluded).toBe(true);
+  });
+
+  it('pauses and resumes', async () => {
+    vi.setSystemTime(T0 + 60_000);
+    await handlePopupCommand({ type: 'pause' });
+    expect(status().state).toEqual({ phase: 'paused', startedAt: T0, recordedMs: 60_000 });
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: 'II' });
+    expect(sendMessage).toHaveBeenLastCalledWith({ type: 'offscreen_pause' });
+
+    vi.setSystemTime(T0 + 120_000);
+    await handlePopupCommand({ type: 'resume' });
+    expect(status().state).toMatchObject({ phase: 'recording', recordedMs: 60_000, resumedAt: T0 + 120_000 });
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: 'REC' });
+    expect(sendMessage).toHaveBeenLastCalledWith({ type: 'offscreen_resume' });
+  });
+
+  it('stops, then returns to idle with the reason when the offscreen document reports it', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handlePopupCommand({ type: 'stop' });
+    expect(status().state).toMatchObject({ phase: 'saving', reason: 'user' });
+    expect(sendMessage).toHaveBeenLastCalledWith({ type: 'offscreen_stop' });
+
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    expect(status().state).toEqual({ phase: 'idle', lastStop: 'user' });
+    expect(status().tabId).toBeNull();
+    expect(closeDocument).toHaveBeenCalled();
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: '' });
+  });
+
+  it('holds a stop until offscreen_started arrives', async () => {
+    await handlePopupCommand({ type: 'stop' });
+    expect(status().state.phase).toBe('saving');
+    expect(sent()).toEqual(['offscreen_start']);
+
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: false });
+    expect(sent()).toEqual(['offscreen_start', 'offscreen_stop']);
+  });
+
+  it('stops with tab_closed when the captured tab closes, and keeps that reason', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handleTabRemoved(TAB);
+    expect(status().state).toMatchObject({ phase: 'saving', reason: 'tab_closed' });
+    expect(sendMessage).toHaveBeenLastCalledWith({ type: 'offscreen_stop' });
+
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'capture_ended' });
+    expect(status().state).toEqual({ phase: 'idle', lastStop: 'tab_closed' });
+  });
+
+  it('ignores another tab closing', async () => {
+    await handleTabRemoved(TAB + 1);
+    expect(status().state.phase).toBe('recording');
+    expect(sent()).toEqual(['offscreen_start']);
+  });
+
+  it('records a cap stop', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'cap' });
+    expect(status().state).toEqual({ phase: 'idle', lastStop: 'cap' });
+  });
+
+  it('resets to idle with an error notice on offscreen_error before started', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_error', message: 'no audio' });
+    expect(status().state).toEqual({ phase: 'idle', lastStop: null });
+    expect(status().notice).toEqual({ kind: 'error', message: 'no audio' });
+    expect(closeDocument).toHaveBeenCalled();
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: '' });
+  });
+
+  it('only sets the notice on offscreen_error after started', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handleOffscreenEvent({ type: 'offscreen_error', message: 'disk full' });
+    expect(status().state.phase).toBe('recording');
+    expect(status().notice).toEqual({ kind: 'error', message: 'disk full' });
+    expect(closeDocument).not.toHaveBeenCalled();
+  });
+
+  it('keeps the error notice through the stop that follows', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handleOffscreenEvent({ type: 'offscreen_error', message: 'disk full' });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'capture_ended' });
+    expect(status().state).toEqual({ phase: 'idle', lastStop: 'capture_ended' });
+    expect(status().notice).toEqual({ kind: 'error', message: 'disk full' });
+  });
+});
+
+describe('ordering', () => {
+  it('handles events one at a time, in order', async () => {
+    await Promise.all([
+      startRecording(),
+      handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true }),
+      handlePopupCommand({ type: 'pause' }),
+    ]);
+    expect(status().state.phase).toBe('paused');
+    expect(status().micIncluded).toBe(true);
+  });
+});
