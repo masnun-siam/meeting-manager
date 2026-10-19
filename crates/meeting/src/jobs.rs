@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
@@ -100,11 +101,14 @@ pub fn now_utc() -> String {
     format_utc(unix_secs(SystemTime::now()))
 }
 
+/// `<millis>-<pid>-<n>`; the counter keeps ids distinct within one millisecond.
 pub fn new_job_id() -> String {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
-    format!("{millis}-{}", std::process::id())
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{millis}-{}-{n}", std::process::id())
 }
 
 pub fn unix_secs(time: SystemTime) -> u64 {
@@ -262,8 +266,6 @@ mod tests {
 
     #[test]
     fn job_ids_are_distinct() {
-        let a = new_job_id();
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        assert_ne!(a, new_job_id());
+        assert_ne!(new_job_id(), new_job_id());
     }
 }
