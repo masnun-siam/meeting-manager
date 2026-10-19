@@ -14,7 +14,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `meeting install` | Registers the native host, writes config. | [features/setup.md](features/setup.md) |
 | `meeting config set-key` | Stores the Deepgram key in the Keychain (hidden prompt). | [features/setup.md](features/setup.md) |
 | `meeting doctor` | Prints one line per check; exits non-zero if any failed. | [features/setup.md](features/setup.md) |
-| `meeting native-host [origin]` | Entry point Chrome launches. | [features/native-messaging.md](features/native-messaging.md) |
+| `meeting native-host [origin]` | Entry point Chrome launches (as `meeting <origin>`, rewritten by `chrome_args`). | [features/native-messaging.md](features/native-messaging.md) |
 
 - `Language` (`bn`, `en`) is defined in `main.rs` and imported by `deepgram`, `meta`, `native`, `plan`, `transcript`, `vault`.
 - `run` dispatches with a chain of `if let` blocks, each returning. The trailing `bail!("... not implemented yet")` is unreachable for current commands.

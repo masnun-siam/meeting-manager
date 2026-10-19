@@ -19,6 +19,7 @@ mod test_support;
 mod transcript;
 mod vault;
 
+use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -82,7 +83,7 @@ pub enum Language {
 
 fn main() -> anyhow::Result<()> {
     logging::init();
-    let cli = Cli::try_parse().unwrap_or_else(|e| {
+    let cli = Cli::try_parse_from(chrome_args(std::env::args_os())).unwrap_or_else(|e| {
         if e.use_stderr() {
             tracing::error!("{}", e.kind());
         }
@@ -93,6 +94,19 @@ fn main() -> anyhow::Result<()> {
         tracing::error!("{e:#}");
     }
     result
+}
+
+/// Chrome launches a native host as `<path> chrome-extension://<id>/` and its
+/// manifest can't add arguments, so an origin in first place means `native-host`.
+fn chrome_args(args: impl Iterator<Item = OsString>) -> Vec<OsString> {
+    let mut args: Vec<OsString> = args.collect();
+    if args
+        .get(1)
+        .is_some_and(|a| a.to_string_lossy().starts_with("chrome-extension://"))
+    {
+        args.insert(1, "native-host".into());
+    }
+    args
 }
 
 fn run(command: Command) -> anyhow::Result<()> {
@@ -275,5 +289,21 @@ mod tests {
             panic!("expected native-host");
         };
         assert_eq!(origin.as_deref(), Some("chrome-extension://abc/"));
+    }
+
+    #[test]
+    fn chrome_launch_with_only_an_origin_runs_native_host() {
+        let args = ["meeting", "chrome-extension://abc/"].map(OsString::from);
+        let cli = Cli::try_parse_from(chrome_args(args.into_iter())).unwrap();
+        let Command::NativeHost { origin } = cli.command else {
+            panic!("expected native-host");
+        };
+        assert_eq!(origin.as_deref(), Some("chrome-extension://abc/"));
+    }
+
+    #[test]
+    fn other_arguments_are_left_alone() {
+        let args = ["meeting", "doctor"].map(OsString::from);
+        assert_eq!(chrome_args(args.clone().into_iter()), args);
     }
 }

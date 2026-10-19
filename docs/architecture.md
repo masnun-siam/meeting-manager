@@ -34,7 +34,7 @@ flowchart LR
 ## How they talk
 
 - **Extension internals:** `chrome.runtime` messages between popup, service worker and offscreen document; status in `chrome.storage.session`. See [extension.md](extension.md#message-passing).
-- **Extension → tool:** Chrome native messaging (`com.meeting_manager.host`). Chrome launches `meeting native-host` per request; the host only accepts the pinned extension origin. See [features/native-messaging.md](features/native-messaging.md).
+- **Extension → tool:** Chrome native messaging (`com.meeting_manager.host`). Chrome launches `meeting chrome-extension://<id>/` per request, which `main.rs` runs as `native-host`; the host only accepts the pinned extension origin. See [features/native-messaging.md](features/native-messaging.md).
 - **Tool → tool:** the host never processes a recording itself; it writes a `queued` job and spawns `meeting process --job-id <id>` in its own process group, then exits.
 - **Tool → extension:** no push. The popup Jobs tab polls `list_jobs`; the tool reads and writes job JSON files that both sides see through the host.
 
