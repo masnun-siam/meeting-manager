@@ -1,9 +1,27 @@
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Popup } from './Popup';
 
 describe('Popup', () => {
+  beforeEach(() => {
+    vi.stubGlobal('chrome', {
+      storage: {
+        session: {
+          get: vi.fn().mockResolvedValue({}),
+          onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
+        },
+        local: { get: vi.fn().mockResolvedValue({}) },
+      },
+      runtime: { sendMessage: vi.fn() },
+    });
+  });
+
+  afterEach(() => {
+    cleanup(); // unmount while `chrome` is still stubbed
+    vi.unstubAllGlobals();
+  });
+
   it('opens on the Record tab', () => {
     render(<Popup />);
 

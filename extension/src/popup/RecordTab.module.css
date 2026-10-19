@@ -1,0 +1,34 @@
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timer {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.rec {
+  color: #d93025;
+}
+
+.messages {
+  color: #5f6368;
+}
+
+.messages p {
+  margin: 0;
+}
+
+.messages .problem {
+  color: #d93025;
+}
