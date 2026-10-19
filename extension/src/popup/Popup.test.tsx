@@ -12,6 +12,14 @@ describe('Popup', () => {
     expect(screen.getByRole('tabpanel', { name: 'Record' })).toBeInTheDocument();
   });
 
+  it('points only the selected tab at the rendered panel', () => {
+    render(<Popup />);
+
+    const panel = screen.getByRole('tabpanel');
+    expect(screen.getByRole('tab', { name: 'Record' })).toHaveAttribute('aria-controls', panel.id);
+    expect(screen.getByRole('tab', { name: 'Jobs' })).not.toHaveAttribute('aria-controls');
+  });
+
   it('switches to the Jobs panel when Jobs is clicked', async () => {
     render(<Popup />);
 

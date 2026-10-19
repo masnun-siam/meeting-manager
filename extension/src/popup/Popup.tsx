@@ -23,7 +23,7 @@ export function Popup() {
             role="tab"
             id={`tab-${id}`}
             aria-selected={selected === id}
-            aria-controls={`panel-${id}`}
+            aria-controls={selected === id ? `panel-${id}` : undefined}
             className={styles.tab}
             onClick={() => setSelected(id)}
           >
