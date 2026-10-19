@@ -1,0 +1,9 @@
+{
+  "metadata": {"duration": 8.0},
+  "results": {
+    "utterances": [
+      {"start": 0.0, "end": 2.0, "confidence": 0.95, "speaker": 0, "transcript": "Starting the weekly update."},
+      {"start": 2.5, "end": 5.0, "confidence": 0.95, "speaker": 0, "transcript": "Everything is on track."}
+    ]
+  }
+}

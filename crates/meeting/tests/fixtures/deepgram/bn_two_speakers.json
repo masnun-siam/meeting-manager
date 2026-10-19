@@ -1,0 +1,9 @@
+{
+  "metadata": {"duration": 9.0},
+  "results": {
+    "utterances": [
+      {"start": 0.5, "end": 2.0, "confidence": 0.9, "speaker": 0, "transcript": "আসসালামু আলাইকুম, কেমন আছেন?"},
+      {"start": 3.1, "end": 5.0, "confidence": 0.9, "speaker": 1, "transcript": "আলহামদুলিল্লাহ, ভালো।"}
+    ]
+  }
+}
