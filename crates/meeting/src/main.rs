@@ -3,6 +3,11 @@ mod config;
     not(test),
     expect(dead_code, reason = "used by `meeting process` (#20)")
 )]
+mod deepgram;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by `meeting process` (#20)")
+)]
 mod extract;
 #[cfg_attr(
     not(test),
