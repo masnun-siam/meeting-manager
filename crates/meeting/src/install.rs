@@ -69,7 +69,11 @@ pub fn install(
         .as_ref()
         .map(|c| c.vault_dir.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let vault_dir = PathBuf::from(ask(input, out, "Vault path", &default_vault, home)?);
+    let vault = ask(input, out, "Vault path", &default_vault, home)?;
+    if vault.is_empty() {
+        bail!("a vault path is required");
+    }
+    let vault_dir = PathBuf::from(vault);
     if !vault_dir.is_dir() {
         bail!("vault directory {} does not exist", vault_dir.display());
     }
@@ -208,6 +212,14 @@ mod tests {
         let (r, _) = run(&e, "/does/not/exist\n\n");
         assert!(r.unwrap_err().to_string().contains("does not exist"));
         assert!(!files(&e).1.exists());
+        fs::remove_dir_all(&e.root).unwrap();
+    }
+
+    #[test]
+    fn empty_vault_answer_is_rejected() {
+        let e = env("empty-vault", "{}");
+        let (r, _) = run(&e, "\n\n");
+        assert_eq!(r.unwrap_err().to_string(), "a vault path is required");
         fs::remove_dir_all(&e.root).unwrap();
     }
 
