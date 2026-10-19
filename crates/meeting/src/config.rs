@@ -25,7 +25,6 @@ pub fn home() -> anyhow::Result<PathBuf> {
     std::env::home_dir().ok_or_else(|| anyhow!("cannot find the home directory"))
 }
 
-#[expect(dead_code, reason = "`install` (#27) saves; drop this once it lands")]
 impl Config {
     pub fn path() -> anyhow::Result<PathBuf> {
         Ok(home()?.join(".config/meeting-manager/config.toml"))
@@ -33,10 +32,6 @@ impl Config {
 
     pub fn load() -> anyhow::Result<Config> {
         Self::load_from(&Self::path()?)
-    }
-
-    pub fn save(&self) -> anyhow::Result<()> {
-        self.save_to(&Self::path()?)
     }
 
     pub fn load_from(path: &Path) -> anyhow::Result<Config> {
