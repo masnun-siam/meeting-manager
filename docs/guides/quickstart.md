@@ -1,0 +1,29 @@
+# Quickstart
+
+From a fresh clone to your first meeting note. Assumes macOS, Chrome, Rust, Node 24, `brew install ffmpeg`, a logged-in Claude Code and a Deepgram key; see [installation](installation.md) for details and troubleshooting.
+
+```sh
+cargo install --path crates/meeting
+meeting install          # vault path + folder
+meeting config set-key   # Deepgram key
+meeting doctor           # all ✓
+cd extension && npm ci && npm run build
+```
+
+Load `extension/dist/` in `chrome://extensions` (Developer mode → **Load unpacked**).
+
+## First recording
+
+1. Open the meeting tab (Meet, Zoom web, Teams web) and click the extension.
+2. Pick **Bengali** or **English** and press **Start**. The first time, a permission page opens: allow the mic, go back and press **Start** again.
+3. Talk for at least 10 seconds (shorter recordings are saved but not processed), then press **Stop & save**.
+4. Open the **Jobs** tab and watch it move through extracting → transcribing → summarising → done. A macOS notification says when it is ready.
+5. Click **Open summary**, or find the note in your vault folder (`<vault>/Meetings/` by default).
+
+The recording, transcript, summary and `meta.json` sit side by side in `~/Downloads/Meetings/`.
+
+## Next
+
+- Picked the wrong language? `meeting process <file.webm> --language en`.
+- Want a fresh summary? `meeting process <file.webm>` reuses the transcript, so Deepgram is not billed again.
+- Something failed? `meeting doctor`, then `~/Library/Logs/meeting-manager/meeting.log`.
