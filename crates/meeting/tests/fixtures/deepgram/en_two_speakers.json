@@ -1,0 +1,9 @@
+{
+  "metadata": {"request_id": "abc-123", "duration": 12.5, "channels": 1},
+  "results": {
+    "utterances": [
+      {"start": 1.2, "end": 3.4, "confidence": 0.98, "speaker": 0, "transcript": "Hi, thanks for joining."},
+      {"start": 4.9, "end": 6.0, "confidence": 0.97, "speaker": 1, "transcript": "Thanks, Rahim."}
+    ]
+  }
+}
