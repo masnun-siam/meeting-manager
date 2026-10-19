@@ -265,35 +265,8 @@ fn first_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{VALID, envelope, stub, temp};
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
-
-    const VALID: &str = r#"{"title":"Standup","summary":"We met.","key_points":["a"],"decisions":["b"],"action_items":[{"task":"Ship","owner":"Rahim (inferred)","due":null,"timestamp":"00:00:03"}],"insights":[{"kind":"open_question","text":"When?"}],"speakers":[{"label":"Speaker 1","name":"Rahim","evidence":"Thanks, Rahim."}]}"#;
-
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("meeting-test-{}-{name}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// A stub `claude` that records its arguments and stdin, then runs `tail`.
-    fn stub(dir: &Path, tail: &str) -> PathBuf {
-        let path = dir.join("claude");
-        let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{d}/args.txt\"\ncat > \"{d}/stdin.txt\"\n{tail}\n",
-            d = dir.display()
-        );
-        fs::write(&path, script).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
-    fn envelope(structured: &str) -> String {
-        format!(
-            r#"{{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{structured}}}"#
-        )
-    }
 
     fn run_with_output(name: &str, stdout: &str) -> anyhow::Result<Summary> {
         let dir = temp(name);

@@ -20,6 +20,21 @@ pub enum Stage {
     Failed,
 }
 
+impl Stage {
+    /// The serialised name, as printed by `meeting process`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Stage::Queued => "queued",
+            Stage::Extracting => "extracting",
+            Stage::Transcribing => "transcribing",
+            Stage::Summarising => "summarising",
+            Stage::Writing => "writing",
+            Stage::Done => "done",
+            Stage::Failed => "failed",
+        }
+    }
+}
+
 /// One `meeting process` run. Optional fields serialise as `null`: the extension expects the keys.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Job {
