@@ -1,6 +1,6 @@
 # PRD — Meeting recorder and summariser
 
-**Status:** Approved · **Date:** 2026-10-19 · **Slug:** `meeting-recorder` · **Owner:** Siam · **Priority:** medium · **Repo:** not created yet (private GitHub repo, created on approval)
+**Status:** Approved · **Date:** 2026-10-19 · **Slug:** `meeting-recorder` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager (private)
 
 This document is the source of truth for the feature: every issue is derived from it, and a decision that is not written here has not been made.
 
@@ -300,7 +300,7 @@ None formally defined. Informally, every meeting recorded for two weeks has a va
 
 ## Epics
 
-- **E1 Meeting recorder and summariser** covers FR-1 to FR-18. Issue: —
+- **E1 Meeting recorder and summariser** covers FR-1 to FR-18. Issue: #1
 
 ## Decisions
 
