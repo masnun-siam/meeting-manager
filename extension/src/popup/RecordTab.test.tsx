@@ -8,7 +8,7 @@ import { RecordTab } from './RecordTab';
 const T0 = new Date('2026-01-01T10:00:00Z').getTime();
 
 function status(state: RecordingState, extra: Partial<RecorderStatus> = {}): RecorderStatus {
-  return { state, language: 'bn', micIncluded: null, notice: null, ...extra };
+  return { state, language: 'bn', micIncluded: null, notice: null, tabId: null, ...extra };
 }
 
 const recording = (extra: Partial<RecorderStatus> = {}) =>
