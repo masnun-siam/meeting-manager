@@ -4,6 +4,11 @@ mod config;
     expect(dead_code, reason = "used by `meeting process` (#20)")
 )]
 mod jobs;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by `meeting process` (#20)")
+)]
+mod lock;
 mod logging;
 #[cfg_attr(
     not(test),
