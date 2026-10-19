@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::anyhow;
 use serde::Deserialize;
 
 use crate::Language;
@@ -36,7 +36,7 @@ pub struct Transcript {
 /// Reads the fields the tool uses from a Deepgram response; blank utterances are dropped.
 pub fn parse(raw: &[u8]) -> anyhow::Result<Transcript> {
     let response: Response =
-        serde_json::from_slice(raw).context("cannot read Deepgram response")?;
+        serde_json::from_slice(raw).map_err(|e| anyhow!("cannot read Deepgram response: {e}"))?;
     let mut utterances = response.results.utterances;
     utterances.retain(|u| !u.transcript.trim().is_empty());
     Ok(Transcript {
