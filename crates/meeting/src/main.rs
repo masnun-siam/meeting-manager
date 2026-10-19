@@ -1,5 +1,15 @@
 mod config;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by `meeting process` (#20)")
+)]
+mod jobs;
 mod logging;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by `meeting process` (#20)")
+)]
+mod meta;
 
 use std::path::PathBuf;
 
