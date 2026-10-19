@@ -130,6 +130,21 @@ describe('startRecording', () => {
     expect(FakeRecorder.last).toBeUndefined();
   });
 
+  it('releases the tab and goes idle when setup fails after the stream is acquired', async () => {
+    vi.stubGlobal('MediaRecorder', undefined);
+    await startRecording(START);
+    expect(sent()).toEqual([
+      expect.objectContaining({
+        type: 'offscreen_error',
+        message: expect.stringContaining('Could not start recording'),
+      }),
+    ]);
+    expect(tabVideo.stop).toHaveBeenCalled();
+    vi.stubGlobal('MediaRecorder', FakeRecorder);
+    await startRecording(START);
+    expect(sent().at(-1)).toEqual({ type: 'offscreen_started', micIncluded: true });
+  });
+
   it('ignores a second start while recording', async () => {
     await startRecording(START);
     await startRecording(START);
@@ -198,6 +213,13 @@ describe('stopping', () => {
     expect(sent().at(-1)).toEqual({ type: 'offscreen_stopped', startedAt: START.startedAt, reason: 'user' });
     expect(tabVideo.stop).toHaveBeenCalled();
     expect(ctxClose).toHaveBeenCalled();
+  });
+
+  it('stops from paused with the user reason', async () => {
+    await startRecording(START);
+    pauseRecording();
+    await stopRecording('user');
+    expect(sent().at(-1)).toMatchObject({ type: 'offscreen_stopped', reason: 'user' });
   });
 
   it('sends one stopped event for duplicate stops', async () => {
