@@ -25,6 +25,7 @@ function finishWith(delta: Record<string, unknown>) {
 beforeEach(() => {
   for (const m of [download, search, sendMessage, removeEntry, vi.mocked(sendNative)]) m.mockReset();
   sendMessage.mockResolvedValue({ url: 'blob:x' });
+  removeEntry.mockResolvedValue(undefined);
   search.mockResolvedValue([{ filename: '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430.webm' }]);
   vi.stubGlobal('chrome', {
     runtime: { sendMessage },
