@@ -1,7 +1,7 @@
 // Internal message contracts between the popup, the service worker and the offscreen document.
 // This file is the one place for message types; later work extends these unions here.
 
-import type { RecordingState } from './recordingState';
+import type { RecordingState, StopReason } from './recordingState';
 
 export type Language = 'bn' | 'en';
 
@@ -14,10 +14,16 @@ export type PopupCommand =
 
 /** Service worker → offscreen document. */
 export type OffscreenCommand =
-  | { type: 'offscreen_start'; streamId: string; language: Language }
+  | { type: 'offscreen_start'; streamId: string; language: Language; startedAt: number }
   | { type: 'offscreen_pause' }
   | { type: 'offscreen_resume' }
   | { type: 'offscreen_stop' };
+
+/** Offscreen document → service worker. `tab_closed` is never sent from here: the service worker sees `tabs.onRemoved`. */
+export type OffscreenEvent =
+  | { type: 'offscreen_started'; micIncluded: boolean }
+  | { type: 'offscreen_stopped'; startedAt: number; reason: StopReason }
+  | { type: 'offscreen_error'; message: string };
 
 /** The Record tab's last message after a save or hand-off (#26 writes these). */
 export type Notice =
