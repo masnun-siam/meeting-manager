@@ -25,6 +25,7 @@ mod logging;
     expect(dead_code, reason = "used by `meeting process` (#20)")
 )]
 mod meta;
+mod native;
 #[expect(dead_code, reason = "used by `meeting process` (#20)")]
 mod notify;
 #[cfg_attr(
@@ -54,11 +55,15 @@ mod transcript;
 )]
 mod vault;
 
+use std::io;
 use std::path::PathBuf;
 
 use anyhow::bail;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
+
+use crate::config::Config;
+use crate::jobs::JobStore;
 
 /// Turns meeting recordings into transcripts and Obsidian notes.
 #[derive(Parser, Debug)]
@@ -131,6 +136,22 @@ fn run(command: Command) -> anyhow::Result<()> {
         secret::set_key(&secret::read_hidden("Deepgram API key: ")?)?;
         println!("Deepgram key saved to the Keychain");
         return Ok(());
+    }
+    if let Command::NativeHost { origin } = &command {
+        tracing::info!("meeting native-host");
+        let host = native::Host {
+            config: Config::load().map_err(|e| format!("{e:#}")),
+            jobs: JobStore {
+                dir: JobStore::default_dir()?,
+            },
+            open: native::open_with_system,
+        };
+        return native::serve(
+            &host,
+            origin.as_deref(),
+            io::stdin().lock(),
+            io::stdout().lock(),
+        );
     }
     let name = match command {
         Command::Process { .. } => "process",

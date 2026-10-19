@@ -1,11 +1,12 @@
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn run(name: &str, args: &[&str]) -> (std::process::Output, String) {
     let home = std::env::temp_dir().join(format!("meeting-test-{}-{name}", std::process::id()));
     let output = Command::new(env!("CARGO_BIN_EXE_meeting"))
         .args(args)
         .env("HOME", &home)
+        .stdin(Stdio::null())
         .output()
         .unwrap();
     let log = fs::read_to_string(home.join("Library/Logs/meeting-manager/meeting.log"))
@@ -17,10 +18,9 @@ fn run(name: &str, args: &[&str]) -> (std::process::Output, String) {
 #[test]
 fn run_logs_to_file_and_not_stdout() {
     let (output, log) = run("native-host", &["native-host", "chrome-extension://abc/"]);
-    assert!(!output.status.success());
+    assert!(output.status.success());
     assert!(output.stdout.is_empty());
     assert!(log.contains("INFO meeting native-host"));
-    assert!(log.contains("not implemented yet"));
 }
 
 #[test]

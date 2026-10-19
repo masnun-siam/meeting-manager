@@ -1,0 +1,491 @@
+use std::fmt::Display;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+
+use anyhow::Context;
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use crate::config::Config;
+use crate::jobs::JobStore;
+
+/// Requests are a few dozen bytes; anything bigger is not from our extension.
+const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Request {
+    ListJobs { limit: usize },
+    Open { job_id: String, what: OpenWhat },
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum OpenWhat {
+    Summary,
+    Folder,
+}
+
+pub struct Host {
+    pub config: Result<Config, String>,
+    pub jobs: JobStore,
+    pub open: fn(&Path) -> io::Result<()>,
+}
+
+/// Opens with `/usr/bin/open`: Chrome starts the host with a bare `PATH`.
+pub fn open_with_system(path: &Path) -> io::Result<()> {
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg(path)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("open exited with {status}")))
+    }
+}
+
+/// `Ok(None)` is a clean end of input; `Err(InvalidData)` is a frame over the size limit.
+fn read_frame(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
+    let mut len = [0u8; 4];
+    match r.read_exact(&mut len) {
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        r => r?,
+    }
+    let len = u32::from_ne_bytes(len);
+    if len > MAX_REQUEST_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame of {len} bytes is too large"),
+        ));
+    }
+    let mut bytes = vec![0; len as usize];
+    r.read_exact(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
+fn write_frame(w: &mut impl Write, reply: &Value) -> io::Result<()> {
+    let bytes = serde_json::to_vec(reply)?;
+    let len = u32::try_from(bytes.len()).map_err(io::Error::other)?;
+    w.write_all(&len.to_ne_bytes())?;
+    w.write_all(&bytes)?;
+    w.flush()
+}
+
+fn error(code: &str, message: impl Display) -> Value {
+    json!({"ok": false, "code": code, "message": message.to_string()})
+}
+
+/// Answers one request per frame until the input ends.
+pub fn serve(
+    host: &Host,
+    origin: Option<&str>,
+    mut input: impl Read,
+    mut output: impl Write,
+) -> anyhow::Result<()> {
+    loop {
+        let reply = match read_frame(&mut input) {
+            Ok(None) => return Ok(()),
+            Ok(Some(bytes)) => handle(host, origin, &bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                let reply = error("bad_request", &e);
+                tracing::info!("native-host reply {}", reply["code"]);
+                write_frame(&mut output, &reply)?;
+                return Ok(());
+            }
+            Err(e) => return Err(e).context("cannot read a request"),
+        };
+        write_frame(&mut output, &reply).context("cannot write a reply")?;
+    }
+}
+
+fn handle(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<Value> {
+    let reply = dispatch(host, origin, bytes)?;
+    tracing::info!(
+        "native-host reply {}",
+        reply.get("code").unwrap_or(&json!("ok"))
+    );
+    Ok(reply)
+}
+
+fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<Value> {
+    let Ok(raw) = serde_json::from_slice::<Value>(bytes) else {
+        return Ok(error("bad_request", "request is not valid JSON"));
+    };
+    let config = match &host.config {
+        Ok(config) => config,
+        Err(message) => return Ok(error("not_configured", message)),
+    };
+    if origin != Some(&format!("chrome-extension://{}/", config.extension_id)) {
+        return Ok(error("bad_request", "request is from an unknown origin"));
+    }
+    let request = match serde_json::from_value::<Request>(raw.clone()) {
+        Ok(request) => request,
+        Err(e) => return Ok(error("bad_request", e)),
+    };
+    // Only the message type is logged, never its content.
+    tracing::info!("native-host request {}", raw["type"]);
+    match request {
+        Request::ListJobs { limit } => Ok(json!({"ok": true, "jobs": host.jobs.list(limit)?})),
+        Request::Open { job_id, what } => open(host, &job_id, what),
+    }
+}
+
+/// Ids go straight into a file name, so only what `new_job_id` produces is allowed.
+fn valid_job_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+fn open(host: &Host, job_id: &str, what: OpenWhat) -> anyhow::Result<Value> {
+    if !valid_job_id(job_id) {
+        return Ok(error("unknown_job", "no such job"));
+    }
+    let Some(job) = host.jobs.read(job_id)? else {
+        return Ok(error("unknown_job", "no such job"));
+    };
+    let target = match what {
+        OpenWhat::Summary => job.summary_path.filter(|p| p.is_file()),
+        OpenWhat::Folder => job
+            .recording
+            .parent()
+            .filter(|p| p.is_dir())
+            .map(Path::to_path_buf),
+    };
+    let Some(target) = target else {
+        return Ok(error("missing_file", "the file or folder no longer exists"));
+    };
+    (host.open)(&target).with_context(|| format!("cannot open {}", target.display()))?;
+    Ok(json!({"ok": true}))
+}
+
+/// The canonical path of an existing `.webm` file inside `recordings_dir`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by `process` and `retry` (#25)")
+)]
+pub fn check_recording(recordings_dir: &Path, path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!("{} is not an absolute path", path.display()));
+    }
+    if path.extension().is_none_or(|e| e != "webm") {
+        return Err(format!("{} is not a .webm file", path.display()));
+    }
+    let canonical = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !canonical.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+    let root = fs::canonicalize(recordings_dir)
+        .map_err(|e| format!("{}: {e}", recordings_dir.display()))?;
+    if !canonical.starts_with(&root) {
+        return Err(format!(
+            "{} is outside the recordings folder",
+            path.display()
+        ));
+    }
+    Ok(canonical)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::io::Cursor;
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+    use crate::jobs::{Job, Stage};
+
+    const ORIGIN: &str = "chrome-extension://ext/";
+
+    thread_local! {
+        static OPENED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn record(path: &Path) -> io::Result<()> {
+        OPENED.with(|o| o.borrow_mut().push(path.to_path_buf()));
+        Ok(())
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("meeting-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn config(dir: &Path) -> Config {
+        Config {
+            recordings_dir: dir.join("rec"),
+            vault_dir: dir.join("vault"),
+            vault_folder: "Meetings".into(),
+            ffmpeg_path: "/ffmpeg".into(),
+            claude_path: "/claude".into(),
+            extension_id: "ext".into(),
+        }
+    }
+
+    fn host(dir: &Path) -> Host {
+        Host {
+            config: Ok(config(dir)),
+            jobs: JobStore {
+                dir: dir.join("jobs"),
+            },
+            open: record,
+        }
+    }
+
+    fn job(id: &str, started_at: &str, summary: Option<PathBuf>) -> Job {
+        Job {
+            job_id: id.into(),
+            recording: PathBuf::from("/nope/m.webm"),
+            title: None,
+            stage: Stage::Done,
+            error: None,
+            started_at: started_at.into(),
+            updated_at: started_at.into(),
+            summary_path: summary,
+        }
+    }
+
+    fn frames(requests: &[Value]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for r in requests {
+            write_frame(&mut out, r).unwrap();
+        }
+        out
+    }
+
+    fn raw_frame(bytes: &[u8]) -> Vec<u8> {
+        let mut out = (bytes.len() as u32).to_ne_bytes().to_vec();
+        out.extend_from_slice(bytes);
+        out
+    }
+
+    fn replies(output: Vec<u8>) -> Vec<Value> {
+        let mut cursor = Cursor::new(output);
+        let mut out = Vec::new();
+        while let Some(bytes) = read_frame(&mut cursor).unwrap() {
+            out.push(serde_json::from_slice(&bytes).unwrap());
+        }
+        out
+    }
+
+    fn ask(host: &Host, origin: Option<&str>, input: Vec<u8>) -> Vec<Value> {
+        let mut output = Vec::new();
+        serve(host, origin, Cursor::new(input), &mut output).unwrap();
+        replies(output)
+    }
+
+    fn one(host: &Host, request: Value) -> Value {
+        ask(host, Some(ORIGIN), frames(&[request])).remove(0)
+    }
+
+    #[test]
+    fn list_jobs_is_newest_first_limited_with_exact_keys() {
+        let dir = temp("native-list");
+        let host = host(&dir);
+        for (i, id) in ["a", "b", "c"].iter().enumerate() {
+            host.jobs
+                .write(&job(id, &format!("2026-10-19T14:30:0{i}Z"), None))
+                .unwrap();
+        }
+        let reply = one(&host, json!({"type": "list_jobs", "limit": 2}));
+        let ids: Vec<_> = reply["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|j| j["job_id"].as_str().unwrap())
+            .collect();
+        let mut keys: Vec<_> = reply["jobs"][0].as_object().unwrap().keys().collect();
+        keys.sort();
+        let all = one(&host, json!({"type": "list_jobs", "limit": 50}));
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(ids, ["c", "b"]);
+        assert_eq!(
+            keys,
+            [
+                "error",
+                "job_id",
+                "recording",
+                "stage",
+                "started_at",
+                "summary_path",
+                "title",
+                "updated_at"
+            ]
+        );
+        assert_eq!(all["jobs"].as_array().unwrap().len(), 3);
+        assert!(reply["jobs"][0]["summary_path"].is_null());
+    }
+
+    #[test]
+    fn list_jobs_without_a_jobs_dir_is_empty() {
+        let dir = temp("native-no-jobs");
+        let reply = one(&host(&dir), json!({"type": "list_jobs", "limit": 10}));
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply, json!({"ok": true, "jobs": []}));
+    }
+
+    #[test]
+    fn open_summary_and_folder_run_open_on_the_path() {
+        let dir = temp("native-open");
+        let host = host(&dir);
+        let summary = dir.join("s.md");
+        fs::write(&summary, "x").unwrap();
+        let mut j = job("a-1", "2026-10-19T14:30:00Z", Some(summary.clone()));
+        j.recording = dir.join("m.webm");
+        host.jobs.write(&j).unwrap();
+        OPENED.with(|o| o.borrow_mut().clear());
+        let summary_reply = one(
+            &host,
+            json!({"type": "open", "job_id": "a-1", "what": "summary"}),
+        );
+        let folder_reply = one(
+            &host,
+            json!({"type": "open", "job_id": "a-1", "what": "folder"}),
+        );
+        let opened = OPENED.with(|o| o.borrow().clone());
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(summary_reply, json!({"ok": true}));
+        assert_eq!(folder_reply, json!({"ok": true}));
+        assert_eq!(opened, [summary, dir]);
+    }
+
+    #[test]
+    fn open_rejects_missing_and_unsafe_job_ids() {
+        let dir = temp("native-unknown");
+        let host = host(&dir);
+        for id in ["nope", "../x", "a/b", ""] {
+            let reply = one(
+                &host,
+                json!({"type": "open", "job_id": id, "what": "summary"}),
+            );
+            assert_eq!(reply["code"], "unknown_job", "id {id:?}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn open_reports_missing_summary_file() {
+        let dir = temp("native-missing");
+        let host = host(&dir);
+        host.jobs
+            .write(&job("none", "2026-10-19T14:30:00Z", None))
+            .unwrap();
+        host.jobs
+            .write(&job(
+                "gone",
+                "2026-10-19T14:30:01Z",
+                Some(dir.join("gone.md")),
+            ))
+            .unwrap();
+        let null = one(
+            &host,
+            json!({"type": "open", "job_id": "none", "what": "summary"}),
+        );
+        let deleted = one(
+            &host,
+            json!({"type": "open", "job_id": "gone", "what": "summary"}),
+        );
+        let folder = one(
+            &host,
+            json!({"type": "open", "job_id": "gone", "what": "folder"}),
+        );
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(null["code"], "missing_file");
+        assert_eq!(deleted["code"], "missing_file");
+        assert_eq!(folder["code"], "missing_file");
+    }
+
+    #[test]
+    fn bad_requests_are_rejected() {
+        let dir = temp("native-bad");
+        let host = host(&dir);
+        let list = frames(&[json!({"type": "list_jobs", "limit": 1})]);
+        let wrong_origin = ask(&host, Some("chrome-extension://evil/"), list.clone());
+        let no_origin = ask(&host, None, list);
+        let bad_json = ask(&host, Some(ORIGIN), raw_frame(b"{nope"));
+        let unknown_type = one(&host, json!({"type": "nope"}));
+        fs::remove_dir_all(&dir).unwrap();
+        for reply in [&wrong_origin[0], &no_origin[0], &bad_json[0], &unknown_type] {
+            assert_eq!(reply["ok"], false);
+            assert_eq!(reply["code"], "bad_request");
+        }
+    }
+
+    #[test]
+    fn missing_config_replies_not_configured_naming_install() {
+        let dir = temp("native-unconfigured");
+        let mut host = host(&dir);
+        host.config = Err("meeting is not configured; run `meeting install`".into());
+        let reply = one(&host, json!({"type": "list_jobs", "limit": 1}));
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["code"], "not_configured");
+        assert!(
+            reply["message"]
+                .as_str()
+                .unwrap()
+                .contains("meeting install")
+        );
+    }
+
+    #[test]
+    fn two_frames_get_two_replies_and_eof_gets_none() {
+        let dir = temp("native-two");
+        let host = host(&dir);
+        let request = json!({"type": "list_jobs", "limit": 1});
+        let two = ask(&host, Some(ORIGIN), frames(&[request.clone(), request]));
+        let none = ask(&host, Some(ORIGIN), Vec::new());
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(two.len(), 2);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn oversized_frame_gets_bad_request_and_stops() {
+        let dir = temp("native-big");
+        let mut input = (MAX_REQUEST_BYTES + 1).to_ne_bytes().to_vec();
+        input.extend_from_slice(&frames(&[json!({"type": "list_jobs", "limit": 1})]));
+        let out = ask(&host(&dir), Some(ORIGIN), input);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["code"], "bad_request");
+    }
+
+    #[test]
+    fn truncated_frame_is_an_error() {
+        let dir = temp("native-truncated");
+        let mut input = 10u32.to_ne_bytes().to_vec();
+        input.extend_from_slice(b"{}");
+        let result = serve(&host(&dir), Some(ORIGIN), Cursor::new(input), Vec::new());
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_recording_accepts_only_webm_files_inside_the_dir() {
+        let dir = temp("native-check");
+        let rec = dir.join("rec");
+        fs::create_dir_all(rec.join("x.webm")).unwrap();
+        fs::write(rec.join("ok.webm"), "x").unwrap();
+        fs::write(rec.join("a.mp4"), "x").unwrap();
+        fs::write(dir.join("outside.webm"), "x").unwrap();
+        symlink(dir.join("outside.webm"), rec.join("link.webm")).unwrap();
+        let canonical_ok = fs::canonicalize(rec.join("ok.webm")).unwrap();
+        let ok = check_recording(&rec, &rec.join("ok.webm"));
+        let rejected = [
+            rec.join("a.mp4"),
+            rec.join("missing.webm"),
+            rec.join("x.webm"),
+            rec.join("../outside.webm"),
+            rec.join("link.webm"),
+            PathBuf::from("rec/ok.webm"),
+        ]
+        .map(|p| check_recording(&rec, &p));
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(ok, Ok(canonical_ok));
+        for r in rejected {
+            assert!(r.is_err(), "{r:?}");
+        }
+    }
+}
