@@ -1,0 +1,105 @@
+# Rust crate: `meeting`
+
+Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
+
+One binary crate (`meeting`, edition 2024, no lib). Dependencies: `clap`, `serde`, `serde_json`, `toml`, `anyhow`, `tracing`, `tracing-subscriber`, `ureq` (HTTP), `keyring` (Keychain). External programs: `ffmpeg`, `claude`, `osascript`. See [architecture.md](architecture.md) for how the crate fits with the extension.
+
+## CLI subcommands
+
+Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
+
+| Command | Does | Details |
+|---|---|---|
+| `meeting process <recording> [--retranscribe] [--language bn\|en] [--job-id <id>]` | Builds a `Pipeline`, runs it in the foreground, sends a macOS notification at the end. `--job-id` is hidden: the native host passes it. | [features/processing.md](features/processing.md) |
+| `meeting install` | Registers the native host, writes config. | [features/setup.md](features/setup.md) |
+| `meeting config set-key` | Stores the Deepgram key in the Keychain (hidden prompt). | [features/setup.md](features/setup.md) |
+| `meeting doctor` | Prints one line per check; exits non-zero if any failed. | [features/setup.md](features/setup.md) |
+| `meeting native-host [origin]` | Entry point Chrome launches. | [features/native-messaging.md](features/native-messaging.md) |
+
+- `Language` (`bn`, `en`) is defined in `main.rs` and imported by `deepgram`, `meta`, `native`, `plan`, `transcript`, `vault`.
+- `run` dispatches with a chain of `if let` blocks, each returning. The trailing `bail!("... not implemented yet")` is unreachable for current commands.
+
+## Module map
+
+| Module | Responsibility | Key symbols |
+|---|---|---|
+| `main.rs` | CLI parsing, wiring, exit code | `Cli`, `Command`, `Language`, `run` |
+| `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change | `Pipeline`, `Pipeline::run`, `Ending`, `State` |
+| `plan.rs` | Pure function: which stages to skip, from file mtimes | `plan`, `Plan`, `Files` |
+| `jobs.rs` | Job file store, `Stage` enum, atomic write, UTC time and ids | `Job`, `JobStore`, `Stage`, `write_atomic`, `now_utc`, `new_job_id` |
+| `meta.rs` | `<name>.meta.json`: language, speakers, run history; `recorded_at` from file name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
+| `lock.rs` | Per-recording PID lock file | `Lock::acquire`, `Lock::path_for`, `is_held` |
+| `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
+| `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
+| `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `Transcript`, `Utterance` |
+| `summarise.rs` | Run headless `claude`, validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
+| `summary_md.rs` | Render `Summary` to Markdown | `render`, `speaker_names` |
+| `vault.rs` | Write the Obsidian note | `write_note`, `Note` |
+| `notify.rs` | macOS notification via `osascript` | `notify`, `message`, `Outcome` |
+| `logging.rs` | File logger init | `init` |
+| `config.rs` | `config.toml` load/save, `home()` | `Config`, `home` |
+| `secret.rs` | Keychain access for the Deepgram key | `deepgram_key`, `set_key`, `read_hidden` |
+| `install.rs` | `meeting install` | `install` |
+| `doctor.rs` | `meeting doctor` checks, manifest path | `checks`, `Env`, `manifest_path` |
+| `native.rs` | Chrome native messaging host | `Host`, `serve` |
+| `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `stub`, `envelope`, `temp`, `VALID` |
+
+Processing modules are covered in [features/processing.md](features/processing.md). `native.rs`: [features/native-messaging.md](features/native-messaging.md). `install.rs`, `doctor.rs`, `config.rs`, `secret.rs`: [features/setup.md](features/setup.md).
+
+## Layering
+
+Arrows are `crate::` imports in non-test code.
+
+```mermaid
+flowchart TD
+    main --> pipeline & native & install & doctor & notify & logging & secret & deepgram & jobs & config
+    pipeline --> plan & extract & deepgram & transcript & summarise & summary_md & vault & meta & jobs & lock & config
+    native --> jobs & lock & doctor & config
+    install --> doctor & jobs & config
+    summary_md --> summarise
+    summarise --> meta
+    meta --> jobs
+    jobs --> config
+    logging --> config
+    doctor --> config
+```
+
+- `main.rs` is the only place that builds dependencies (`Config::load()`, `JobStore::default_dir()`, `secret::deepgram_key`) and passes them in.
+- Stage modules (`extract`, `deepgram`, `transcript`, `summarise`, `summary_md`, `vault`) do not import each other, except `summary_md` using types from `summarise`. `pipeline.rs` is the only caller of all of them.
+- `jobs::write_atomic` is the shared atomic-write helper (also used by `meta`, `pipeline`).
+
+## Conventions
+
+- Errors: `anyhow::Result` everywhere, no custom error types. Context via `.with_context(|| format!("cannot ... {}", path.display()))`. Messages that the user can act on name the fix (`run \`meeting doctor\``, `run \`meeting config set-key\``). `main` logs the error with `{e:#}` and returns it.
+- Dependency injection by struct fields and fn pointers, not traits: `Pipeline.key: fn() -> Result<String>`, `Deepgram { base_url, retry_delays }`, `native::Host { open, key, ... }`, `doctor::Env`. Tests swap the fields.
+- Subprocesses (`ffmpeg`, `claude`, `osascript`, `ps`) use absolute paths from config or constants, because Chrome starts the host with a bare `PATH`.
+- Writes that readers may see use write-to-`.tmp`-then-rename (`write_atomic`, `extract` uses `.part`, `vault::write_note` uses a dotted `.tmp`). `config.rs` `save_to` writes directly.
+- Logging: `tracing` macros, file only, via `logging::init()`. See Gotchas.
+- Time: UTC strings built by hand (`jobs::format_utc`), no time crate.
+- Not removing a file that is absent: `remove` helpers treat `NotFound` as success (`pipeline.rs`, `lock.rs`).
+- Tests are in-file `#[cfg(test)] mod tests` in every module; names are full sentences in snake_case describing behaviour.
+
+## Testing
+
+| What | Where |
+|---|---|
+| Unit tests | `#[cfg(test)] mod tests` at the bottom of each `src/*.rs` |
+| Shared fakes | `crates/meeting/src/test_support.rs` (declared `#[cfg(test)] mod test_support` in `main.rs`) |
+| Binary-level tests | `crates/meeting/tests/logging.rs` (spawns `CARGO_BIN_EXE_meeting` with a temp `HOME`, checks the log file and empty stdout); `crates/meeting/tests/native_host.rs` (native host over stdio) |
+| Fixtures | `crates/meeting/tests/fixtures/short.webm`; `crates/meeting/tests/fixtures/deepgram/{en_two_speakers,bn_two_speakers,one_speaker,empty}.json` |
+
+- `test_support::mock(responses)` is a TCP server on `127.0.0.1:0` that answers one scripted `(status, body)` per connection and sends each request head down a channel. Pair it with `Deepgram { base_url, retry_delays: vec![] }`.
+- `test_support::stub(dir, tail)` writes a fake `claude` shell script that records args and stdin to `args.txt` and `stdin.txt`, then runs `tail`. `envelope(VALID)` produces the JSON `claude` returns.
+- `test_support::temp(name)` makes `<tmp>/meeting-test-<pid>-<name>`. Some modules define their own local `temp` and `ffmpeg()` instead of using the shared one (inconsistent).
+- Pipeline and extract tests need a real `ffmpeg` on the machine; they find it with `/usr/bin/which ffmpeg`.
+- Fixtures are included with `include_str!("../tests/fixtures/...")` or `env!("CARGO_MANIFEST_DIR")`.
+- Dev commands: see [development.md](development.md).
+
+## Gotchas
+
+- Never log the Deepgram key or transcript text, and never write to stdout in `native-host` mode (stdout is Chrome's message channel). `logging.rs` says so; if file logging cannot open, the tool continues with a stderr warning.
+- `Job` optional fields serialise as `null` on purpose; the extension expects the keys ([extension.md](extension.md)).
+- `Stage::name()` and the serde lowercase names must stay in step; `meeting process` prints `name()` per stage and the extension reads the serialised form.
+- `plan.rs` treats an absent input as fresh, because inputs are deleted after success. Changing which files are deleted changes resume behaviour.
+- `lock.rs` checks PID liveness with `/bin/ps`; a reused PID can make a stale lock look held (noted in a `ponytail:` comment).
+- `main.rs` handles `--help`/parse errors with `try_parse` so they are logged.
