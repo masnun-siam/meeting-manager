@@ -1,7 +1,8 @@
 // Service worker: the state owner. Listeners are registered at top level, as MV3 requires; the logic is in recordingControl.
 
 import type { OffscreenEvent, PopupCommand } from '../shared/messages';
-import { handleOffscreenEvent, handlePopupCommand, handleTabRemoved } from './recordingControl';
+import { handleOffscreenEvent, handlePopupCommand, handleTabRemoved, serial } from './recordingControl';
+import { recoverLeftovers } from './recover';
 
 const POPUP_COMMANDS: ReadonlySet<string> = new Set(['start', 'pause', 'resume', 'stop']);
 const OFFSCREEN_EVENTS: ReadonlySet<string> = new Set(['offscreen_started', 'offscreen_stopped', 'offscreen_error']);
@@ -20,3 +21,10 @@ chrome.runtime.onMessage.addListener((message: { type?: string }) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   handleTabRemoved(tabId).catch(logFailure);
 });
+
+// Only on browser start and extension install/reload, never on a service worker wake, so a recording in progress is left alone.
+const recover = () => {
+  serial(recoverLeftovers).catch(logFailure);
+};
+chrome.runtime.onStartup.addListener(recover);
+chrome.runtime.onInstalled.addListener(recover);
