@@ -56,7 +56,12 @@ pub enum Language {
 
 fn main() -> anyhow::Result<()> {
     logging::init();
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|e| {
+        if e.use_stderr() {
+            tracing::error!("{}", e.kind());
+        }
+        e.exit()
+    });
     let result = run(cli.command);
     if let Err(e) = &result {
         tracing::error!("{e:#}");
