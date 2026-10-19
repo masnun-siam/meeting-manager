@@ -1,70 +1,36 @@
 mod config;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
 mod deepgram;
 mod doctor;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
 mod extract;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
 mod jobs;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
 mod lock;
 mod logging;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
 mod meta;
 mod native;
-#[expect(dead_code, reason = "used by `meeting process` (#20)")]
 mod notify;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
+mod pipeline;
 mod plan;
 mod secret;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
 mod summarise;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
 mod summary_md;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
+#[cfg(test)]
+mod test_support;
 mod transcript;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `meeting process` (#20)")
-)]
 mod vault;
 
 use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::bail;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+use crate::deepgram::Deepgram;
 use crate::jobs::JobStore;
+use crate::notify::Outcome;
+use crate::pipeline::{Ending, Pipeline};
 
 /// Turns meeting recordings into transcripts and Obsidian notes.
 #[derive(Parser, Debug)]
@@ -156,6 +122,45 @@ fn run(command: Command) -> anyhow::Result<()> {
             io::stdin().lock(),
             io::stdout().lock(),
         );
+    }
+    if let Command::Process {
+        recording,
+        retranscribe,
+        language,
+        job_id,
+    } = &command
+    {
+        tracing::info!("meeting process");
+        let pipeline = Pipeline {
+            config: Config::load()?,
+            deepgram: Deepgram::default(),
+            jobs: JobStore {
+                dir: JobStore::default_dir()?,
+            },
+            key: secret::deepgram_key,
+            claude_timeout: Duration::from_secs(15 * 60),
+        };
+        let ending = pipeline.run(
+            recording,
+            *retranscribe,
+            *language,
+            job_id.clone(),
+            &mut io::stdout(),
+        );
+        return match ending {
+            Ending::Done { title } => {
+                notify::notify(&notify::message(&Outcome::Done { title: &title }));
+                Ok(())
+            }
+            Ending::Failed { stage, error } => {
+                let reason = format!("{error:#}");
+                notify::notify(&notify::message(&Outcome::Failed {
+                    stage: stage.name(),
+                    reason: &reason,
+                }));
+                Err(error)
+            }
+        };
     }
     if let Command::Doctor = command {
         tracing::info!("meeting doctor");

@@ -8,7 +8,7 @@ use anyhow::{Context, bail};
 const BUSY: &str = "already processing";
 
 /// `<name>.lock` next to a recording, holding the PID of the job that runs it.
-/// Removed on release or drop; one left by a crashed process is taken over.
+/// Removed on drop; one left by a crashed process is taken over.
 #[derive(Debug)]
 pub struct Lock {
     path: PathBuf,
@@ -39,8 +39,6 @@ impl Lock {
                 .with_context(|| cannot(path)),
         }
     }
-
-    pub fn release(self) {}
 }
 
 impl Drop for Lock {
@@ -122,9 +120,9 @@ mod tests {
     }
 
     #[test]
-    fn release_and_drop_each_unlock() {
+    fn drop_unlocks() {
         let path = temp("release.lock");
-        Lock::acquire(&path).unwrap().release();
+        drop(Lock::acquire(&path).unwrap());
         assert!(!path.exists());
         drop(Lock::acquire(&path).unwrap());
         assert!(!path.exists());

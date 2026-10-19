@@ -109,49 +109,11 @@ impl Deepgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::TcpListener;
+    use crate::test_support::mock;
     use std::path::PathBuf;
-    use std::sync::mpsc;
 
     fn temp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("meeting-test-{}-{name}", std::process::id()))
-    }
-
-    /// Answers one scripted `(status, body)` per connection and sends each request's
-    /// head (request line plus headers) down the returned channel.
-    fn mock(responses: Vec<(u16, &'static str)>) -> (String, mpsc::Receiver<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            for (status, body) in responses {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut head = String::new();
-                let mut len = 0;
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" {
-                        break;
-                    }
-                    if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
-                        len = v.trim().parse().unwrap();
-                    }
-                    head.push_str(&line);
-                }
-                std::io::copy(&mut reader.take(len), &mut std::io::sink()).unwrap();
-                tx.send(head).unwrap();
-                write!(
-                    stream,
-                    "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-                .unwrap();
-            }
-        });
-        (base, rx)
     }
 
     fn run(responses: Vec<(u16, &'static str)>) -> (anyhow::Result<Vec<u8>>, Vec<String>) {

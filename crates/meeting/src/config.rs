@@ -25,10 +25,7 @@ pub fn home() -> anyhow::Result<PathBuf> {
     std::env::home_dir().ok_or_else(|| anyhow!("cannot find the home directory"))
 }
 
-#[expect(
-    dead_code,
-    reason = "`process` (#20) loads and `install` (#27) saves; drop this once both land"
-)]
+#[expect(dead_code, reason = "`install` (#27) saves; drop this once it lands")]
 impl Config {
     pub fn path() -> anyhow::Result<PathBuf> {
         Ok(home()?.join(".config/meeting-manager/config.toml"))
