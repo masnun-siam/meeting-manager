@@ -8,7 +8,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       // Pages the manifest doesn't reference, which CRXJS would otherwise leave out.
-      input: { offscreen: 'src/offscreen/offscreen.html' },
+      input: { offscreen: 'src/offscreen/offscreen.html', permission: 'src/permission/permission.html' },
     },
   },
 });
