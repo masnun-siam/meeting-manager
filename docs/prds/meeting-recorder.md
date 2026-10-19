@@ -327,6 +327,10 @@ None formally defined. Informally, every meeting recorded for two weeks has a va
 - **Priority is medium,** with a private GitHub repo and one epic on approval.
 - **No date/time crate.** The vault note's date and time and `meta.json` `recorded_at` come from the recording name `meeting-YYYY-MM-DD_HHMM` (the local start time, FR-4), as `YYYY-MM-DDTHH:MM`. A recording with any other name uses its file's modified time in UTC. Job and run timestamps (`started_at`, `updated_at`, `ended_at`) are UTC, `YYYY-MM-DDTHH:MM:SSZ`.
 - **`meta.json` `runs` has one entry per job,** updated in place as the job moves. Per-stage timings go to the log.
+- **The popup reads recording state from `chrome.storage.session`.** The service worker writes one status object (state, language, whether the mic is included, the last notice) under the key `recorder`, and the popup reads it and listens for changes. An MV3 service worker can sleep mid-recording, so its state can't live only in memory.
+- **First Start without mic permission opens the mic page and records nothing.** The page tells the user to go back and press Start again. This keeps the tab stream id pointed at the meeting tab and puts the mic in the first recording. If the mic was denied, Start records tab audio only and the popup warns (see Edge cases).
+- **One origin-private file per recording.** The offscreen document appends each 5-second chunk to `recordings/<startedAtMs>.webm`, where `startedAtMs` is the start time in epoch milliseconds, so save and recovery hand over one file and nothing has to be joined.
+- **The recording timing is one pure module** in `extension/src/shared/recordingState.ts`. The offscreen document uses it to enforce the 3-hour cap, the popup to show the timer and the service worker to own the state.
 
 ## Open questions
 
@@ -336,6 +340,7 @@ None.
 
 - 2026-10-19: Settled while refining #2 and #3. The repository layout is a root Cargo workspace with `crates/meeting/` and `extension/`. The Rust crates are named. The fixed extension ID is `obbaikcmcdooakogedoiiflflbbhpgdh`. CI runs one GitHub Actions job per part. Affects #2, #3 and #27, and every later tool issue through the crate choice.
 - 2026-10-19: Settled while refining #4–#14. No date/time crate: local dates come from the recording name, other timestamps are UTC. `meta.json` `runs` holds one entry per job. Affects #4, #12 and #20.
+- 2026-10-19: Settled while refining #15–#19. The popup reads recording state from `chrome.storage.session`. First Start without mic permission opens the mic page and records nothing. Each recording is one appended origin-private file. The timing is one shared pure module. #17 and #19 now wait for #16, and #22 waits for #17 and #18. Affects #16, #17, #18, #19, #22, #26 and #28.
 
 ## Related
 
