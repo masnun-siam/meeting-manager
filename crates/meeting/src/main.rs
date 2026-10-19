@@ -20,6 +20,7 @@ mod logging;
     expect(dead_code, reason = "used by `meeting process` (#20)")
 )]
 mod meta;
+mod secret;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "used by `meeting process` (#20)")
@@ -95,6 +96,15 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run(command: Command) -> anyhow::Result<()> {
+    if let Command::Config {
+        command: ConfigCommand::SetKey,
+    } = command
+    {
+        tracing::info!("meeting config set-key");
+        secret::set_key(&secret::read_hidden("Deepgram API key: ")?)?;
+        println!("Deepgram key saved to the Keychain");
+        return Ok(());
+    }
     let name = match command {
         Command::Process { .. } => "process",
         Command::Install => "install",
