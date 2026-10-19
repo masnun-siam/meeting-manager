@@ -1,15 +1,19 @@
 use std::fmt::Display;
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::Context;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::Language;
 use crate::config::Config;
 use crate::doctor;
-use crate::jobs::JobStore;
+use crate::jobs::{Job, JobStore, Stage, new_job_id, now_utc};
+use crate::lock::{self, Lock};
 
 /// Requests are a few dozen bytes; anything bigger is not from our extension.
 const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
@@ -20,6 +24,8 @@ enum Request {
     ListJobs { limit: usize },
     Open { job_id: String, what: OpenWhat },
     Health,
+    Process { path: PathBuf, language: Language },
+    Retry { job_id: String },
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -137,6 +143,10 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
     match request {
         Request::ListJobs { limit } => Ok(json!({"ok": true, "jobs": host.jobs.list(limit)?})),
         Request::Open { job_id, what } => open(host, &job_id, what),
+        Request::Process { path, language } => {
+            start_checked(host, config_of(host), &path, Some(language))
+        }
+        Request::Retry { job_id } => retry(host, &job_id),
         Request::Health => Ok(json!({"ok": true, "checks": doctor::checks(&doctor::Env {
             config: &host.config,
             key: host.key,
@@ -173,11 +183,79 @@ fn open(host: &Host, job_id: &str, what: OpenWhat) -> anyhow::Result<Value> {
     Ok(json!({"ok": true}))
 }
 
+fn retry(host: &Host, job_id: &str) -> anyhow::Result<Value> {
+    if !valid_job_id(job_id) {
+        return Ok(error("unknown_job", "no such job"));
+    }
+    let Some(job) = host.jobs.read(job_id)? else {
+        return Ok(error("unknown_job", "no such job"));
+    };
+    start_checked(host, config_of(host), &job.recording, None)
+}
+
+/// `dispatch` only reaches a request handler once the config has loaded.
+fn config_of(host: &Host) -> &Config {
+    host.config.as_ref().expect("dispatch checked the config")
+}
+
+/// Refuses a bad path or a recording already being processed, otherwise starts a job.
+fn start_checked(
+    host: &Host,
+    config: &Config,
+    path: &Path,
+    language: Option<Language>,
+) -> anyhow::Result<Value> {
+    let recording = match check_recording(&config.recordings_dir, path) {
+        Ok(recording) => recording,
+        Err(reason) => return Ok(error("invalid_path", reason)),
+    };
+    if lock::is_held(&Lock::path_for(&recording)) {
+        return Ok(error("already_processing", "already processing"));
+    }
+    let now = now_utc();
+    let mut job = Job {
+        job_id: new_job_id(),
+        recording,
+        title: None,
+        stage: Stage::Queued,
+        error: None,
+        started_at: now.clone(),
+        updated_at: now,
+        summary_path: None,
+    };
+    host.jobs.write(&job)?;
+    // The child is neither kept nor waited on: it is reparented when the host exits.
+    if let Err(e) = spawn_process(&host.exe, &job, language) {
+        let message = format!("queued: cannot start meeting process: {e}");
+        tracing::error!("{message}");
+        job.stage = Stage::Failed;
+        job.error = Some(message);
+        job.updated_at = now_utc();
+        host.jobs.write(&job)?;
+    }
+    Ok(json!({"ok": true, "job_id": job.job_id}))
+}
+
+/// Own process group and no stdio, so the job outlives Chrome closing the pipe.
+fn spawn_process(exe: &Path, job: &Job, language: Option<Language>) -> io::Result<()> {
+    let mut command = Command::new(exe);
+    command.arg("process").arg(&job.recording);
+    match language {
+        Some(Language::Bn) => command.args(["--language", "bn"]),
+        Some(Language::En) => command.args(["--language", "en"]),
+        None => &mut command,
+    };
+    command
+        .args(["--job-id", &job.job_id])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(drop)
+}
+
 /// The canonical path of an existing `.webm` file inside `recordings_dir`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `process` and `retry` (#25)")
-)]
 pub fn check_recording(recordings_dir: &Path, path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err(format!("{} is not an absolute path", path.display()));
@@ -533,5 +611,117 @@ mod tests {
         for r in rejected {
             assert!(r.is_err(), "{r:?}");
         }
+    }
+
+    fn webm(dir: &Path) -> PathBuf {
+        let rec = dir.join("rec");
+        fs::create_dir_all(&rec).unwrap();
+        fs::write(rec.join("m.webm"), "x").unwrap();
+        fs::canonicalize(rec.join("m.webm")).unwrap()
+    }
+
+    #[test]
+    fn process_and_retry_need_a_config() {
+        let dir = temp("native-proc-unconfigured");
+        let mut host = host(&dir);
+        host.config = Err("not configured".into());
+        let process = one(
+            &host,
+            json!({"type": "process", "path": "/r/m.webm", "language": "en"}),
+        );
+        let retry = one(&host, json!({"type": "retry", "job_id": "a"}));
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(process["code"], "not_configured");
+        assert_eq!(retry["code"], "not_configured");
+    }
+
+    #[test]
+    fn process_rejects_bad_paths_and_a_bad_language() {
+        let dir = temp("native-proc-path");
+        let host = host(&dir);
+        webm(&dir);
+        fs::write(dir.join("rec/a.mp4"), "x").unwrap();
+        fs::write(dir.join("outside.webm"), "x").unwrap();
+        let codes: Vec<_> = [
+            dir.join("outside.webm"),
+            dir.join("rec/a.mp4"),
+            dir.join("rec/missing.webm"),
+        ]
+        .iter()
+        .map(|p| {
+            one(
+                &host,
+                json!({"type": "process", "path": p, "language": "en"}),
+            )["code"]
+                .clone()
+        })
+        .collect();
+        let language = one(
+            &host,
+            json!({"type": "process", "path": dir.join("rec/m.webm"), "language": "fr"}),
+        );
+        let wrote_jobs = host.jobs.dir.exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(codes, ["invalid_path"; 3]);
+        assert_eq!(language["code"], "bad_request");
+        assert!(!wrote_jobs);
+    }
+
+    #[test]
+    fn process_refuses_a_held_lock_without_a_job() {
+        let dir = temp("native-proc-locked");
+        let host = host(&dir);
+        let recording = webm(&dir);
+        fs::write(Lock::path_for(&recording), std::process::id().to_string()).unwrap();
+        let reply = one(
+            &host,
+            json!({"type": "process", "path": recording, "language": "bn"}),
+        );
+        let wrote_jobs = host.jobs.dir.exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["code"], "already_processing");
+        assert!(!wrote_jobs);
+    }
+
+    #[test]
+    fn retry_rejects_unknown_ids_and_deleted_recordings() {
+        let dir = temp("native-retry");
+        let host = host(&dir);
+        host.jobs
+            .write(&job("old", "2026-10-19T14:30:00Z", None))
+            .unwrap();
+        let unknown: Vec<_> = ["nope", "../x"]
+            .iter()
+            .map(|id| one(&host, json!({"type": "retry", "job_id": id}))["code"].clone())
+            .collect();
+        let gone = one(&host, json!({"type": "retry", "job_id": "old"}));
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(unknown, ["unknown_job"; 2]);
+        assert_eq!(gone["code"], "invalid_path");
+    }
+
+    #[test]
+    fn a_failed_spawn_is_a_failed_job_with_an_ok_reply() {
+        let dir = temp("native-spawn-fail");
+        let mut host = host(&dir);
+        host.exe = dir.join("no-such-exe");
+        let recording = webm(&dir);
+        let reply = one(
+            &host,
+            json!({"type": "process", "path": recording, "language": "en"}),
+        );
+        let job = host
+            .jobs
+            .read(reply["job_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(job.stage, Stage::Failed);
+        assert!(
+            job.error
+                .unwrap()
+                .starts_with("queued: cannot start meeting process: ")
+        );
     }
 }
