@@ -10,6 +10,11 @@ mod logging;
     expect(dead_code, reason = "used by `meeting process` (#20)")
 )]
 mod meta;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by `meeting process` (#20)")
+)]
+mod summarise;
 
 use std::path::PathBuf;
 
