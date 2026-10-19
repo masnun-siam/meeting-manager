@@ -2,6 +2,7 @@ mod config;
 mod deepgram;
 mod doctor;
 mod extract;
+mod install;
 mod jobs;
 mod lock;
 mod logging;
@@ -161,6 +162,22 @@ fn run(command: Command) -> anyhow::Result<()> {
                 Err(error)
             }
         };
+    }
+    if let Command::Install = command {
+        tracing::info!("meeting install");
+        install::install(
+            &mut io::stdin().lock(),
+            &mut io::stdout(),
+            &config::home()?,
+            &std::env::var_os("PATH").unwrap_or_default(),
+            &std::env::current_exe()?,
+        )?;
+        if secret::deepgram_key().is_err() {
+            println!("Next: run `meeting config set-key`, then `meeting doctor`.");
+        } else {
+            println!("Next: run `meeting doctor`.");
+        }
+        return Ok(());
     }
     if let Command::Doctor = command {
         tracing::info!("meeting doctor");
