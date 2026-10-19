@@ -16,4 +16,5 @@ Written for agents about to change the code. Start with architecture, then the d
 | [features/native-messaging.md](features/native-messaging.md) | Extension ↔ tool protocol, hand-off, Jobs tab |
 | [features/processing.md](features/processing.md) | `meeting process`: ffmpeg, Deepgram, Claude summary, vault note, job states |
 | [features/setup.md](features/setup.md) | `meeting install`, config file, Deepgram key, `meeting doctor` |
+| [guides/](guides/) | User guides: installation, quickstart (contributing is `CONTRIBUTING.md` at the root) |
 | [prds/](prds/) | Product requirements (owned by `/create-prd`) |
