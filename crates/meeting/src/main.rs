@@ -42,6 +42,11 @@ mod summarise;
     not(test),
     expect(dead_code, reason = "used by `meeting process` (#20)")
 )]
+mod summary_md;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by `meeting process` (#20)")
+)]
 mod transcript;
 #[cfg_attr(
     not(test),
