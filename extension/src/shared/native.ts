@@ -58,6 +58,13 @@ export interface NativeError {
   message: string;
 }
 
+/** Chrome could not find the host: `meeting install` has not been run (FR-10). Not a wire code. */
+export interface HostMissing {
+  ok: false;
+  code: 'host_missing';
+  message: string;
+}
+
 export interface ProcessSuccess {
   ok: true;
   job_id: string;
