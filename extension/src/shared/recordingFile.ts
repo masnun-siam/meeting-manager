@@ -21,3 +21,17 @@ export async function appendChunk(startedAt: number, chunk: Blob): Promise<void>
   }
   await writable.close();
 }
+
+async function recordingsDir(): Promise<FileSystemDirectoryHandle> {
+  const root = await navigator.storage.getDirectory();
+  return root.getDirectoryHandle(RECORDINGS_DIR, { create: true });
+}
+
+export async function getRecordingFile(startedAt: number): Promise<File> {
+  const handle = await (await recordingsDir()).getFileHandle(recordingFileName(startedAt));
+  return handle.getFile();
+}
+
+export async function deleteRecordingFile(startedAt: number): Promise<void> {
+  await (await recordingsDir()).removeEntry(recordingFileName(startedAt));
+}

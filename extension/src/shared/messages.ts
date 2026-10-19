@@ -17,7 +17,8 @@ export type OffscreenCommand =
   | { type: 'offscreen_start'; streamId: string; language: Language; startedAt: number }
   | { type: 'offscreen_pause' }
   | { type: 'offscreen_resume' }
-  | { type: 'offscreen_stop' };
+  | { type: 'offscreen_stop' }
+  | { type: 'offscreen_file_url'; startedAt: number };
 
 /** Offscreen document → service worker. `tab_closed` is never sent from here: the service worker sees `tabs.onRemoved`. */
 export type OffscreenEvent =
