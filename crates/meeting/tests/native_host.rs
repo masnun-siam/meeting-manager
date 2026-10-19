@@ -30,10 +30,8 @@ fn list_jobs_round_trip_over_stdio() {
     .unwrap();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_meeting"))
-        .args([
-            "native-host",
-            &format!("chrome-extension://{EXTENSION_ID}/"),
-        ])
+        // Exactly how Chrome launches the host: the origin is the only argument.
+        .arg(format!("chrome-extension://{EXTENSION_ID}/"))
         .env("HOME", &home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -70,10 +68,8 @@ fn frame(request: &Value) -> Vec<u8> {
 fn ask(home: &Path, request: &Value) -> (Value, Duration) {
     let start = Instant::now();
     let mut child = Command::new(env!("CARGO_BIN_EXE_meeting"))
-        .args([
-            "native-host",
-            &format!("chrome-extension://{EXTENSION_ID}/"),
-        ])
+        // Exactly how Chrome launches the host: the origin is the only argument.
+        .arg(format!("chrome-extension://{EXTENSION_ID}/"))
         .env("HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

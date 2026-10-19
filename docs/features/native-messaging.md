@@ -2,14 +2,14 @@
 
 Covers: crates/meeting/src/native.rs, crates/meeting/tests/native_host.rs, extension/src/shared/native.ts, extension/src/shared/nativeClient.ts, extension/src/background/save.ts, extension/src/popup/JobsTab.tsx, extension/src/popup/useJobs.ts
 
-The extension talks to the `meeting` binary through Chrome native messaging. Chrome starts `meeting native-host <origin>` per `chrome.runtime.sendNativeMessage` call; the host answers and exits at end of input. See [../architecture.md](../architecture.md), [processing.md](processing.md), [setup.md](setup.md).
+The extension talks to the `meeting` binary through Chrome native messaging. Chrome starts `meeting <origin>` (no subcommand: the host manifest can't add arguments; `chrome_args` in `main.rs` turns it into `native-host <origin>`) per `chrome.runtime.sendNativeMessage` call; the host answers and exits at end of input. See [../architecture.md](../architecture.md), [processing.md](processing.md), [setup.md](setup.md).
 
 ## Host and wire format
 
 | Item | Value |
 |---|---|
 | Host name | `com.meeting_manager.host` (`NATIVE_HOST` in `native.ts`, `HOST_NAME` in `doctor.rs`) |
-| Launch | `meeting native-host [origin]` (`Command::NativeHost` in `main.rs`); Chrome passes `chrome-extension://<id>/` as the origin arg |
+| Launch | `meeting native-host [origin]` (`Command::NativeHost` in `main.rs`); Chrome passes only `chrome-extension://<id>/`, which `chrome_args` rewrites to `native-host <origin>` |
 | Permission | `nativeMessaging` in `extension/manifest.config.ts` |
 | Frame | 4-byte native-endian `u32` length, then UTF-8 JSON (`read_frame`, `write_frame`) |
 | Max request | 1 MiB (`MAX_REQUEST_BYTES`); larger gets `bad_request`, then the host stops |
