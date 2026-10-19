@@ -12,13 +12,6 @@ fn entry() -> anyhow::Result<Entry> {
 }
 
 /// The Deepgram key from the Keychain. Never log or print the returned value.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by `meeting process` (#20) and `doctor` (#24)"
-    )
-)]
 pub fn deepgram_key() -> anyhow::Result<String> {
     key_from(&entry()?)
 }

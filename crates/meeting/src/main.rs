@@ -4,6 +4,7 @@ mod config;
     expect(dead_code, reason = "used by `meeting process` (#20)")
 )]
 mod deepgram;
+mod doctor;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "used by `meeting process` (#20)")
@@ -145,6 +146,9 @@ fn run(command: Command) -> anyhow::Result<()> {
                 dir: JobStore::default_dir()?,
             },
             open: native::open_with_system,
+            key: secret::deepgram_key,
+            manifest: doctor::manifest_path(&config::home()?),
+            exe: std::env::current_exe()?,
         };
         return native::serve(
             &host,
@@ -152,6 +156,28 @@ fn run(command: Command) -> anyhow::Result<()> {
             io::stdin().lock(),
             io::stdout().lock(),
         );
+    }
+    if let Command::Doctor = command {
+        tracing::info!("meeting doctor");
+        let config = Config::load().map_err(|e| format!("{e:#}"));
+        let checks = doctor::checks(&doctor::Env {
+            config: &config,
+            key: secret::deepgram_key,
+            manifest: doctor::manifest_path(&config::home()?),
+            exe: std::env::current_exe()?,
+        });
+        for c in &checks {
+            if c.ok {
+                println!("✓ {}", c.name);
+            } else {
+                println!("✗ {}: {}", c.name, c.fix);
+            }
+        }
+        let failed = checks.iter().filter(|c| !c.ok).count();
+        if failed > 0 {
+            bail!("{failed} checks failed");
+        }
+        return Ok(());
     }
     let name = match command {
         Command::Process { .. } => "process",

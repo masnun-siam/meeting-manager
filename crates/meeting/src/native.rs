@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::config::Config;
+use crate::doctor;
 use crate::jobs::JobStore;
 
 /// Requests are a few dozen bytes; anything bigger is not from our extension.
@@ -18,6 +19,7 @@ const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
 enum Request {
     ListJobs { limit: usize },
     Open { job_id: String, what: OpenWhat },
+    Health,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -31,6 +33,9 @@ pub struct Host {
     pub config: Result<Config, String>,
     pub jobs: JobStore,
     pub open: fn(&Path) -> io::Result<()>,
+    pub key: fn() -> anyhow::Result<String>,
+    pub manifest: PathBuf,
+    pub exe: PathBuf,
 }
 
 /// Opens with `/usr/bin/open`: Chrome starts the host with a bare `PATH`.
@@ -112,12 +117,16 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
     let Ok(raw) = serde_json::from_slice::<Value>(bytes) else {
         return Ok(error("bad_request", "request is not valid JSON"));
     };
-    let config = match &host.config {
-        Ok(config) => config,
-        Err(message) => return Ok(error("not_configured", message)),
-    };
-    if origin != Some(&format!("chrome-extension://{}/", config.extension_id)) {
-        return Ok(error("bad_request", "request is from an unknown origin"));
+    // `health` answers even when the config is missing: it reports why.
+    let is_health = raw["type"] == "health";
+    match &host.config {
+        Ok(config) => {
+            if origin != Some(&format!("chrome-extension://{}/", config.extension_id)) {
+                return Ok(error("bad_request", "request is from an unknown origin"));
+            }
+        }
+        Err(message) if !is_health => return Ok(error("not_configured", message)),
+        Err(_) => {}
     }
     let request = match serde_json::from_value::<Request>(raw.clone()) {
         Ok(request) => request,
@@ -128,6 +137,12 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
     match request {
         Request::ListJobs { limit } => Ok(json!({"ok": true, "jobs": host.jobs.list(limit)?})),
         Request::Open { job_id, what } => open(host, &job_id, what),
+        Request::Health => Ok(json!({"ok": true, "checks": doctor::checks(&doctor::Env {
+            config: &host.config,
+            key: host.key,
+            manifest: host.manifest.clone(),
+            exe: host.exe.clone(),
+        })})),
     }
 }
 
@@ -230,6 +245,9 @@ mod tests {
                 dir: dir.join("jobs"),
             },
             open: record,
+            key: || Ok("k".into()),
+            manifest: dir.join("host.json"),
+            exe: dir.join("meeting"),
         }
     }
 
@@ -427,6 +445,34 @@ mod tests {
                 .unwrap()
                 .contains("meeting install")
         );
+    }
+
+    #[test]
+    fn health_lists_the_checks_with_and_without_a_config() {
+        let dir = temp("native-health");
+        let mut host = host(&dir);
+        let request = json!({"type": "health"});
+        let configured = one(&host, request.clone());
+        host.config = Err("meeting is not configured; run `meeting install`".into());
+        let unconfigured = ask(&host, None, frames(std::slice::from_ref(&request))).remove(0);
+        host.config = Ok(config(&dir));
+        let evil = ask(&host, Some("chrome-extension://evil/"), frames(&[request])).remove(0);
+        fs::remove_dir_all(&dir).unwrap();
+        let names = |r: &Value| -> Vec<String> {
+            r["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(configured["ok"], true);
+        assert_eq!(names(&configured).len(), 7);
+        assert_eq!(unconfigured["ok"], true);
+        assert_eq!(unconfigured["checks"][0]["name"], "config");
+        assert_eq!(unconfigured["checks"][0]["ok"], false);
+        assert_eq!(unconfigured["checks"][1]["ok"], true);
+        assert_eq!(evil["code"], "bad_request");
     }
 
     #[test]
