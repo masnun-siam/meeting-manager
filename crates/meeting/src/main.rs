@@ -25,6 +25,11 @@ mod logging;
     expect(dead_code, reason = "used by `meeting process` (#20)")
 )]
 mod meta;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by `meeting process` (#20)")
+)]
+mod plan;
 mod secret;
 #[cfg_attr(
     not(test),
