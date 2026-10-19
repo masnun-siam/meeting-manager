@@ -30,7 +30,7 @@ const idleStatus: RecorderStatus = {
 let queue: Promise<unknown> = Promise.resolve();
 
 /** Runs `fn` after every earlier call has finished; a failure rejects only its own caller. */
-function serial<T>(fn: () => Promise<T>): Promise<T> {
+export function serial<T>(fn: () => Promise<T>): Promise<T> {
   const run = queue.then(fn);
   queue = run.catch(() => undefined);
   return run;
@@ -57,13 +57,13 @@ async function commit(status: RecorderStatus): Promise<void> {
   await setBadge(status.state);
 }
 
-export async function ensureOffscreen(): Promise<void> {
+/** Chrome allows one offscreen document; either reason's document can serve the recording file's blob URL. */
+export async function ensureOffscreen(
+  reason: chrome.offscreen.Reason = chrome.offscreen.Reason.USER_MEDIA,
+  justification = 'Record the meeting tab and microphone',
+): Promise<void> {
   if (await chrome.offscreen.hasDocument()) return;
-  await chrome.offscreen.createDocument({
-    url: OFFSCREEN_PAGE,
-    reasons: [chrome.offscreen.Reason.USER_MEDIA],
-    justification: 'Record the meeting tab and microphone',
-  });
+  await chrome.offscreen.createDocument({ url: OFFSCREEN_PAGE, reasons: [reason], justification });
 }
 
 export async function closeOffscreen(): Promise<void> {
