@@ -186,7 +186,7 @@ All files are local. There is no database.
     - `<name>.deepgram.json` holds Deepgram's raw response. It is temporary and deleted on success (FR-12, FR-16).
     - `<name>.transcript.md` has a header with the language and speaker count, then utterance lines `[hh:mm:ss] Speaker N: text` (FR-12). This file is what FR-14 reuses.
     - `<name>.summary.md` holds the rendered summary (FR-15).
-    - `<name>.meta.json` has the fields `recording`, `language` (`bn`|`en`), `recorded_at` (ISO 8601), `duration_s`, `title` (null until summarised), `speakers` (`[{label, name|null, evidence}]`) and `runs` (`[{job_id, started_at, ended_at, stage, error|null}]`). It's written by the tool, not the extension (FR-14, FR-15).
+    - `<name>.meta.json` has the fields `recording`, `language` (`bn`|`en`), `recorded_at` (ISO 8601), `duration_s`, `title` (null until summarised), `speakers` (`[{label, name|null, evidence}]`) and `runs` (`[{job_id, started_at, ended_at, stage, error|null}]`, one entry per job, updated as the job moves through its stages, with `ended_at` null while it runs). It's written by the tool, not the extension (FR-14, FR-15).
     - `<name>.lock` exists while a job runs and holds its PID (FR-17).
 - **Jobs store:** `~/Library/Application Support/meeting-manager/jobs/<job_id>.json` with `{job_id, recording, title|null, stage, error|null, started_at, updated_at, summary_path|null}`. It's written at every stage change and is the only source for `list_jobs` (FR-8). There is no cleanup in v1, since one file per job is a few hundred bytes.
 - **Config:** `~/.config/meeting-manager/config.toml` with `recordings_dir`, `vault_dir`, `vault_folder` (default `Meetings`), `ffmpeg_path`, `claude_path`, `extension_id`. The file holds no secrets (FR-18).
@@ -234,7 +234,7 @@ External calls:
 One binary, `meeting`, with these responsibilities:
 
 - **Native host mode** validates each message (origin, path inside the recordings directory, `.webm`, file exists). For `process` and `retry`, it creates the job file in the `queued` stage, spawns `meeting process` detached in its own session so it outlives Chrome closing the pipe, and replies at once. For the other messages, it reads job files and opens files with the system `open`.
-- **The pipeline** takes the per-recording lock, then runs extract → transcribe → summarise → write. Each stage is skipped when its output already exists and is newer than its input. A stage forced by `--retranscribe`/`--language` deletes the transcript and the raw response first. Each stage updates the job file and appends to `meta.json` `runs`. On success it deletes the audio and raw response, removes the lock and notifies. On failure it records the stage and reason, removes the lock and notifies.
+- **The pipeline** takes the per-recording lock, then runs extract → transcribe → summarise → write. Each stage is skipped when its output already exists and is newer than its input. A stage forced by `--retranscribe`/`--language` deletes the transcript and the raw response first. Each stage updates the job file and the job's entry in `meta.json` `runs`. On success it deletes the audio and raw response, removes the lock and notifies. On failure it records the stage and reason, removes the lock and notifies.
 - **The vault writer** finds an existing note whose frontmatter `recording` matches this recording and overwrites it, renaming it if the title changed. Otherwise it creates the note. The write is atomic: write to a temporary file, then rename.
 - **Notifications** use `osascript` `display notification`, so no extra dependency is needed.
 - **The environment** is minimal: Chrome launches the host with a bare `PATH`, so all external programs come from the absolute paths in the config.
@@ -325,6 +325,8 @@ None formally defined. Informally, every meeting recorded for two weeks has a va
 - **The languages are `bn` and `en` only, one per recording:** these are what was asked for. Nova-3 supports both, and its `multi` code-switching option excludes Bengali.
 - **Claude runs headless with no tools and a JSON schema:** the transcript is untrusted input, and the schema makes the output parseable.
 - **Priority is medium,** with a private GitHub repo and one epic on approval.
+- **No date/time crate.** The vault note's date and time and `meta.json` `recorded_at` come from the recording name `meeting-YYYY-MM-DD_HHMM` (the local start time, FR-4), as `YYYY-MM-DDTHH:MM`. A recording with any other name uses its file's modified time in UTC. Job and run timestamps (`started_at`, `updated_at`, `ended_at`) are UTC, `YYYY-MM-DDTHH:MM:SSZ`.
+- **`meta.json` `runs` has one entry per job,** updated in place as the job moves. Per-stage timings go to the log.
 
 ## Open questions
 
@@ -333,8 +335,10 @@ None.
 ## Change log
 
 - 2026-10-19: Settled while refining #2 and #3. The repository layout is a root Cargo workspace with `crates/meeting/` and `extension/`. The Rust crates are named. The fixed extension ID is `obbaikcmcdooakogedoiiflflbbhpgdh`. CI runs one GitHub Actions job per part. Affects #2, #3 and #27, and every later tool issue through the crate choice.
+- 2026-10-19: Settled while refining #4–#14. No date/time crate: local dates come from the recording name, other timestamps are UTC. `meta.json` `runs` holds one entry per job. Affects #4, #12 and #20.
 
 ## Related
+
 
 - Deepgram docs: models and languages (Nova-3 `bn`, `en`; `multi` excludes Bengali), pre-recorded audio (`/v1/listen`, 2 GB max, 10-minute processing timeout), diarization (all Nova batch models).
 - Chrome docs: `chrome.tabCapture` with offscreen documents, native messaging.
