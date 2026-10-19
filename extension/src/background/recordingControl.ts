@@ -2,6 +2,7 @@
 // so a service worker that slept mid-recording carries on.
 
 import {
+  type Notice,
   type OffscreenCommand,
   type OffscreenEvent,
   type PopupCommand,
@@ -10,8 +11,11 @@ import {
 } from '../shared/messages';
 import { micPermissionState, openMicPermissionPage } from '../shared/micPermission';
 import { initialRecordingState, type RecordingState, type StopReason, transition } from '../shared/recordingState';
+import { nextFreeName, recordingName, saveRecording, takenNames } from './save';
 
 export const OFFSCREEN_PAGE = 'src/offscreen/offscreen.html';
+
+const MIN_PROCESS_MS = 10_000;
 
 const BADGE_COLOR = '#d93025';
 
@@ -134,9 +138,28 @@ async function offscreenStarted(micIncluded: boolean): Promise<void> {
 async function offscreenStopped(reason: StopReason): Promise<void> {
   const status = await readStatus();
   const saving = transition(status.state, { type: 'stop', at: Date.now(), reason });
+  let notice: Notice;
+  try {
+    if (saving.phase !== 'saving') throw new Error('No recording to save');
+    const base = recordingName(saving.startedAt);
+    notice = await saveRecording({
+      startedAt: saving.startedAt,
+      name: nextFreeName(base, await takenNames(base)),
+      language: status.language,
+      process: saving.recordedMs >= MIN_PROCESS_MS,
+    });
+  } catch (error) {
+    notice = { kind: 'error', message: `Could not save the recording (${messageOf(error)}).` };
+  }
   const state = transition(saving, { type: 'saved' });
   await closeOffscreen();
-  await commit({ ...status, state, micIncluded: null, tabId: null });
+  await commit({
+    ...status,
+    state,
+    micIncluded: null,
+    notice: status.notice?.kind === 'error' ? status.notice : notice,
+    tabId: null,
+  });
 }
 
 async function offscreenError(message: string): Promise<void> {

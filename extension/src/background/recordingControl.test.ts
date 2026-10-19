@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RECORDER_STATUS_KEY, type RecorderStatus } from '../shared/messages';
 import { MIC_PERMISSION_PAGE } from '../shared/micPermission';
 import { handleOffscreenEvent, handlePopupCommand, handleTabRemoved, OFFSCREEN_PAGE } from './recordingControl';
+import { saveRecording } from './save';
+
+vi.mock('./save', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./save')>()),
+  saveRecording: vi.fn(async () => ({ kind: 'saved' })),
+  takenNames: vi.fn(async () => new Set<string>()),
+}));
 
 const T0 = new Date('2026-01-01T10:00:00Z').getTime();
 const TAB = 7;
@@ -169,6 +176,31 @@ describe('running recording', () => {
     expect(status().state).toEqual({ phase: 'idle', lastStop: 'user' });
     expect(status().tabId).toBeNull();
     expect(closeDocument).toHaveBeenCalled();
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: '' });
+  });
+
+  it.each([
+    [9_999, false, 'saved'],
+    [10_000, true, 'saved'],
+  ])('processes only from 10 s: %i ms -> %s', async (ms, process) => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    vi.setSystemTime(T0 + ms);
+    await handlePopupCommand({ type: 'stop' });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    expect(saveRecording).toHaveBeenLastCalledWith(
+      expect.objectContaining({ startedAt: T0, language: 'en', process, name: expect.stringMatching(/^meeting-/) }),
+    );
+    expect(status().notice).toEqual({ kind: 'saved' });
+    expect(status().state.phase).toBe('idle');
+  });
+
+  it('still reaches idle with an error notice when saving throws', async () => {
+    vi.mocked(saveRecording).mockRejectedValueOnce(new Error('kaboom'));
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handlePopupCommand({ type: 'stop' });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    expect(status().state.phase).toBe('idle');
+    expect(status().notice).toMatchObject({ kind: 'error' });
     expect(setBadgeText).toHaveBeenLastCalledWith({ text: '' });
   });
 
