@@ -214,6 +214,8 @@ Native messaging between the extension and the host, using Chrome's JSON stdio p
 | `{type: "open", job_id, what: "summary"\|"folder"}` | `{ok: true}`                                                                                         | `unknown_job`, `missing_file`                                                        |
 | `{type: "health"}`                                  | `{ok: true, checks: [{name, ok, fix}]}`                                                              | none                                                                                 |
 
+Any message from another origin, and any malformed or unknown message, gets `{ok: false, code: "bad_request", message}`. When the config is missing or invalid, every message except `health` gets `not_configured`; `health` still answers, with its failing checks.
+
 `stage` is one of `queued`, `extracting`, `transcribing`, `summarising`, `writing`, `done`, `failed`. If the host is missing, Chrome's own error (`Specified native messaging host not found`) is mapped to FR-10's message.
 
 CLI (FR-14, FR-18):
@@ -233,7 +235,7 @@ External calls:
 
 One binary, `meeting`, with these responsibilities:
 
-- **Native host mode** validates each message (origin, path inside the recordings directory, `.webm`, file exists). For `process` and `retry`, it creates the job file in the `queued` stage, spawns `meeting process` detached in its own session so it outlives Chrome closing the pipe, and replies at once. For the other messages, it reads job files and opens files with the system `open`.
+- **Native host mode** validates each message (origin, path inside the recordings directory, `.webm`, file exists). For `process` and `retry`, it creates the job file in the `queued` stage, spawns `meeting process` detached in its own process group, with no stdio, so it outlives Chrome closing the pipe, and replies at once. For the other messages, it reads job files and opens files with the system `open`.
 - **The pipeline** takes the per-recording lock, then runs extract → transcribe → summarise → write. Each stage is skipped when its output already exists and is newer than its input. A stage forced by `--retranscribe`/`--language` deletes the transcript and the raw response first. Each stage updates the job file and the job's entry in `meta.json` `runs`. On success it deletes the audio and raw response, removes the lock and notifies. On failure it records the stage and reason, removes the lock and notifies.
 - **The vault writer** finds an existing note whose frontmatter `recording` matches this recording and overwrites it, renaming it if the title changed. Otherwise it creates the note. The write is atomic: write to a temporary file, then rename.
 - **Notifications** use `osascript` `display notification`, so no extra dependency is needed.
@@ -331,6 +333,12 @@ None formally defined. Informally, every meeting recorded for two weeks has a va
 - **First Start without mic permission opens the mic page and records nothing.** The page tells the user to go back and press Start again. This keeps the tab stream id pointed at the meeting tab and puts the mic in the first recording. If the mic was denied, Start records tab audio only and the popup warns (see Edge cases).
 - **One origin-private file per recording.** The offscreen document appends each 5-second chunk to `recordings/<startedAtMs>.webm`, where `startedAtMs` is the start time in epoch milliseconds, so save and recovery hand over one file and nothing has to be joined.
 - **The recording timing is one pure module** in `extension/src/shared/recordingState.ts`. The offscreen document uses it to enforce the 3-hour cap, the popup to show the timer and the service worker to own the state.
+- **The host answers what the API table doesn't cover with `bad_request`.** A wrong origin, a malformed or unknown message get `bad_request`. A missing config gets `not_configured` for everything but `health`, so `meeting doctor`'s checks still reach the popup.
+- **An empty recording's job is titled "No speech detected".** It ends as done with no summary path, and the notification reads "Meeting summary ready: No speech detected". `meta.json` `title` stays null.
+- **The host detaches the job with its own process group** (`process_group(0)` from the standard library) and null stdio. A new session would need the `libc` crate, and a separate group is enough to survive Chrome ending the host.
+- **The Jobs tab polls with a small `useEffect` + `setInterval` hook**, like the popup's other hooks, rather than adding SWR or React Query.
+- **The recording is saved through a blob URL made in the offscreen document,** because an MV3 service worker has no `URL.createObjectURL`. The `-2`, `-3` suffix comes from Chrome's download history (`chrome.downloads.search` for files that still exist), with `conflictAction: "uniquify"` as a fallback so nothing is overwritten. A failed save keeps the origin-private file, and the recovery on the next extension start saves it.
+- **Recovery runs on `runtime.onStartup` and `runtime.onInstalled`** only, not on every service worker wake, so it never touches a recording in progress.
 
 ## Open questions
 
@@ -341,6 +349,7 @@ None.
 - 2026-10-19: Settled while refining #2 and #3. The repository layout is a root Cargo workspace with `crates/meeting/` and `extension/`. The Rust crates are named. The fixed extension ID is `obbaikcmcdooakogedoiiflflbbhpgdh`. CI runs one GitHub Actions job per part. Affects #2, #3 and #27, and every later tool issue through the crate choice.
 - 2026-10-19: Settled while refining #4–#14. No date/time crate: local dates come from the recording name, other timestamps are UTC. `meta.json` `runs` holds one entry per job. Affects #4, #12 and #20.
 - 2026-10-19: Settled while refining #15–#19. The popup reads recording state from `chrome.storage.session`. First Start without mic permission opens the mic page and records nothing. Each recording is one appended origin-private file. The timing is one shared pure module. #17 and #19 now wait for #16, and #22 waits for #17 and #18. Affects #16, #17, #18, #19, #22, #26 and #28.
+- 2026-10-19: Settled while refining #20–#28. The host's `bad_request` code and `not_configured` rule, the empty recording's job title, detaching by process group, the Jobs tab's polling hook, saving through an offscreen blob URL with suffixes from the download history, and recovery only on startup or install. Affects #20, #21, #22, #23, #24, #25, #26 and #28.
 
 ## Related
 
