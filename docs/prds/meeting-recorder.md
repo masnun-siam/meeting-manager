@@ -238,11 +238,12 @@ One binary, `meeting`, with these responsibilities:
 - **The vault writer** finds an existing note whose frontmatter `recording` matches this recording and overwrites it, renaming it if the title changed. Otherwise it creates the note. The write is atomic: write to a temporary file, then rename.
 - **Notifications** use `osascript` `display notification`, so no extra dependency is needed.
 - **The environment** is minimal: Chrome launches the host with a bare `PATH`, so all external programs come from the absolute paths in the config.
-- **New dependencies** (Rust crates) are needed for HTTP, JSON, TOML, CLI parsing and Keychain access. The exact crates are chosen in `/refine-issues`.
+- **New dependencies** (Rust crates): `clap` (derive) for the CLI, `serde`, `toml` and `serde_json` for config, job and meta files, `anyhow` for errors, `tracing` and `tracing-subscriber` for the log file, `ureq` for HTTP (blocking, with no async runtime, because the pipeline is sequential) and `keyring` with its macOS native backend for the Keychain. The home directory comes from `std::env::home_dir`.
+- **Repository layout:** the repo root is a Cargo workspace, and the `meeting` crate lives in `crates/meeting/`. The extension is an npm project in `extension/`.
 
 ### Frontend (Chrome extension)
 
-Manifest V3, React with Vite (CRXJS) and strict TypeScript, with a fixed extension ID set through a manifest `key` so the native host manifest can trust it. Permissions: `tabCapture`, `offscreen`, `downloads`, `nativeMessaging`, `storage`.
+Manifest V3, React with Vite (CRXJS) and strict TypeScript, with a fixed extension ID set through a manifest `key` so the native host manifest can trust it. The ID is `obbaikcmcdooakogedoiiflflbbhpgdh`. Only the public key is kept, in the manifest, because the extension is only ever loaded unpacked. Permissions: `tabCapture`, `offscreen`, `downloads`, `nativeMessaging`, `storage`.
 
 - **Service worker** is the state owner. It starts and stops the offscreen document, sets the badge, saves the file through `downloads` (without a Save-as dialog) and resolves the saved file's absolute path. It then sends `process`, and on startup it recovers leftover chunks.
 - **Offscreen document** is where capture happens. It takes the tab stream from its stream id, mixes tab audio and mic audio into one track, plays tab audio back to the speakers and runs MediaRecorder (WebM, about 1 Mbps video, 720p cap). It writes 5-second chunks to origin-private storage and enforces the 3-hour cap on recorded time.
@@ -283,6 +284,7 @@ Not affected. The only external services are Deepgram (transcription) and Anthro
 - **Rust integration tests:** the pipeline against a short fixture recording. Deepgram is replaced by a local mock server through a configurable base URL, and `claude` by a stub script that returns fixture JSON. They cover success, failures at each stage and resuming (FR-11–17).
 - **Native messaging protocol test:** a framed stdin/stdout round-trip for each message type (API table).
 - **Extension:** Vitest component tests for the popup tabs (states, empty, error, host missing), and unit tests for the recording state machine (FR-2, FR-3, FR-6).
+- **CI:** GitHub Actions runs one path-filtered job per part. The tool job runs `cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` on macOS. The extension job runs the build, `tsc --noEmit`, `biome check` and `vitest run`.
 - **Manual** (it can't be automated, because tab capture needs a real user gesture):
     - FR-1, FR-5, FR-6 and FR-7 in real Chrome with a Meet call.
     - One real Bengali and one real English meeting end to end against live Deepgram and Opus, checking diarization quality and inferred names.
@@ -330,7 +332,7 @@ None.
 
 ## Change log
 
-- None yet.
+- 2026-10-19: Settled while refining #2 and #3. The repository layout is a root Cargo workspace with `crates/meeting/` and `extension/`. The Rust crates are named. The fixed extension ID is `obbaikcmcdooakogedoiiflflbbhpgdh`. CI runs one GitHub Actions job per part. Affects #2, #3 and #27, and every later tool issue through the crate choice.
 
 ## Related
 
