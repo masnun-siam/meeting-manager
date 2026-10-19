@@ -112,6 +112,13 @@ describe('saveRecording', () => {
     expect(sendNative).not.toHaveBeenCalled();
   });
 
+  it('still processes when deleting the origin-private file fails', async () => {
+    finishWith({ state: { current: 'complete' } });
+    removeEntry.mockRejectedValue(new Error('locked'));
+    vi.mocked(sendNative).mockResolvedValue({ ok: true, job_id: 'j1' });
+    expect(await saveRecording(opts)).toEqual({ kind: 'saved' });
+  });
+
   it('names other interruptions', async () => {
     finishWith({ state: { current: 'interrupted' }, error: { current: 'NETWORK_FAILED' } });
     expect(await saveRecording(opts)).toMatchObject({ message: expect.stringContaining('(NETWORK_FAILED)') });

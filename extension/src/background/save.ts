@@ -96,7 +96,8 @@ export async function saveRecording({ startedAt, name, language, process }: Save
   if (!file || 'error' in file) return errorNotice(file?.error ?? 'no recording file');
   const saved = await download(file.url, `Meetings/${name}.webm`);
   if ('error' in saved) return errorNotice(saved.error);
-  await deleteRecordingFile(startedAt);
+  // The file is saved; a failed cleanup must not stop processing. Recovery (#28) tolerates a leftover.
+  await deleteRecordingFile(startedAt).catch(() => undefined);
   if (!process) return { kind: 'too_short' };
   try {
     return noticeFor(await sendNative({ type: 'process', path: saved.path, language }));
