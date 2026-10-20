@@ -84,7 +84,12 @@ describe('JobsTab', () => {
 
   it('lists the title, local date, stage, and the folder name when untitled', async () => {
     sendNative.mockResolvedValue(
-      jobs(job(), job({ job_id: 'j2', title: null }), job({ job_id: 'j3', title: null, recording: '/rec/x.webm' })),
+      jobs(
+        job(),
+        job({ job_id: 'j2', title: null }),
+        job({ job_id: 'j3', title: null, recording: '/rec/x.webm' }),
+        job({ job_id: 'j4', title: null, recording: '/rec/meeting-x/recording.mp4' }),
+      ),
     );
     setup();
 
@@ -95,6 +100,8 @@ describe('JobsTab', () => {
     expect(rows[1]).toHaveTextContent('meeting-2026-10-19_1430');
     expect(rows[1]).not.toHaveTextContent('recording.webm');
     expect(rows[2]).toHaveTextContent('x.webm');
+    expect(rows[3]).toHaveTextContent('meeting-x');
+    expect(rows[3]).not.toHaveTextContent('recording.mp4');
   });
 
   it('shows a failed job’s reason and a Retry button, no open buttons', async () => {

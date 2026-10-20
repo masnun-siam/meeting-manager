@@ -4,13 +4,12 @@ import { sendNative } from '../shared/nativeClient';
 import styles from './JobsTab.module.css';
 import { useJobs } from './useJobs';
 
-const RECORDING_FILE = 'recording.webm';
 const CONFIRM_MS = 3000;
 
 const label = (path: string) => {
   const parts = path.split('/');
   const file = parts[parts.length - 1];
-  return file === RECORDING_FILE && parts.length > 1 ? parts[parts.length - 2] : file;
+  return file.startsWith('recording.') && parts.length > 1 ? parts[parts.length - 2] : file;
 };
 
 type JobAction = OpenRequest | RetryRequest | ArchiveRequest | TrashRequest;
