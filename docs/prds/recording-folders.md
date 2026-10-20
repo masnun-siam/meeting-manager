@@ -217,6 +217,7 @@ None.
 ## Change log
 
 - 2026-10-19: Settled while refining #64–#70. `meeting process` refuses a bad path before writing a job (FR-3); untitled old flat rows show the file name (FR-4); Archive skips a missing `meta.json` (FR-5). Affects #65, #67 and #68.
+- 2026-10-20: [recording-import.md](recording-import.md) (approved) lets the recording file be `recording.<ext>` for `webm`, `mp4`, `m4a`, `mov`, `mkv`, `mp3`, `wav` or `ogg`, not only `recording.webm`, and overrides this PRD where they differ: FR-3 and FR-8 (the recording rule), FR-4 (the Jobs tab label) and FR-5 (Archive keeps the real file name). Implemented under that PRD's epic; no closed issue here is reopened.
 
 ## Related
 
