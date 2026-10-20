@@ -127,6 +127,7 @@ fn run(command: Command) -> anyhow::Result<()> {
                 dir: JobStore::default_dir()?,
             },
             open: native::open_with_system,
+            trash: native::trash_with_system,
             key: secret::deepgram_key,
             manifest: doctor::manifest_path(&config::home()?),
             exe: std::env::current_exe()?,

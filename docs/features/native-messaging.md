@@ -32,6 +32,7 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 | `process` | `path`, `language` (`bn`\|`en`) | `{ok, job_id}` | `start_checked`; spawns `meeting process` |
 | `retry` | `job_id` | `{ok, job_id}` | Same as `process` on the old job's recording, no `--language`; `job_id` is the new job |
 | `archive` | `job_id` | `{ok}` | See [Archive](#archive) |
+| `trash` | `job_id` | `{ok}` | See [Trash](#trash) |
 | `list_jobs` | `limit` | `{ok, jobs: JobSummary[]}` | Newest `started_at` first via `JobStore::list` |
 | `open` | `job_id`, `what` (`summary`\|`folder`) | `{ok}` | Runs `/usr/bin/open` on `summary_path` or the recording's parent dir |
 | `health` | none | `{ok, checks: {name, ok, fix}[]}` | `doctor::checks`, same list as `meeting doctor` ([setup.md](setup.md)) |
@@ -49,6 +50,10 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 
 A failure after step 3 replies `archive_failed`; the folder stays in `Archive/` and the jobs stay.
 
+## Trash
+
+`trash` runs the same steps 1–2 as `archive` (job lookup, missing-file shortcut, `check_recording`, held lock), except an archived recording is allowed. It then runs `/usr/bin/trash -s <folder>` (absolute path; `-s` makes a failed move exit non-zero) through the injected `Host::trash`, and `JobStore::remove_for` deletes every job for the recording. The vault note is untouched. `/usr/bin/trash` ships with macOS 15+; on older macOS the reply is `trash_failed` naming the missing command.
+
 ## Errors
 
 Error reply: `{ok: false, code, message}`.
@@ -60,6 +65,7 @@ Error reply: `{ok: false, code, message}`.
 | `invalid_path` | `check_recording` failed: not absolute, not `<recordings_dir>/<name>/recording.webm` or `<recordings_dir>/Archive/<name>/recording.webm`, missing, not a file, outside `recordings_dir` (after canonicalising, so symlinks out are refused) |
 | `already_processing` | `lock::is_held` on the recording's lock; no job is written |
 | `archive_failed` | `archive` failed after the check: the message names the step (`move`, `meta.json`, `vault note`, `jobs`) and the path |
+| `trash_failed` | `trash` could not move the folder (command missing or non-zero exit): the message names the reason; nothing moved, jobs stay; or the folder is in the Trash but its jobs could not be removed (the message says so) |
 | `unknown_job` | Id missing from the store, or not `[A-Za-z0-9-]+` (stops path traversal) |
 | `missing_file` | `open` target no longer exists, or `summary_path` is null |
 | `host_missing` | Client only, not a wire code: Chrome says "Specified native messaging host not found"; `sendNative` returns `HOST_MISSING_MESSAGE` |

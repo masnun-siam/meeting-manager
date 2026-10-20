@@ -29,6 +29,7 @@ enum Request {
     Process { path: PathBuf, language: Language },
     Retry { job_id: String },
     Archive { job_id: String },
+    Trash { job_id: String },
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -42,6 +43,7 @@ pub struct Host {
     pub config: Result<Config, String>,
     pub jobs: JobStore,
     pub open: fn(&Path) -> io::Result<()>,
+    pub trash: fn(&Path) -> io::Result<()>,
     pub key: fn() -> anyhow::Result<String>,
     pub manifest: PathBuf,
     pub exe: PathBuf,
@@ -56,6 +58,25 @@ pub fn open_with_system(path: &Path) -> io::Result<()> {
         Ok(())
     } else {
         Err(io::Error::other(format!("open exited with {status}")))
+    }
+}
+
+/// Moves to the Trash with `/usr/bin/trash -s` (macOS 15+); `-s` makes a failed move exit non-zero.
+pub fn trash_with_system(path: &Path) -> io::Result<()> {
+    let status = std::process::Command::new("/usr/bin/trash")
+        .arg("-s")
+        .arg(path)
+        .status()
+        .map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => {
+                io::Error::other("/usr/bin/trash is missing: Trash needs macOS 15 or later")
+            }
+            _ => e,
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("trash exited with {status}")))
     }
 }
 
@@ -151,6 +172,7 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
         }
         Request::Retry { job_id } => retry(host, &job_id),
         Request::Archive { job_id } => archive(host, config_of(host), &job_id),
+        Request::Trash { job_id } => trash(host, config_of(host), &job_id),
         Request::Health => Ok(json!({"ok": true, "checks": doctor::checks(&doctor::Env {
             config: &host.config,
             key: host.key,
@@ -201,19 +223,9 @@ fn retry(host: &Host, job_id: &str) -> anyhow::Result<Value> {
 /// removes its jobs. The folder moves first, so a later failure leaves it archived and the
 /// jobs in place.
 fn archive(host: &Host, config: &Config, job_id: &str) -> anyhow::Result<Value> {
-    if !valid_job_id(job_id) {
-        return Ok(error("unknown_job", "no such job"));
-    }
-    let Some(job) = host.jobs.read(job_id)? else {
-        return Ok(error("unknown_job", "no such job"));
-    };
-    if !job.recording.is_file() {
-        host.jobs.remove_for(&job.recording)?;
-        return Ok(json!({"ok": true}));
-    }
-    let recording = match check_recording(&config.recordings_dir, &job.recording) {
-        Ok(recording) => recording,
-        Err(reason) => return Ok(error("invalid_path", reason)),
+    let (job, recording) = match find_recording(host, config, job_id)? {
+        Ok(found) => found,
+        Err(reply) => return Ok(reply),
     };
     // `check_recording` guarantees a parent folder with a parent of its own.
     let folder = recording.parent().expect("recording is inside a folder");
@@ -289,6 +301,54 @@ fn archive(host: &Host, config: &Config, job_id: &str) -> anyhow::Result<Value> 
         return Ok(step("jobs", &format!("{}: {e:#}", host.jobs.dir.display())));
     }
     Ok(json!({"ok": true}))
+}
+
+/// Moves a recording's folder to the macOS Trash and removes its jobs; the vault note stays.
+fn trash(host: &Host, config: &Config, job_id: &str) -> anyhow::Result<Value> {
+    let (job, recording) = match find_recording(host, config, job_id)? {
+        Ok(found) => found,
+        Err(reply) => return Ok(reply),
+    };
+    if lock::is_held(&Lock::path_for(&recording)) {
+        return Ok(error("already_processing", "already processing"));
+    }
+    let folder = recording.parent().expect("recording is inside a folder");
+    if let Err(e) = (host.trash)(folder) {
+        return Ok(error("trash_failed", format!("{e}")));
+    }
+    if let Err(e) = host.jobs.remove_for(&job.recording) {
+        return Ok(error(
+            "trash_failed",
+            format!("moved to the Trash, but cannot remove its jobs: {e:#}"),
+        ));
+    }
+    Ok(json!({"ok": true}))
+}
+
+/// The checks Archive and Trash share: the job exists, and its recording is a valid
+/// `<name>/recording.webm`. A reply in `Err` ends the request (a recording that is already
+/// gone clears its jobs and succeeds, before the path check).
+fn find_recording(
+    host: &Host,
+    config: &Config,
+    job_id: &str,
+) -> anyhow::Result<Result<(Job, PathBuf), Value>> {
+    if !valid_job_id(job_id) {
+        return Ok(Err(error("unknown_job", "no such job")));
+    }
+    let Some(job) = host.jobs.read(job_id)? else {
+        return Ok(Err(error("unknown_job", "no such job")));
+    };
+    if !job.recording.is_file() {
+        host.jobs.remove_for(&job.recording)?;
+        return Ok(Err(json!({"ok": true})));
+    }
+    Ok(
+        match check_recording(&config.recordings_dir, &job.recording) {
+            Ok(recording) => Ok((job, recording)),
+            Err(reason) => Err(error("invalid_path", reason)),
+        },
+    )
 }
 
 /// `dispatch` only reaches a request handler once the config has loaded.
@@ -373,6 +433,19 @@ mod tests {
         Ok(())
     }
 
+    thread_local! {
+        static TRASHED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn record_trash(path: &Path) -> io::Result<()> {
+        TRASHED.with(|t| t.borrow_mut().push(path.to_path_buf()));
+        Ok(())
+    }
+
+    fn fail_trash(_: &Path) -> io::Result<()> {
+        Err(io::Error::other("no trash"))
+    }
+
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("meeting-test-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -398,6 +471,7 @@ mod tests {
                 dir: dir.join("jobs"),
             },
             open: record,
+            trash: record_trash,
             key: || Ok("k".into()),
             manifest: dir.join("host.json"),
             exe: dir.join("meeting"),
@@ -986,5 +1060,130 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(reply["ok"], true);
         assert!(landed);
+    }
+
+    fn trash_req(host: &Host, id: &str) -> Value {
+        one(host, json!({"type": "trash", "job_id": id}))
+    }
+
+    fn trashed() -> Vec<PathBuf> {
+        TRASHED.with(|t| t.take())
+    }
+
+    #[test]
+    fn trash_moves_the_folder_and_clears_its_jobs() {
+        let dir = temp("native-trash");
+        let host = host(&dir);
+        let recording = archivable(&host, &dir, "m", "a");
+        archivable(&host, &dir, "m", "b");
+        archivable(&host, &dir, "other", "c");
+        fs::create_dir_all(dir.join("vault")).unwrap();
+        let note = dir.join("vault/note.md");
+        fs::write(&note, "keep").unwrap();
+        trashed();
+        let reply = trash_req(&host, "a");
+        let calls = trashed();
+        let remaining: Vec<_> = host
+            .jobs
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .map(|j| j.job_id)
+            .collect();
+        let kept_note = fs::read_to_string(&note).unwrap();
+        let expected = recording.parent().unwrap().to_path_buf();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply, json!({"ok": true}));
+        assert_eq!(calls, [expected]);
+        assert_eq!(remaining, ["c"]);
+        assert_eq!(kept_note, "keep");
+    }
+
+    #[test]
+    fn trash_accepts_an_archived_recording() {
+        let dir = temp("native-trash-archived");
+        let host = host(&dir);
+        let recording = archivable(&host, &dir, "Archive/done", "a");
+        trashed();
+        let reply = trash_req(&host, "a");
+        let calls = trashed();
+        let expected = recording.parent().unwrap().to_path_buf();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(calls, [expected]);
+    }
+
+    #[test]
+    fn trash_refuses_flat_and_outside_paths_and_a_held_lock() {
+        let dir = temp("native-trash-refuse");
+        let host = host(&dir);
+        let locked = archivable(&host, &dir, "m", "lock");
+        let _lock = Lock::acquire(&Lock::path_for(&locked)).unwrap();
+        let flat = dir.join("rec/flat.webm");
+        fs::write(&flat, "x").unwrap();
+        let outside = dir.join("outside.webm");
+        fs::write(&outside, "x").unwrap();
+        for (id, path) in [("flat", flat), ("out", outside)] {
+            let mut j = job(id, "2026-10-19T14:30:00Z", None);
+            j.recording = fs::canonicalize(path).unwrap();
+            host.jobs.write(&j).unwrap();
+        }
+        trashed();
+        let codes: Vec<_> = ["flat", "out", "lock"]
+            .map(|id| trash_req(&host, id)["code"].clone())
+            .into();
+        let calls = trashed();
+        let kept = host.jobs.list(10).unwrap().len();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            codes,
+            ["invalid_path", "invalid_path", "already_processing"]
+        );
+        assert!(calls.is_empty());
+        assert_eq!(kept, 3);
+    }
+
+    #[test]
+    fn trash_of_a_missing_recording_clears_its_jobs() {
+        let dir = temp("native-trash-missing");
+        let host = host(&dir);
+        let recording = archivable(&host, &dir, "m", "a");
+        fs::remove_file(&recording).unwrap();
+        trashed();
+        let reply = trash_req(&host, "a");
+        let calls = trashed();
+        let left = host.jobs.list(10).unwrap().len();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply, json!({"ok": true}));
+        assert!(calls.is_empty());
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn trash_failure_replies_trash_failed_and_keeps_the_jobs() {
+        let dir = temp("native-trash-fail");
+        let host = Host {
+            trash: fail_trash,
+            ..host(&dir)
+        };
+        archivable(&host, &dir, "m", "a");
+        let reply = trash_req(&host, "a");
+        let kept = host.jobs.read("a").unwrap().is_some();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["code"], "trash_failed");
+        assert!(reply["message"].as_str().unwrap().contains("no trash"));
+        assert!(kept);
+    }
+
+    #[test]
+    fn trash_rejects_unknown_ids() {
+        let dir = temp("native-trash-unknown");
+        let host = host(&dir);
+        trashed();
+        let replies = ["none", "../x", ""].map(|id| trash_req(&host, id));
+        let calls = trashed();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(replies.iter().all(|r| r["code"] == "unknown_job"));
+        assert!(calls.is_empty());
     }
 }
