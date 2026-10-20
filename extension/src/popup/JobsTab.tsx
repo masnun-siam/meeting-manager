@@ -1,23 +1,29 @@
 import { useState } from 'react';
-import type { JobSummary, OpenRequest, RetryRequest } from '../shared/native';
+import type { ArchiveRequest, JobSummary, OpenRequest, RetryRequest, TrashRequest } from '../shared/native';
 import { sendNative } from '../shared/nativeClient';
 import styles from './JobsTab.module.css';
 import { useJobs } from './useJobs';
 
-const fileName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+const RECORDING_FILE = 'recording.webm';
+
+const label = (path: string) => {
+  const parts = path.split('/');
+  const file = parts[parts.length - 1];
+  return file === RECORDING_FILE && parts.length > 1 ? parts[parts.length - 2] : file;
+};
+
+type JobAction = OpenRequest | RetryRequest | ArchiveRequest | TrashRequest;
 
 export function JobsTab() {
   const { view, refresh } = useJobs();
   const [status, setStatus] = useState<string | null>(null);
 
-  async function run(
-    request: { type: 'open'; job_id: string; what: 'summary' | 'folder' } | { type: 'retry'; job_id: string },
-  ) {
+  async function run(request: JobAction) {
     setStatus(null);
     try {
       const reply = await sendNative(request);
       if (!reply.ok) setStatus(reply.message);
-      else if (request.type === 'retry') refresh();
+      else if (request.type !== 'open') refresh();
     } catch (error) {
       setStatus(`Could not reach the meeting tool: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -46,10 +52,10 @@ export function JobsTab() {
   );
 }
 
-function JobRow({ job, run }: { job: JobSummary; run: (request: OpenRequest | RetryRequest) => void }) {
+function JobRow({ job, run }: { job: JobSummary; run: (request: JobAction) => void }) {
   return (
     <li className={styles.job}>
-      <strong>{job.title ?? fileName(job.recording)}</strong>
+      <strong>{job.title ?? label(job.recording)}</strong>
       <span className={styles.meta}>
         {new Date(job.started_at).toLocaleString()} · {job.stage}
       </span>
@@ -68,6 +74,11 @@ function JobRow({ job, run }: { job: JobSummary; run: (request: OpenRequest | Re
         {job.stage === 'failed' && (
           <button type="button" onClick={() => run({ type: 'retry', job_id: job.job_id })}>
             Retry
+          </button>
+        )}
+        {(job.stage === 'done' || job.stage === 'failed') && (
+          <button type="button" onClick={() => run({ type: 'archive', job_id: job.job_id })}>
+            Archive
           </button>
         )}
       </div>

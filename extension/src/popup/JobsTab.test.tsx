@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JobSummary } from '../shared/native';
@@ -15,7 +15,7 @@ import { HOST_MISSING_MESSAGE } from '../shared/nativeClient';
 function job(extra: Partial<JobSummary> = {}): JobSummary {
   return {
     job_id: 'j1',
-    recording: '/rec/meeting-2026-10-19_1430.webm',
+    recording: '/rec/meeting-2026-10-19_1430/recording.webm',
     title: 'Weekly sync',
     stage: 'transcribing',
     error: null,
@@ -82,15 +82,19 @@ describe('JobsTab', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not reach the meeting tool: boom');
   });
 
-  it('lists the title, local date, stage, and the file name when untitled', async () => {
-    sendNative.mockResolvedValue(jobs(job(), job({ job_id: 'j2', title: null })));
+  it('lists the title, local date, stage, and the folder name when untitled', async () => {
+    sendNative.mockResolvedValue(
+      jobs(job(), job({ job_id: 'j2', title: null }), job({ job_id: 'j3', title: null, recording: '/rec/x.webm' })),
+    );
     setup();
 
     const rows = await screen.findAllByRole('listitem');
     expect(rows[0]).toHaveTextContent('Weekly sync');
     expect(rows[0]).toHaveTextContent(new Date('2026-10-19T14:30:00Z').toLocaleString());
     expect(rows[0]).toHaveTextContent('transcribing');
-    expect(rows[1]).toHaveTextContent('meeting-2026-10-19_1430.webm');
+    expect(rows[1]).toHaveTextContent('meeting-2026-10-19_1430');
+    expect(rows[1]).not.toHaveTextContent('recording.webm');
+    expect(rows[2]).toHaveTextContent('x.webm');
   });
 
   it('shows a failed job’s reason and a Retry button, no open buttons', async () => {
@@ -145,6 +149,87 @@ describe('JobsTab', () => {
 
     expect(sendNative).toHaveBeenCalledWith({ type: 'retry', job_id: 'j1' });
     expect(listCalls()).toBe(before + 1);
+  });
+
+  it('shows Archive on done and failed rows only', async () => {
+    const stages = ['queued', 'extracting', 'transcribing', 'summarising', 'writing', 'done', 'failed'] as const;
+    sendNative.mockResolvedValue(jobs(...stages.map((stage) => job({ job_id: stage, stage }))));
+    setup();
+
+    const rows = await screen.findAllByRole('listitem');
+    stages.forEach((stage, i) => {
+      const archive = within(rows[i]).queryByRole('button', { name: 'Archive' });
+      if (stage === 'done' || stage === 'failed') expect(archive).toBeInTheDocument();
+      else expect(archive).not.toBeInTheDocument();
+    });
+  });
+
+  it('orders done buttons with a summary and failed buttons Retry first', async () => {
+    sendNative.mockResolvedValue(
+      jobs(job({ stage: 'done', summary_path: '/s.md' }), job({ job_id: 'j2', stage: 'failed', error: 'x' })),
+    );
+    setup();
+
+    const rows = await screen.findAllByRole('listitem');
+    const names = (row: HTMLElement) =>
+      within(row)
+        .getAllByRole('button')
+        .map((b) => b.textContent);
+    expect(names(rows[0])).toEqual(['Open summary', 'Open folder', 'Archive']);
+    expect(names(rows[1])).toEqual(['Retry', 'Archive']);
+  });
+
+  it('archives and reloads the list at once', async () => {
+    sendNative.mockImplementation(async (r) => (r.type === 'list_jobs' ? jobs(job({ stage: 'done' })) : { ok: true }));
+    const user = setup();
+    await screen.findByRole('button', { name: 'Archive' });
+    const before = listCalls();
+
+    await user.click(screen.getByRole('button', { name: 'Archive' }));
+
+    expect(sendNative).toHaveBeenCalledWith({ type: 'archive', job_id: 'j1' });
+    expect(listCalls()).toBe(before + 1);
+  });
+
+  it('shows an archive error in the status line', async () => {
+    sendNative.mockImplementation(async (r) =>
+      r.type === 'list_jobs'
+        ? jobs(job({ stage: 'done' }))
+        : { ok: false, code: 'already_processing', message: 'already processing' },
+    );
+    const user = setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Archive' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('already processing');
+  });
+
+  it('shows a thrown archive error in the status line', async () => {
+    sendNative.mockImplementation(async (r) => {
+      if (r.type === 'list_jobs') return jobs(job({ stage: 'done' }));
+      throw new Error('boom');
+    });
+    const user = setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Archive' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Could not reach the meeting tool: boom');
+  });
+
+  it('shows the empty state after the last job is archived', async () => {
+    let archived = false;
+    sendNative.mockImplementation(async (r) => {
+      if (r.type === 'archive') {
+        archived = true;
+        return { ok: true };
+      }
+      return jobs(...(archived ? [] : [job({ stage: 'done' })]));
+    });
+    const user = setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Archive' }));
+
+    expect(await screen.findByText('No meetings processed yet')).toBeInTheDocument();
   });
 
   it('shows an open error in the status line', async () => {
