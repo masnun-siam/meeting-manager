@@ -316,7 +316,12 @@ fn trash(host: &Host, config: &Config, job_id: &str) -> anyhow::Result<Value> {
     if let Err(e) = (host.trash)(folder) {
         return Ok(error("trash_failed", format!("{e}")));
     }
-    host.jobs.remove_for(&job.recording)?;
+    if let Err(e) = host.jobs.remove_for(&job.recording) {
+        return Ok(error(
+            "trash_failed",
+            format!("moved to the Trash, but cannot remove its jobs: {e:#}"),
+        ));
+    }
     Ok(json!({"ok": true}))
 }
 

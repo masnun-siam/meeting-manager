@@ -65,7 +65,7 @@ Error reply: `{ok: false, code, message}`.
 | `invalid_path` | `check_recording` failed: not absolute, not `<recordings_dir>/<name>/recording.webm` or `<recordings_dir>/Archive/<name>/recording.webm`, missing, not a file, outside `recordings_dir` (after canonicalising, so symlinks out are refused) |
 | `already_processing` | `lock::is_held` on the recording's lock; no job is written |
 | `archive_failed` | `archive` failed after the check: the message names the step (`move`, `meta.json`, `vault note`, `jobs`) and the path |
-| `trash_failed` | `trash` could not move the folder (command missing or non-zero exit): the message names the reason; nothing moved, jobs stay |
+| `trash_failed` | `trash` could not move the folder (command missing or non-zero exit): the message names the reason; nothing moved, jobs stay; or the folder is in the Trash but its jobs could not be removed (the message says so) |
 | `unknown_job` | Id missing from the store, or not `[A-Za-z0-9-]+` (stops path traversal) |
 | `missing_file` | `open` target no longer exists, or `summary_path` is null |
 | `host_missing` | Client only, not a wire code: Chrome says "Specified native messaging host not found"; `sendNative` returns `HOST_MISSING_MESSAGE` |
