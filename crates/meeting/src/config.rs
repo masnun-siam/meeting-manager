@@ -53,8 +53,12 @@ impl Config {
     }
 }
 
-/// The canonical path of an existing `recording.webm` whose folder sits directly inside
-/// `recordings_dir` or its `Archive/`.
+/// The extensions a meeting recording may have (`recording.<ext>`, lower case).
+pub const RECORDING_EXTENSIONS: [&str; 8] =
+    ["webm", "mp4", "m4a", "mov", "mkv", "mp3", "wav", "ogg"];
+
+/// The canonical path of an existing `recording.<ext>` (ext in `RECORDING_EXTENSIONS`) whose
+/// folder sits directly inside `recordings_dir` or its `Archive/`.
 pub fn check_recording(recordings_dir: &Path, path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err(format!("{} is not an absolute path", path.display()));
@@ -73,16 +77,21 @@ pub fn check_recording(recordings_dir: &Path, path: &Path) -> Result<PathBuf, St
     }
     let archive = root.join("Archive");
     let folder = canonical.parent();
-    let foldered = canonical.file_name().is_some_and(|n| n == "recording.webm")
+    let named = canonical.file_stem().is_some_and(|s| s == "recording")
+        && canonical
+            .extension()
+            .is_some_and(|e| RECORDING_EXTENSIONS.iter().any(|x| e == *x));
+    let foldered = named
         && folder != Some(&archive)
         && folder
             .and_then(Path::parent)
             .is_some_and(|p| p == root || p == archive);
     if !foldered {
         return Err(format!(
-            "{} is not in its own folder; move it to {}/<name>/recording.webm",
+            "{} is not in its own folder; move it to {}/<name>/recording.<ext>, or run meeting import {} --language bn|en",
             path.display(),
-            recordings_dir.display()
+            recordings_dir.display(),
+            path.display()
         ));
     }
     Ok(canonical)
@@ -152,6 +161,7 @@ mod tests {
             "Archive/a/b",
             "Archive",
             "dir/recording.webm",
+            "upper",
         ] {
             fs::create_dir_all(rec.join(sub)).unwrap();
         }
@@ -164,6 +174,19 @@ mod tests {
             "recording.webm",
             "a/b/recording.webm",
             "Archive/a/b/recording.webm",
+        ] {
+            fs::write(rec.join(file), "x").unwrap();
+        }
+        for ext in RECORDING_EXTENSIONS {
+            for sub in ["m", "Archive/m"] {
+                fs::write(rec.join(sub).join(format!("recording.{ext}")), "x").unwrap();
+            }
+        }
+        for file in [
+            "m/recording.txt",
+            "x.m4a",
+            "m/recording.m4a.part",
+            "upper/recording.M4A",
         ] {
             fs::write(rec.join(file), "x").unwrap();
         }
@@ -194,9 +217,19 @@ mod tests {
             dir.join("elsewhere/recording.webm"),
             rec.join("l/recording.webm"),
             rec.join("linked/recording.webm"),
+            rec.join("m/recording.txt"),
+            rec.join("x.m4a"),
+            rec.join("m/recording.m4a.part"),
+            rec.join("upper/recording.M4A"),
         ]
         .map(|p| check(&p));
         let flat = check(&rec.join("x.webm")).unwrap_err();
+        let every_ext: Vec<_> = RECORDING_EXTENSIONS
+            .iter()
+            .flat_map(|e| {
+                ["m", "Archive/m"].map(|sub| check(&rec.join(sub).join(format!("recording.{e}"))))
+            })
+            .collect();
         fs::remove_dir_all(&dir).unwrap();
 
         assert_eq!(accepted.0, Ok(want.0));
@@ -208,6 +241,7 @@ mod tests {
             flat.contains("is not in its own folder; move it to "),
             "{flat}"
         );
-        assert!(flat.ends_with("/rec/<name>/recording.webm"), "{flat}");
+        assert!(flat.contains("meeting import"), "{flat}");
+        assert!(every_ext.iter().all(Result::is_ok), "{every_ext:?}");
     }
 }

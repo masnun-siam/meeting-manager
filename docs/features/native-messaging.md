@@ -62,7 +62,7 @@ Error reply: `{ok: false, code, message}`.
 |---|---|
 | `bad_request` | Bad JSON, unknown type, bad field (e.g. language `fr`), wrong or missing origin, oversized frame |
 | `not_configured` | No or invalid config |
-| `invalid_path` | `check_recording` failed: not absolute, not `<recordings_dir>/<name>/recording.webm` or `<recordings_dir>/Archive/<name>/recording.webm`, missing, not a file, outside `recordings_dir` (after canonicalising, so symlinks out are refused) |
+| `invalid_path` | `check_recording` failed: not absolute, not `<recordings_dir>/<name>/recording.<ext>` or `<recordings_dir>/Archive/<name>/recording.<ext>` (ext one of `RECORDING_EXTENSIONS`: webm, mp4, m4a, mov, mkv, mp3, wav, ogg), missing, not a file, outside `recordings_dir` (after canonicalising, so symlinks out are refused) |
 | `already_processing` | `lock::is_held` on the recording's lock; no job is written |
 | `archive_failed` | `archive` failed after the check: the message names the step (`move`, `meta.json`, `vault note`, `jobs`) and the path |
 | `trash_failed` | `trash` could not move the folder (command missing or non-zero exit): the message names the reason; nothing moved, jobs stay; or the folder is in the Trash but its jobs could not be removed (the message says so) |
