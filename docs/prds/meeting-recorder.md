@@ -350,6 +350,7 @@ None.
 - 2026-10-19: Settled while refining #4–#14. No date/time crate: local dates come from the recording name, other timestamps are UTC. `meta.json` `runs` holds one entry per job. Affects #4, #12 and #20.
 - 2026-10-19: Settled while refining #15–#19. The popup reads recording state from `chrome.storage.session`. First Start without mic permission opens the mic page and records nothing. Each recording is one appended origin-private file. The timing is one shared pure module. #17 and #19 now wait for #16, and #22 waits for #17 and #18. Affects #16, #17, #18, #19, #22, #26 and #28.
 - 2026-10-19: Settled while refining #20–#28. The host's `bad_request` code and `not_configured` rule, the empty recording's job title, detaching by process group, the Jobs tab's polling hook, saving through an offscreen blob URL with suffixes from the download history, and recovery only on startup or install. Affects #20, #21, #22, #23, #24, #25, #26 and #28.
+- 2026-10-19: Recording layout and cleanup moved to [recording-folders.md](recording-folders.md) (approved), which overrides this PRD where they differ: each recording is saved as `Meetings/<name>/recording.webm` with short side-file names (FR-4, FR-15, "Recordings directory"), the tool processes only that layout (FR-14), and the Jobs tab gains Archive and Trash (FR-8). Implemented under that PRD's epic; no closed issue here is reopened.
 
 ## Related
 
