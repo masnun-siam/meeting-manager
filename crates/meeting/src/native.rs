@@ -274,7 +274,7 @@ fn archive(host: &Host, config: &Config, job_id: &str) -> anyhow::Result<Value> 
             ),
         ));
     }
-    let new_recording = target.join("recording.webm");
+    let new_recording = target.join(recording.file_name().expect("recording is a file"));
     let meta_path = target.join("meta.json");
     let repointed = Meta::load(&meta_path).and_then(|meta| {
         meta.map_or(Ok(()), |mut m| {
@@ -866,10 +866,14 @@ mod tests {
 
     /// A folder `rec/<name>/recording.webm` plus a job (and optional vault note) for it.
     fn archivable(host: &Host, dir: &Path, name: &str, job_id: &str) -> PathBuf {
+        archivable_as(host, dir, name, "recording.webm", job_id)
+    }
+
+    fn archivable_as(host: &Host, dir: &Path, name: &str, file: &str, job_id: &str) -> PathBuf {
         let folder = dir.join("rec").join(name);
         fs::create_dir_all(&folder).unwrap();
-        fs::write(folder.join("recording.webm"), "x").unwrap();
-        let recording = fs::canonicalize(folder.join("recording.webm")).unwrap();
+        fs::write(folder.join(file), "x").unwrap();
+        let recording = fs::canonicalize(folder.join(file)).unwrap();
         let mut j = job(job_id, "2026-10-19T14:30:00Z", None);
         j.recording = recording.clone();
         host.jobs.write(&j).unwrap();
@@ -944,6 +948,51 @@ mod tests {
         )));
         assert!(text.ends_with("---\n\nbody\n"));
         assert_eq!(remaining, ["c"]);
+    }
+
+    #[test]
+    fn archive_keeps_the_recording_file_name() {
+        let dir = temp("native-archive-m4a");
+        let host = host(&dir);
+        let old = archivable_as(&host, &dir, "m", "recording.m4a", "a");
+        let meta = Meta {
+            recording: old.clone(),
+            language: Language::En,
+            recorded_at: "2026-10-19T14:30".into(),
+            duration_s: None,
+            title: None,
+            speakers: vec![],
+            runs: vec![],
+        };
+        meta.save(&Meta::path_for(&old)).unwrap();
+        fs::create_dir_all(dir.join("vault")).unwrap();
+        let note = vault::write_note(
+            &dir.join("vault"),
+            "Meetings",
+            &vault::Note {
+                recorded_at: "2026-10-19T14:30",
+                title: "T",
+                language: Language::En,
+                speakers: &[],
+                recording: &old,
+                transcript: &old.with_file_name("transcript.md"),
+                body: "body\n",
+            },
+        )
+        .unwrap();
+        let reply = archive_req(&host, "a");
+        let new = fs::canonicalize(dir.join("rec/Archive/m/recording.m4a")).unwrap();
+        let moved = Meta::load(&new.with_file_name("meta.json"))
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&note).unwrap();
+        let jobs = host.jobs.list(10).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply, json!({"ok": true}));
+        assert_eq!(moved.recording, new);
+        assert!(text.contains("Archive/m/recording.m4a"));
+        assert!(!text.contains("recording.webm"));
+        assert!(jobs.is_empty());
     }
 
     #[test]

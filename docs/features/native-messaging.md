@@ -46,7 +46,7 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 1. Unknown or malformed `job_id` → `unknown_job`. Recording file gone → delete its jobs, reply `{ok: true}`.
 2. `check_recording` → `invalid_path`; folder already under `Archive/` → `invalid_path` ("already archived"); held lock → `already_processing`.
 3. Rename the folder to `<recordings_dir>/Archive/<name>[-2, -3, ...]` (first free name).
-4. Set `meta.json`'s `recording` (skipped if absent), then `vault::repoint_note` rewrites the note's `recording:` and `transcript:` lines (skipped if no note), then `JobStore::remove_for` deletes every job for the recording.
+4. Set `meta.json`'s `recording` (skipped if absent) to the moved file under its real name (`recording.m4a` stays `recording.m4a`), then `vault::repoint_note` rewrites the note's `recording:` and `transcript:` lines (skipped if no note), then `JobStore::remove_for` deletes every job for the recording.
 
 A failure after step 3 replies `archive_failed`; the folder stays in `Archive/` and the jobs stay.
 
