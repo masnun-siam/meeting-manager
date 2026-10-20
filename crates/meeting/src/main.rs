@@ -2,6 +2,7 @@ mod config;
 mod deepgram;
 mod doctor;
 mod extract;
+mod import;
 mod install;
 mod jobs;
 mod lock;

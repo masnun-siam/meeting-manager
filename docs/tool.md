@@ -1,6 +1,6 @@
 # Rust crate: `meeting`
 
-Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
+Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
 
 One binary crate (`meeting`, edition 2024, no lib). Dependencies: `clap`, `serde`, `serde_json`, `toml`, `anyhow`, `tracing`, `tracing-subscriber`, `ureq` (HTTP), `keyring` (Keychain). External programs: `ffmpeg`, `claude`, `osascript`. See [architecture.md](architecture.md) for how the crate fits with the extension.
 
@@ -30,6 +30,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `meta.rs` | `meta.json`: language, speakers, run history; `recorded_at` from folder name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
 | `lock.rs` | Per-recording PID lock file | `Lock::acquire`, `Lock::path_for`, `is_held` |
 | `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
+| `import.rs` | `meeting import`: validate, name and copy a source into a new meeting folder | `import` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
 | `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `Transcript`, `Utterance` |
 | `summarise.rs` | Run headless `claude`, validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
