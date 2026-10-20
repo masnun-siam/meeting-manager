@@ -22,15 +22,15 @@ Setup of these keys and paths: [setup.md](setup.md).
 sequenceDiagram
     participant M as main.rs
     participant P as Pipeline::run
-    participant FS as files next to recording
+    participant FS as files in the recording folder
     participant X as ffmpeg
     participant D as Deepgram
     participant C as claude
     participant V as Vault
     M->>P: recording, retranscribe, language, job_id
     P->>FS: write job (queued)
-    P->>FS: Lock::acquire(.lock)
-    P->>FS: load .meta.json, plan::plan(mtimes)
+    P->>FS: Lock::acquire(lock)
+    P->>FS: load meta.json, plan::plan(mtimes)
     P->>FS: save meta + job
     opt plan.extract
         P->>X: webm to .audio.ogg
@@ -55,16 +55,16 @@ sequenceDiagram
 
 ## Files
 
-All sit next to the recording (`Paths::new` in `pipeline.rs`). `<name>` is the recording stem, e.g. `meeting-2026-10-19_1430`.
+All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `meeting-2026-10-19_1430`.
 
 | File | Written by | Lifetime |
 |---|---|---|
-| `<name>.lock` | `Lock::acquire` | Holds the PID; removed on drop. A lock from a dead PID is taken over. |
-| `<name>.meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`). |
-| `<name>.audio.ogg` | `extract::extract` (via `.part`, renamed on success) | Mono, 16 kHz, Opus 32 kbps. Deleted on success. |
-| `<name>.deepgram.json` | `write_atomic` | Raw Deepgram response. Deleted on success. |
-| `<name>.transcript.md` | `transcript::render` | Kept. Lines `[hh:mm:ss] Speaker N: text`, header with language and speaker count. |
-| `<name>.summary.md` | `summary_md::render` | Kept. Same body as the vault note. |
+| `lock` | `Lock::acquire` | Holds the PID; removed on drop. A lock from a dead PID is taken over. |
+| `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`). |
+| `audio.ogg` | `extract::extract` (via `.part`, renamed on success) | Mono, 16 kHz, Opus 32 kbps. Deleted on success. |
+| `deepgram.json` | `write_atomic` | Raw Deepgram response. Deleted on success. |
+| `transcript.md` | `transcript::render` | Kept. Lines `[hh:mm:ss] Speaker N: text`, header with language and speaker count. |
+| `summary.md` | `summary_md::render` | Kept. Same body as the vault note. |
 | `<vault_dir>/<vault_folder>/YYYY-MM-DD HHMM <title>.md` | `vault::write_note` | Kept. Frontmatter: `date`, `language`, `speakers`, `recording`, `transcript`. |
 | `~/Library/Application Support/meeting-manager/jobs/<job_id>.json` | `JobStore::write` | Kept. One per run; the extension reads these. |
 

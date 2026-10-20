@@ -7,7 +7,7 @@ use anyhow::{Context, bail};
 
 const BUSY: &str = "already processing";
 
-/// `<name>.lock` next to a recording, holding the PID of the job that runs it.
+/// `lock` in a recording's folder, holding the PID of the job that runs it.
 /// Removed on drop; one left by a crashed process is taken over.
 #[derive(Debug)]
 pub struct Lock {
@@ -16,7 +16,7 @@ pub struct Lock {
 
 impl Lock {
     pub fn path_for(recording: &Path) -> PathBuf {
-        recording.with_extension("lock")
+        recording.with_file_name("lock")
     }
 
     pub fn acquire(path: &Path) -> anyhow::Result<Lock> {
@@ -156,10 +156,10 @@ mod tests {
     }
 
     #[test]
-    fn path_sits_next_to_the_recording() {
+    fn path_sits_in_the_recording_folder() {
         assert_eq!(
-            Lock::path_for(Path::new("/r/a.webm")),
-            PathBuf::from("/r/a.lock")
+            Lock::path_for(Path::new("/r/a/recording.webm")),
+            PathBuf::from("/r/a/lock")
         );
     }
 }

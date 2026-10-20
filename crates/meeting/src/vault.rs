@@ -136,7 +136,7 @@ fn sanitise(title: &str) -> String {
 mod tests {
     use super::*;
 
-    const REC: &str = "/Users/a/Downloads/Meetings/meeting-2026-10-19_1430.webm";
+    const REC: &str = "/Users/a/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm";
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("meeting-test-{}-{name}", std::process::id()));
@@ -153,7 +153,7 @@ mod tests {
             speakers,
             recording: rec,
             transcript: Path::new(
-                "/Users/a/Downloads/Meetings/meeting-2026-10-19_1430.transcript.md",
+                "/Users/a/Downloads/Meetings/meeting-2026-10-19_1430/transcript.md",
             ),
             body,
         }
@@ -184,7 +184,7 @@ mod tests {
         .unwrap();
         assert_eq!(path, vault.join("Meetings/2026-10-19 1430 Weekly sync.md"));
         let expected = format!(
-            "---\ndate: 2026-10-19\nlanguage: bn\nspeakers: [\"Rahim (inferred)\", \"Speaker 1\"]\nrecording: \"{REC}\"\ntranscript: \"/Users/a/Downloads/Meetings/meeting-2026-10-19_1430.transcript.md\"\n---\n\n<body>"
+            "---\ndate: 2026-10-19\nlanguage: bn\nspeakers: [\"Rahim (inferred)\", \"Speaker 1\"]\nrecording: \"{REC}\"\ntranscript: \"/Users/a/Downloads/Meetings/meeting-2026-10-19_1430/transcript.md\"\n---\n\n<body>"
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), expected);
         assert_eq!(
