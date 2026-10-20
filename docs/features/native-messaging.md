@@ -89,9 +89,9 @@ sequenceDiagram
 | `useJobs` | Sends `list_jobs` with `limit: 10` on mount and every 3 s (`POLL_MS`); clears the timer on unmount |
 | Ordering | Each fetch gets an increasing id; a reply older than one already applied is dropped |
 | View states | `loading`, `ready` (jobs), `error` (reply message, or "Could not reach the meeting tool: ...") |
-| Row | Title (or file name), local start time, stage, error text when `failed` |
-| Buttons | `done` with `summary_path`: Open summary; `done`: Open folder; `failed`: Retry |
-| Actions | `JobsTab.run` sends `open` or `retry`; a failed reply shows its `message` in a status line; a successful `retry` calls `refresh()` |
+| Row | Title (or folder name; file name for a non-`recording.webm`), local start time, stage, error text when `failed` |
+| Buttons | `done` with `summary_path`: Open summary; `done`: Open folder; `failed`: Retry; `done` and `failed`: Archive |
+| Actions | `JobsTab.run` sends `open`, `retry` or `archive`; a failed reply shows its `message` in a status line; a successful `retry` or `archive` calls `refresh()` |
 
 The popup does not call `health`; no extension code sends it.
 

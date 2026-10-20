@@ -44,11 +44,28 @@ export interface OpenRequest {
   what: 'summary' | 'folder';
 }
 
+export interface ArchiveRequest {
+  type: 'archive';
+  job_id: string;
+}
+
+export interface TrashRequest {
+  type: 'trash';
+  job_id: string;
+}
+
 export interface HealthRequest {
   type: 'health';
 }
 
-export type NativeRequest = ProcessRequest | RetryRequest | ListJobsRequest | OpenRequest | HealthRequest;
+export type NativeRequest =
+  | ProcessRequest
+  | RetryRequest
+  | ListJobsRequest
+  | OpenRequest
+  | ArchiveRequest
+  | TrashRequest
+  | HealthRequest;
 
 export type NativeErrorCode =
   | 'not_configured'
@@ -56,6 +73,8 @@ export type NativeErrorCode =
   | 'already_processing'
   | 'unknown_job'
   | 'missing_file'
+  | 'archive_failed'
+  | 'trash_failed'
   | 'bad_request';
 
 export interface NativeError {
@@ -101,6 +120,8 @@ interface NativeSuccessByType {
   retry: RetrySuccess;
   list_jobs: ListJobsSuccess;
   open: OpenSuccess;
+  archive: OpenSuccess;
+  trash: OpenSuccess;
   health: HealthSuccess;
 }
 
