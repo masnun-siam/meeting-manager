@@ -2,7 +2,7 @@
 
 Covers: extension/src/popup/RecordTab.tsx, extension/src/popup/useRecorderStatus.ts, extension/src/popup/Popup.tsx, extension/src/popup/main.tsx, extension/src/popup/index.html, extension/src/background/, extension/src/offscreen/, extension/src/permission/, extension/src/shared/messages.ts, extension/src/shared/recordingState.ts, extension/src/shared/recordingFile.ts, extension/src/shared/micPermission.ts
 
-The user presses Start in the popup. The extension records the active tab and the mic, saves a `.webm` to `Downloads/Meetings/`, and asks the `meeting` tool to process it. Component overview: [extension.md](../extension.md). What happens after the hand-off: [processing.md](processing.md). Native call details: [native-messaging.md](native-messaging.md).
+The user presses Start in the popup. The extension records the active tab and the mic, saves a `recording.webm` to `Downloads/Meetings/<name>/`, and asks the `meeting` tool to process it. Component overview: [extension.md](../extension.md). What happens after the hand-off: [processing.md](processing.md). Native call details: [native-messaging.md](native-messaging.md).
 
 ## Who does what
 
@@ -44,7 +44,7 @@ sequenceDiagram
   O-->>SW: offscreen_stopped {startedAt, reason}
   SW->>O: offscreen_file_url
   O-->>SW: blob URL
-  SW->>D: download Meetings/name.webm
+  SW->>D: download Meetings/name/recording.webm
   D-->>SW: complete, absolute path
   SW->>FS: deleteRecordingFile
   SW->>T: sendNative process {path, language} (only if >= 10 s)
@@ -57,7 +57,7 @@ Rules:
 - Start only works from `idle`. It records the active tab of the last focused window.
 - Stop before `offscreen_started` is deferred: status becomes `saving`, and `offscreenStarted` sends `offscreen_stop` once the recorder is up.
 - Recordings under `MIN_PROCESS_MS` (10 s) are saved but not sent to the tool (`Notice` `too_short`). Recovered recordings are always sent.
-- File name: `recordingName(startedAt)` gives `meeting-YYYY-MM-DD_HHmm`. `nextFreeName` adds `-2`, `-3` for names Chrome's download history already has (`takenNames`). Files Chrome did not download are invisible to this check, so `conflictAction: 'uniquify'` may produce `name (1).webm`.
+- Folder name: `recordingName(startedAt)` gives `meeting-YYYY-MM-DD_HHmm`; the recording is saved as `Meetings/<name>/recording.webm`. `nextFreeName` adds `-2`, `-3` for folder names Chrome's download history already has (`takenNames`). Folders Chrome did not create are invisible to this check, so `conflictAction: 'uniquify'` may produce `recording (1).webm` in the existing folder.
 - The temp file is deleted only after the download completes. A failed delete is ignored.
 - A save error keeps the temp file. It is retried by recovery at the next browser start.
 - If the status already holds an `error` notice, the save result does not overwrite it.

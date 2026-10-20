@@ -18,7 +18,7 @@ flowchart LR
     SW <--> O[Offscreen recorder]
   end
   O -- chunks --> OPFS[(OPFS temp file)]
-  SW -- chrome.downloads --> DL[(~/Downloads/Meetings/*.webm)]
+  SW -- chrome.downloads --> DL[(~/Downloads/Meetings/#lt;name#gt;/recording.webm)]
   SW -- native messaging --> H[meeting native-host]
   H -- spawns detached --> PR[meeting process]
   H <--> J[(jobs/*.json)]
