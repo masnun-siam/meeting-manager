@@ -46,7 +46,7 @@ The vault gets `<vault>/<folder>/YYYY-MM-DD HHMM <title>.md` (folder defaults to
 Rerun from the terminal:
 
 ```sh
-meeting process ~/Downloads/Meetings/meeting-2026-10-19_1430.webm   # reuse the transcript, redo the summary
+meeting process ~/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm   # reuse the transcript, redo the summary
 meeting process <file> --retranscribe                              # pay Deepgram again
 meeting process <file> --language en                               # wrong language picked
 ```
@@ -67,7 +67,7 @@ Full reference: [docs/features/setup.md](docs/features/setup.md).
 - **Anything fails:** run `meeting doctor`; each `✗` line names its fix. Then read the log above.
 - **Popup says the tool is not installed:** run `meeting install`. The recording is already saved; process it with `meeting process <file>`.
 - **"already processing":** a job for that recording is still running. A lock left by a crashed run clears itself.
-- **Recordings saved somewhere else:** the host only accepts `.webm` files under `recordings_dir`; change it in the config file.
+- **Recordings saved somewhere else:** the host only accepts `<name>/recording.webm` under `recordings_dir`; change it in the config file.
 
 ## Privacy
 

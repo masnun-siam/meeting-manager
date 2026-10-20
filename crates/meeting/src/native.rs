@@ -1,5 +1,4 @@
 use std::fmt::Display;
-use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -10,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::Language;
-use crate::config::Config;
+use crate::config::{Config, check_recording};
 use crate::doctor;
 use crate::jobs::{Job, JobStore, Stage, new_job_id, now_utc};
 use crate::lock::{self, Lock};
@@ -255,34 +254,11 @@ fn spawn_process(exe: &Path, job: &Job, language: Option<Language>) -> io::Resul
         .map(drop)
 }
 
-/// The canonical path of an existing `.webm` file inside `recordings_dir`.
-pub fn check_recording(recordings_dir: &Path, path: &Path) -> Result<PathBuf, String> {
-    if !path.is_absolute() {
-        return Err(format!("{} is not an absolute path", path.display()));
-    }
-    if path.extension().is_none_or(|e| e != "webm") {
-        return Err(format!("{} is not a .webm file", path.display()));
-    }
-    let canonical = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if !canonical.is_file() {
-        return Err(format!("{} is not a file", path.display()));
-    }
-    let root = fs::canonicalize(recordings_dir)
-        .map_err(|e| format!("{}: {e}", recordings_dir.display()))?;
-    if !canonical.starts_with(&root) {
-        return Err(format!(
-            "{} is outside the recordings folder",
-            path.display()
-        ));
-    }
-    Ok(canonical)
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::fs;
     use std::io::Cursor;
-    use std::os::unix::fs::symlink;
 
     use super::*;
     use crate::jobs::{Job, Stage};
@@ -586,38 +562,11 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn check_recording_accepts_only_webm_files_inside_the_dir() {
-        let dir = temp("native-check");
-        let rec = dir.join("rec");
-        fs::create_dir_all(rec.join("x.webm")).unwrap();
-        fs::write(rec.join("ok.webm"), "x").unwrap();
-        fs::write(rec.join("a.mp4"), "x").unwrap();
-        fs::write(dir.join("outside.webm"), "x").unwrap();
-        symlink(dir.join("outside.webm"), rec.join("link.webm")).unwrap();
-        let canonical_ok = fs::canonicalize(rec.join("ok.webm")).unwrap();
-        let ok = check_recording(&rec, &rec.join("ok.webm"));
-        let rejected = [
-            rec.join("a.mp4"),
-            rec.join("missing.webm"),
-            rec.join("x.webm"),
-            rec.join("../outside.webm"),
-            rec.join("link.webm"),
-            PathBuf::from("rec/ok.webm"),
-        ]
-        .map(|p| check_recording(&rec, &p));
-        fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(ok, Ok(canonical_ok));
-        for r in rejected {
-            assert!(r.is_err(), "{r:?}");
-        }
-    }
-
     fn webm(dir: &Path) -> PathBuf {
         let rec = dir.join("rec");
-        fs::create_dir_all(&rec).unwrap();
-        fs::write(rec.join("m.webm"), "x").unwrap();
-        fs::canonicalize(rec.join("m.webm")).unwrap()
+        fs::create_dir_all(rec.join("m")).unwrap();
+        fs::write(rec.join("m/recording.webm"), "x").unwrap();
+        fs::canonicalize(rec.join("m/recording.webm")).unwrap()
     }
 
     #[test]
@@ -641,11 +590,13 @@ mod tests {
         let host = host(&dir);
         webm(&dir);
         fs::write(dir.join("rec/a.mp4"), "x").unwrap();
+        fs::write(dir.join("rec/x.webm"), "x").unwrap();
         fs::write(dir.join("outside.webm"), "x").unwrap();
         let codes: Vec<_> = [
             dir.join("outside.webm"),
             dir.join("rec/a.mp4"),
-            dir.join("rec/missing.webm"),
+            dir.join("rec/x.webm"),
+            dir.join("rec/m/missing.webm"),
         ]
         .iter()
         .map(|p| {
@@ -658,11 +609,11 @@ mod tests {
         .collect();
         let language = one(
             &host,
-            json!({"type": "process", "path": dir.join("rec/m.webm"), "language": "fr"}),
+            json!({"type": "process", "path": dir.join("rec/m/recording.webm"), "language": "fr"}),
         );
         let wrote_jobs = host.jobs.dir.exists();
         fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(codes, ["invalid_path"; 3]);
+        assert_eq!(codes, ["invalid_path"; 4]);
         assert_eq!(language["code"], "bad_request");
         assert!(!wrote_jobs);
     }

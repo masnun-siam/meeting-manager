@@ -108,7 +108,9 @@ fn process_and_retry_outlive_the_host() {
     let ffmpeg = home.join("ffmpeg");
     fs::write(&ffmpeg, "#!/bin/sh\nsleep 2\nexit 1\n").unwrap();
     fs::set_permissions(&ffmpeg, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let recording = rec_dir.join("meeting-2026-10-19_1430.webm");
+    let folder = rec_dir.join("meeting-2026-10-19_1430");
+    fs::create_dir_all(&folder).unwrap();
+    let recording = folder.join("recording.webm");
     fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/short.webm"),
         &recording,

@@ -53,8 +53,45 @@ impl Config {
     }
 }
 
+/// The canonical path of an existing `recording.webm` whose folder sits directly inside
+/// `recordings_dir` or its `Archive/`.
+pub fn check_recording(recordings_dir: &Path, path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!("{} is not an absolute path", path.display()));
+    }
+    let canonical = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !canonical.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+    let root = fs::canonicalize(recordings_dir)
+        .map_err(|e| format!("{}: {e}", recordings_dir.display()))?;
+    if !canonical.starts_with(&root) {
+        return Err(format!(
+            "{} is outside the recordings folder",
+            path.display()
+        ));
+    }
+    let archive = root.join("Archive");
+    let folder = canonical.parent();
+    let foldered = canonical.file_name().is_some_and(|n| n == "recording.webm")
+        && folder != Some(&archive)
+        && folder
+            .and_then(Path::parent)
+            .is_some_and(|p| p == root || p == archive);
+    if !foldered {
+        return Err(format!(
+            "{} is not in its own folder; move it to {}/<name>/recording.webm",
+            path.display(),
+            recordings_dir.display()
+        ));
+    }
+    Ok(canonical)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::symlink;
+
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
@@ -101,5 +138,76 @@ mod tests {
     fn missing_file_points_to_install() {
         let err = Config::load_from(&temp("missing.toml")).unwrap_err();
         assert!(err.to_string().contains("meeting install"));
+    }
+
+    #[test]
+    fn check_recording_accepts_only_foldered_recordings() {
+        let dir = temp("config-check");
+        let _ = fs::remove_dir_all(&dir);
+        let rec = dir.join("rec");
+        for sub in [
+            "m",
+            "Archive/m",
+            "a/b",
+            "Archive/a/b",
+            "Archive",
+            "dir/recording.webm",
+        ] {
+            fs::create_dir_all(rec.join(sub)).unwrap();
+        }
+        for file in [
+            "m/recording.webm",
+            "Archive/m/recording.webm",
+            "x.webm",
+            "m/other.webm",
+            "Archive/recording.webm",
+            "recording.webm",
+            "a/b/recording.webm",
+            "Archive/a/b/recording.webm",
+        ] {
+            fs::write(rec.join(file), "x").unwrap();
+        }
+        fs::write(dir.join("outside.webm"), "x").unwrap();
+        fs::create_dir_all(dir.join("elsewhere")).unwrap();
+        fs::write(dir.join("elsewhere/recording.webm"), "x").unwrap();
+        fs::create_dir_all(rec.join("l")).unwrap();
+        symlink(dir.join("outside.webm"), rec.join("l/recording.webm")).unwrap();
+        symlink(dir.join("elsewhere"), rec.join("linked")).unwrap();
+
+        let canon = |p: &str| fs::canonicalize(rec.join(p)).unwrap();
+        let want = (canon("m/recording.webm"), canon("Archive/m/recording.webm"));
+        let check = |p: &Path| check_recording(&rec, p);
+        let accepted = (
+            check(&rec.join("m/recording.webm")),
+            check(&rec.join("Archive/m/recording.webm")),
+        );
+        let refused = [
+            rec.join("x.webm"),
+            rec.join("m/other.webm"),
+            rec.join("Archive/recording.webm"),
+            rec.join("recording.webm"),
+            rec.join("a/b/recording.webm"),
+            rec.join("Archive/a/b/recording.webm"),
+            rec.join("m/missing.webm"),
+            rec.join("dir/recording.webm"),
+            PathBuf::from("rec/m/recording.webm"),
+            dir.join("elsewhere/recording.webm"),
+            rec.join("l/recording.webm"),
+            rec.join("linked/recording.webm"),
+        ]
+        .map(|p| check(&p));
+        let flat = check(&rec.join("x.webm")).unwrap_err();
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(accepted.0, Ok(want.0));
+        assert_eq!(accepted.1, Ok(want.1));
+        for r in refused {
+            assert!(r.is_err(), "{r:?}");
+        }
+        assert!(
+            flat.contains("is not in its own folder; move it to "),
+            "{flat}"
+        );
+        assert!(flat.ends_with("/rec/<name>/recording.webm"), "{flat}");
     }
 }
