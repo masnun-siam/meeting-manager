@@ -36,7 +36,7 @@ Outputs, in the meeting's folder `~/Downloads/Meetings/<name>/`:
 
 | File | Content |
 |---|---|
-| `recording.webm` | The recording (tab video and audio plus mic) |
+| `recording.<ext>` | The recording. Browser recordings are `.webm` (tab video and audio plus mic); imports keep their own extension |
 | `transcript.md` | `[hh:mm:ss] Speaker N: text` lines |
 | `summary.md` | Summary, key points, decisions, action items, insights, speakers |
 | `meta.json` | Language, timestamps, job history |
@@ -49,6 +49,7 @@ Rerun from the terminal:
 meeting process ~/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm   # reuse the transcript, redo the summary
 meeting process <file> --retranscribe                              # pay Deepgram again
 meeting process <file> --language en                               # wrong language picked
+meeting import ~/Desktop/call.m4a --language en                    # recording made outside Chrome
 ```
 
 ## Configuration
