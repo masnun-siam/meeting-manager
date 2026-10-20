@@ -37,7 +37,7 @@ sequenceDiagram
     end
     opt plan.transcribe
         P->>D: POST audio (retries)
-        P->>FS: .deepgram.json
+        P->>FS: deepgram.json
     end
     opt plan.render
         P->>FS: transcript.md
@@ -49,7 +49,7 @@ sequenceDiagram
     else no speech
         Note over P: title "No speech detected", no Claude, no note
     end
-    P->>FS: delete .audio.ogg and .deepgram.json, job done
+    P->>FS: delete audio.ogg and deepgram.json, job done
     M->>M: notify::notify
 ```
 
