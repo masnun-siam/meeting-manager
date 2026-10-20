@@ -175,8 +175,8 @@ describe('JobsTab', () => {
       within(row)
         .getAllByRole('button')
         .map((b) => b.textContent);
-    expect(names(rows[0])).toEqual(['Open summary', 'Open folder', 'Archive']);
-    expect(names(rows[1])).toEqual(['Retry', 'Archive']);
+    expect(names(rows[0])).toEqual(['Open summary', 'Open folder', 'Archive', 'Trash']);
+    expect(names(rows[1])).toEqual(['Retry', 'Archive', 'Trash']);
   });
 
   it('archives and reloads the list at once', async () => {
@@ -230,6 +230,89 @@ describe('JobsTab', () => {
     await user.click(await screen.findByRole('button', { name: 'Archive' }));
 
     expect(await screen.findByText('No meetings processed yet')).toBeInTheDocument();
+  });
+
+  it('shows Trash on done and failed rows only', async () => {
+    const stages = ['queued', 'extracting', 'transcribing', 'summarising', 'writing', 'done', 'failed'] as const;
+    sendNative.mockResolvedValue(jobs(...stages.map((stage) => job({ job_id: stage, stage }))));
+    setup();
+
+    const rows = await screen.findAllByRole('listitem');
+    stages.forEach((stage, i) => {
+      const trash = within(rows[i]).queryByRole('button', { name: 'Trash' });
+      if (stage === 'done' || stage === 'failed') expect(trash).toBeInTheDocument();
+      else expect(trash).not.toBeInTheDocument();
+    });
+  });
+
+  const trashCalls = () => sendNative.mock.calls.filter(([r]) => r.type === 'trash').length;
+  const doneThenOk = (...list: JobSummary[]) =>
+    sendNative.mockImplementation(async (r) => (r.type === 'list_jobs' ? jobs(...list) : { ok: true }));
+
+  it('asks for a second click before trashing', async () => {
+    doneThenOk(job({ stage: 'done' }));
+    const user = setup();
+    await user.click(await screen.findByRole('button', { name: 'Trash' }));
+
+    expect(screen.getByRole('button', { name: 'Confirm trash' })).toBeInTheDocument();
+    expect(trashCalls()).toBe(0);
+    const before = listCalls();
+
+    await user.click(screen.getByRole('button', { name: 'Confirm trash' }));
+
+    expect(sendNative).toHaveBeenCalledWith({ type: 'trash', job_id: 'j1' });
+    expect(trashCalls()).toBe(1);
+    expect(listCalls()).toBe(before + 1);
+    expect(screen.getByRole('button', { name: 'Trash' })).toBeInTheDocument();
+  });
+
+  it('reverts to Trash after 3 s', async () => {
+    doneThenOk(job({ stage: 'done' }));
+    const user = setup();
+    await user.click(await screen.findByRole('button', { name: 'Trash' }));
+
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+
+    expect(screen.getByRole('button', { name: 'Trash' })).toBeInTheDocument();
+    expect(trashCalls()).toBe(0);
+    await user.click(screen.getByRole('button', { name: 'Trash' }));
+    expect(screen.getByRole('button', { name: 'Confirm trash' })).toBeInTheDocument();
+    expect(trashCalls()).toBe(0);
+  });
+
+  it('arms only the clicked row', async () => {
+    doneThenOk(job({ stage: 'done' }), job({ job_id: 'j2', stage: 'failed', error: 'x' }));
+    const user = setup();
+    const rows = await screen.findAllByRole('listitem');
+
+    await user.click(within(rows[1]).getByRole('button', { name: 'Trash' }));
+
+    expect(within(rows[1]).getByRole('button', { name: 'Confirm trash' })).toBeInTheDocument();
+    expect(within(rows[0]).getByRole('button', { name: 'Trash' })).toBeInTheDocument();
+  });
+
+  it('shows a trash error in the status line', async () => {
+    sendNative.mockImplementation(async (r) =>
+      r.type === 'list_jobs'
+        ? jobs(job({ stage: 'done' }))
+        : { ok: false, code: 'trash_failed', message: 'could not trash' },
+    );
+    const user = setup();
+    await user.click(await screen.findByRole('button', { name: 'Trash' }));
+
+    await user.click(screen.getByRole('button', { name: 'Confirm trash' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('could not trash');
+  });
+
+  it('clears the confirm timer on unmount', async () => {
+    doneThenOk(job({ stage: 'done' }));
+    const user = setup();
+    await user.click(await screen.findByRole('button', { name: 'Trash' }));
+
+    cleanup();
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('shows an open error in the status line', async () => {

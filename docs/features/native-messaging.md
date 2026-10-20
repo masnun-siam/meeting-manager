@@ -90,8 +90,8 @@ sequenceDiagram
 | Ordering | Each fetch gets an increasing id; a reply older than one already applied is dropped |
 | View states | `loading`, `ready` (jobs), `error` (reply message, or "Could not reach the meeting tool: ...") |
 | Row | Title (or folder name; file name for a non-`recording.webm`), local start time, stage, error text when `failed` |
-| Buttons | `done` with `summary_path`: Open summary; `done`: Open folder; `failed`: Retry; `done` and `failed`: Archive |
-| Actions | `JobsTab.run` sends `open`, `retry` or `archive`; a failed reply shows its `message` in a status line; a successful `retry` or `archive` calls `refresh()` |
+| Buttons | `done` with `summary_path`: Open summary; `done`: Open folder; `failed`: Retry; `done` and `failed`: Archive and Trash (two-step: the first click reads "Confirm trash" for 3 s, a second click in that time sends `trash`) |
+| Actions | `JobsTab.run` sends `open`, `retry`, `archive` or `trash`; a failed reply shows its `message` in a status line; a successful `retry`, `archive` or `trash` calls `refresh()` |
 
 The popup does not call `health`; no extension code sends it.
 
