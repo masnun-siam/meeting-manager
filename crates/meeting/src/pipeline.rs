@@ -353,6 +353,8 @@ mod tests {
     use std::sync::mpsc::Receiver;
 
     const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/short.webm");
+    // ffmpeg -i crates/meeting/tests/fixtures/short.webm -vn -c:a aac crates/meeting/tests/fixtures/short.m4a
+    const M4A: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/short.m4a");
     const EN: &str = include_str!("../tests/fixtures/deepgram/en_two_speakers.json");
     const EMPTY: &str = include_str!("../tests/fixtures/deepgram/empty.json");
     const NAME: &str = "meeting-2026-10-19_1430";
@@ -471,6 +473,47 @@ mod tests {
             Ending::Failed { stage, error } => (stage, format!("{error:#}")),
             Ending::Done { title } => panic!("expected a failure, got done: {title}"),
         }
+    }
+
+    #[test]
+    fn an_imported_m4a_runs_to_done() {
+        let env = setup("pipe-import", vec![(200, EN)]);
+        let source = env.rec.parent().unwrap().join("call.m4a");
+        fs::copy(M4A, &source).unwrap();
+        let path = crate::import::import(
+            &env.rec,
+            &source,
+            Some("2026-10-18 09:30"),
+            crate::import::local_minute,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let ending = env
+            .pipeline
+            .run(&path, false, Some(Language::En), None, &mut out);
+        assert_eq!(done(ending), "Standup");
+
+        let folder = env.rec.join("meeting-2026-10-18_0930");
+        assert_eq!(path, folder.join("recording.m4a"));
+        let mut names: Vec<String> = fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            ["meta.json", "recording.m4a", "summary.md", "transcript.md"]
+        );
+        assert_eq!(env.job().stage, Stage::Done);
+        assert_eq!(
+            Meta::load(&folder.join("meta.json"))
+                .unwrap()
+                .unwrap()
+                .recorded_at,
+            "2026-10-18T09:30"
+        );
+        assert_eq!(env.notes(), 1);
+        assert_eq!(fs::read(&source).unwrap(), fs::read(M4A).unwrap());
     }
 
     #[test]

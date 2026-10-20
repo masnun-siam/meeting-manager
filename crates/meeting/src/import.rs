@@ -17,8 +17,6 @@ const DATE: &str = "/bin/date";
 /// Copies `source` to `<recordings_dir>/meeting-<stamp>[-n]/recording.<ext>` and returns that
 /// path. `date` is a local `YYYY-MM-DD HH:MM`; without it the source's modified time names the
 /// folder. `local_minute(unix_secs)` returns `YYYY-MM-DD_HHMM` in local time.
-// ponytail: unused until #85 adds the `meeting import` subcommand.
-#[allow(dead_code)]
 pub fn import(
     recordings_dir: &Path,
     source: &Path,
@@ -135,7 +133,6 @@ fn parse_date(date: &str) -> anyhow::Result<String> {
 }
 
 /// The real `local_minute`: macOS `/bin/date`, which knows the local time zone.
-#[allow(dead_code)]
 pub fn local_minute(secs: u64) -> anyhow::Result<String> {
     let out = Command::new(DATE)
         .args(["-r", &secs.to_string(), "+%Y-%m-%d_%H%M"])

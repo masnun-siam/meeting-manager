@@ -22,7 +22,7 @@ mod vault;
 
 use std::ffi::OsString;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -55,6 +55,15 @@ enum Command {
         language: Option<Language>,
         #[arg(long, hide = true)]
         job_id: Option<String>,
+    },
+    /// Copy a recording made elsewhere into its own meeting folder and process it.
+    Import {
+        file: PathBuf,
+        #[arg(long, value_enum)]
+        language: Language,
+        /// Meeting time, `YYYY-MM-DD HH:MM`; defaults to the file's modified time.
+        #[arg(long)]
+        date: Option<String>,
     },
     /// Register the native host and write the config.
     Install,
@@ -148,36 +157,30 @@ fn run(command: Command) -> anyhow::Result<()> {
     } = &command
     {
         tracing::info!("meeting process");
-        let pipeline = Pipeline {
-            config: Config::load()?,
-            deepgram: Deepgram::default(),
-            jobs: JobStore {
-                dir: JobStore::default_dir()?,
-            },
-            key: secret::deepgram_key,
-            claude_timeout: Duration::from_secs(15 * 60),
-        };
-        let ending = pipeline.run(
+        return process(
+            Config::load()?,
             recording,
             *retranscribe,
             *language,
             job_id.clone(),
-            &mut io::stdout(),
         );
-        return match ending {
-            Ending::Done { title } => {
-                notify::notify(&notify::message(&Outcome::Done { title: &title }));
-                Ok(())
-            }
-            Ending::Failed { stage, error } => {
-                let reason = format!("{error:#}");
-                notify::notify(&notify::message(&Outcome::Failed {
-                    stage: stage.name(),
-                    reason: &reason,
-                }));
-                Err(error)
-            }
-        };
+    }
+    if let Command::Import {
+        file,
+        language,
+        date,
+    } = &command
+    {
+        tracing::info!("meeting import");
+        let config = Config::load()?;
+        let path = import::import(
+            &config.recordings_dir,
+            file,
+            date.as_deref(),
+            import::local_minute,
+        )?;
+        println!("imported → {}", path.display());
+        return process(config, &path, false, Some(*language), None);
     }
     if let Command::Install = command {
         tracing::info!("meeting install");
@@ -219,6 +222,7 @@ fn run(command: Command) -> anyhow::Result<()> {
     }
     let name = match command {
         Command::Process { .. } => "process",
+        Command::Import { .. } => "import",
         Command::Install => "install",
         Command::Config {
             command: ConfigCommand::SetKey,
@@ -228,6 +232,39 @@ fn run(command: Command) -> anyhow::Result<()> {
     };
     tracing::info!("meeting {name}");
     bail!("`meeting {name}` is not implemented yet")
+}
+
+/// Runs the pipeline in the foreground and notifies the outcome.
+fn process(
+    config: Config,
+    recording: &Path,
+    retranscribe: bool,
+    language: Option<Language>,
+    job_id: Option<String>,
+) -> anyhow::Result<()> {
+    let pipeline = Pipeline {
+        config,
+        deepgram: Deepgram::default(),
+        jobs: JobStore {
+            dir: JobStore::default_dir()?,
+        },
+        key: secret::deepgram_key,
+        claude_timeout: Duration::from_secs(15 * 60),
+    };
+    match pipeline.run(recording, retranscribe, language, job_id, &mut io::stdout()) {
+        Ending::Done { title } => {
+            notify::notify(&notify::message(&Outcome::Done { title: &title }));
+            Ok(())
+        }
+        Ending::Failed { stage, error } => {
+            let reason = format!("{error:#}");
+            notify::notify(&notify::message(&Outcome::Failed {
+                stage: stage.name(),
+                reason: &reason,
+            }));
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]

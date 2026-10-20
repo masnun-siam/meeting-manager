@@ -26,4 +26,5 @@ The recording, transcript, summary and `meta.json` sit in the meeting's folder u
 
 - Picked the wrong language? `meeting process <folder>/recording.webm --language en`.
 - Want a fresh summary? `meeting process <folder>/recording.webm` reuses the transcript, so Deepgram is not billed again.
+- Recorded a call outside Chrome (phone voice memo, desktop app)? `meeting import ~/Desktop/call.m4a --language en` copies it into its own meeting folder and processes it.
 - Something failed? `meeting doctor`, then `~/Library/Logs/meeting-manager/meeting.log`.
