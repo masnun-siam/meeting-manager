@@ -326,7 +326,7 @@ fn trash(host: &Host, config: &Config, job_id: &str) -> anyhow::Result<Value> {
 }
 
 /// The checks Archive and Trash share: the job exists, and its recording is a valid
-/// `<name>/recording.webm`. A reply in `Err` ends the request (a recording that is already
+/// `<name>/recording.<ext>`. A reply in `Err` ends the request (a recording that is already
 /// gone clears its jobs and succeeds, before the path check).
 fn find_recording(
     host: &Host,
@@ -805,6 +805,21 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(reply["code"], "already_processing");
         assert!(!wrote_jobs);
+    }
+
+    #[test]
+    fn process_accepts_a_recording_with_another_listed_extension() {
+        let dir = temp("native-proc-m4a");
+        let host = host(&dir);
+        let recording = webm(&dir).with_file_name("recording.m4a");
+        fs::write(&recording, "x").unwrap();
+        fs::write(Lock::path_for(&recording), std::process::id().to_string()).unwrap();
+        let reply = one(
+            &host,
+            json!({"type": "process", "path": recording, "language": "en"}),
+        );
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["code"], "already_processing");
     }
 
     #[test]

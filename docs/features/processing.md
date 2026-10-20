@@ -2,7 +2,7 @@
 
 Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/plan.rs, crates/meeting/src/extract.rs, crates/meeting/src/deepgram.rs, crates/meeting/src/transcript.rs, crates/meeting/src/summarise.rs, crates/meeting/src/summary_md.rs, crates/meeting/src/vault.rs, crates/meeting/src/meta.rs, crates/meeting/src/jobs.rs, crates/meeting/src/lock.rs, crates/meeting/src/notify.rs
 
-`meeting process <recording>` turns a `.webm` recording into a transcript, a summary, and an Obsidian note. It runs in the foreground. It refuses any path that is not `<recordings_dir>/<name>/recording.webm` (or under `Archive/`) before writing a job, so a refused path leaves no Jobs-tab row. The native host starts it as a detached child ([native-messaging.md](native-messaging.md)); the recording itself comes from [recording.md](recording.md). Crate layout: [../tool.md](../tool.md).
+`meeting process <recording>` turns a recording (`webm`, `mp4`, `m4a`, `mov`, `mkv`, `mp3`, `wav` or `ogg`) into a transcript, a summary, and an Obsidian note. It runs in the foreground. It refuses any path that is not `<recordings_dir>/<name>/recording.<ext>` (or under `Archive/`) before writing a job, so a refused path leaves no Jobs-tab row; the refusal points to moving the file into its own folder or to `meeting import`. The native host starts it as a detached child ([native-messaging.md](native-messaging.md)); the recording itself comes from [recording.md](recording.md). Crate layout: [../tool.md](../tool.md).
 
 ## External services
 

@@ -37,7 +37,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `vault.rs` | Write the Obsidian note | `write_note`, `Note` |
 | `notify.rs` | macOS notification via `osascript` | `notify`, `message`, `Outcome` |
 | `logging.rs` | File logger init | `init` |
-| `config.rs` | `config.toml` load/save, `home()`, `check_recording` (the foldered-recording path rule) | `Config`, `home`, `check_recording` |
+| `config.rs` | `config.toml` load/save, `home()`, `check_recording` (the foldered-recording path rule), `RECORDING_EXTENSIONS` | `Config`, `home`, `check_recording`, `RECORDING_EXTENSIONS` |
 | `secret.rs` | Keychain access for the Deepgram key | `deepgram_key`, `set_key`, `read_hidden` |
 | `install.rs` | `meeting install` | `install` |
 | `doctor.rs` | `meeting doctor` checks, manifest path | `checks`, `Env`, `manifest_path` |
