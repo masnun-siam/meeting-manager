@@ -27,7 +27,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change | `Pipeline`, `Pipeline::run`, `Ending`, `State` |
 | `plan.rs` | Pure function: which stages to skip, from file mtimes | `plan`, `Plan`, `Files` |
 | `jobs.rs` | Job file store, `Stage` enum, atomic write, UTC time and ids | `Job`, `JobStore`, `Stage`, `write_atomic`, `now_utc`, `new_job_id` |
-| `meta.rs` | `<name>.meta.json`: language, speakers, run history; `recorded_at` from file name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
+| `meta.rs` | `meta.json`: language, speakers, run history; `recorded_at` from folder name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
 | `lock.rs` | Per-recording PID lock file | `Lock::acquire`, `Lock::path_for`, `is_held` |
 | `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |

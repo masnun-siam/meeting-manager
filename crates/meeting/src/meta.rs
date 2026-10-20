@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::Language;
 use crate::jobs::{Stage, format_utc, unix_secs, write_atomic};
 
-/// `<name>.meta.json` next to a recording: stored language, speakers and run history.
+/// `meta.json` in a recording's folder: stored language, speakers and run history.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Meta {
     pub recording: PathBuf,
@@ -37,7 +37,7 @@ pub struct Run {
 
 impl Meta {
     pub fn path_for(recording: &Path) -> PathBuf {
-        recording.with_extension("meta.json")
+        recording.with_file_name("meta.json")
     }
 
     pub fn load(path: &Path) -> anyhow::Result<Option<Meta>> {
@@ -63,11 +63,14 @@ impl Meta {
     }
 }
 
-/// `YYYY-MM-DDTHH:MM` from a `meeting-YYYY-MM-DD_HHMM[...]` name; any other name uses the
-/// file's modified time in UTC.
+/// `YYYY-MM-DDTHH:MM` from a `meeting-YYYY-MM-DD_HHMM[...]` folder name; any other folder
+/// name uses the file's modified time in UTC.
 pub fn recorded_at_for(recording: &Path) -> anyhow::Result<String> {
-    let stem = recording.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if let Some(at) = stem.strip_prefix("meeting-").and_then(from_name) {
+    let folder = (recording.parent())
+        .and_then(Path::file_name)
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if let Some(at) = folder.strip_prefix("meeting-").and_then(from_name) {
         return Ok(at);
     }
     let modified = fs::metadata(recording)
@@ -111,7 +114,7 @@ mod tests {
 
     fn sample() -> Meta {
         Meta {
-            recording: "/r/meeting-2026-10-19_1430.webm".into(),
+            recording: "/r/meeting-2026-10-19_1430/recording.webm".into(),
             language: Language::Bn,
             recorded_at: "2026-10-19T14:30".into(),
             duration_s: Some(61.5),
@@ -126,10 +129,10 @@ mod tests {
     }
 
     #[test]
-    fn path_for_swaps_the_extension() {
+    fn path_sits_in_the_recording_folder() {
         assert_eq!(
-            Meta::path_for(Path::new("/r/meeting-2026-10-19_1430.webm")),
-            PathBuf::from("/r/meeting-2026-10-19_1430.meta.json")
+            Meta::path_for(Path::new("/r/meeting-2026-10-19_1430/recording.webm")),
+            PathBuf::from("/r/meeting-2026-10-19_1430/meta.json")
         );
     }
 
@@ -159,13 +162,13 @@ mod tests {
     }
 
     #[test]
-    fn recorded_at_comes_from_the_recording_name() {
+    fn recorded_at_comes_from_the_folder_name() {
         for name in [
-            "meeting-2026-10-19_1430.webm",
-            "meeting-2026-10-19_1430-2.webm",
-            "meeting-2026-10-19_1430-recovered.webm",
+            "meeting-2026-10-19_1430",
+            "meeting-2026-10-19_1430-2",
+            "meeting-2026-10-19_1430-recovered",
         ] {
-            let at = recorded_at_for(Path::new(name)).unwrap();
+            let at = recorded_at_for(&Path::new(name).join("recording.webm")).unwrap();
             assert_eq!(at, "2026-10-19T14:30", "{name}");
         }
     }
@@ -174,12 +177,9 @@ mod tests {
     fn recorded_at_falls_back_to_modified_time() {
         let dir = temp("recorded-at");
         fs::create_dir_all(&dir).unwrap();
-        for name in [
-            "call.webm",
-            "meeting-notes.webm",
-            "meeting-2026-1x-19_1430.webm",
-        ] {
-            let path = dir.join(name);
+        for name in ["call", "meeting-notes", "meeting-2026-1x-19_1430"] {
+            let path = dir.join(name).join("recording.webm");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, "x").unwrap();
             let at = recorded_at_for(&path).unwrap();
             assert!(at.ends_with('Z') && at.len() == 20, "{name}: {at}");

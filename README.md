@@ -32,14 +32,14 @@ Then load `extension/dist/` as an unpacked extension in `chrome://extensions`. S
 2. **Pause**/**Resume** as needed, then **Stop & save**. Recording also stops at 3 hours or when the tab closes.
 3. Processing runs in the background, even if Chrome quits. A macOS notification says when it is done; the popup's **Jobs** tab shows progress and opens the summary or folder, and **Retry** reruns a failed job.
 
-Outputs, next to the recording in `~/Downloads/Meetings/`:
+Outputs, in the meeting's folder `~/Downloads/Meetings/<name>/`:
 
 | File | Content |
 |---|---|
-| `<name>.webm` | The recording (tab video and audio plus mic) |
-| `<name>.transcript.md` | `[hh:mm:ss] Speaker N: text` lines |
-| `<name>.summary.md` | Summary, key points, decisions, action items, insights, speakers |
-| `<name>.meta.json` | Language, timestamps, job history |
+| `recording.webm` | The recording (tab video and audio plus mic) |
+| `transcript.md` | `[hh:mm:ss] Speaker N: text` lines |
+| `summary.md` | Summary, key points, decisions, action items, insights, speakers |
+| `meta.json` | Language, timestamps, job history |
 
 The vault gets `<vault>/<folder>/YYYY-MM-DD HHMM <title>.md` (folder defaults to `Meetings`) with frontmatter. Rerunning overwrites that note instead of adding a second one. Recordings under 10 seconds are saved but not processed.
 

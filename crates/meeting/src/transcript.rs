@@ -45,7 +45,7 @@ pub fn parse(raw: &[u8]) -> anyhow::Result<Transcript> {
     })
 }
 
-/// The text of `<name>.transcript.md`.
+/// The text of `transcript.md`.
 pub fn render(t: &Transcript, language: Language) -> String {
     let mut speakers: Vec<u32> = t.utterances.iter().map(|u| u.speaker).collect();
     speakers.sort_unstable();

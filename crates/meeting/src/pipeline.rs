@@ -33,7 +33,7 @@ pub enum Ending {
     Failed { stage: Stage, error: anyhow::Error },
 }
 
-/// The files a recording's run reads and writes, all next to the recording.
+/// The files a recording's run reads and writes, all in the recording's folder.
 struct Paths {
     recording: PathBuf,
     audio: PathBuf,
@@ -44,7 +44,7 @@ struct Paths {
 
 impl Paths {
     fn new(recording: PathBuf) -> Paths {
-        let next_to = |ext| recording.with_extension(ext);
+        let next_to = |name| recording.with_file_name(name);
         Paths {
             audio: next_to("audio.ogg"),
             raw: next_to("deepgram.json"),
@@ -372,7 +372,8 @@ mod tests {
         for dir in [&rec, &tools, &vault] {
             fs::create_dir_all(dir).unwrap();
         }
-        fs::copy(FIXTURE, rec.join(format!("{NAME}.webm"))).unwrap();
+        fs::create_dir_all(rec.join(NAME)).unwrap();
+        fs::copy(FIXTURE, rec.join(NAME).join("recording.webm")).unwrap();
         let claude = stub(&tools, &format!("cat <<'EOF'\n{}\nEOF", envelope(VALID)));
         let (base_url, requests) = mock(responses);
         let pipeline = Pipeline {
@@ -404,14 +405,14 @@ mod tests {
     }
 
     impl Env {
-        fn file(&self, ext: &str) -> PathBuf {
-            self.rec.join(format!("{NAME}.{ext}"))
+        fn file(&self, name: &str) -> PathBuf {
+            self.rec.join(NAME).join(name)
         }
 
         fn run(&self, language: Option<Language>, job_id: Option<&str>) -> (Ending, String) {
             let mut out = Vec::new();
             let ending = self.pipeline.run(
-                &self.file("webm"),
+                &self.file("recording.webm"),
                 false,
                 language,
                 job_id.map(String::from),
@@ -431,7 +432,7 @@ mod tests {
         }
 
         fn names(&self) -> Vec<String> {
-            let mut names: Vec<String> = fs::read_dir(&self.rec)
+            let mut names: Vec<String> = fs::read_dir(self.rec.join(NAME))
                 .unwrap()
                 .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
                 .collect();
@@ -470,12 +471,7 @@ mod tests {
 
         assert_eq!(
             env.names(),
-            [
-                format!("{NAME}.meta.json"),
-                format!("{NAME}.summary.md"),
-                format!("{NAME}.transcript.md"),
-                format!("{NAME}.webm"),
-            ]
+            ["meta.json", "recording.webm", "summary.md", "transcript.md",]
         );
         assert_eq!(env.notes(), 1);
         assert_eq!(env.requests().len(), 1);
@@ -655,7 +651,7 @@ mod tests {
     #[test]
     fn a_missing_recording_fails_without_a_lock() {
         let env = setup("pipe-missing", vec![]);
-        fs::remove_file(env.file("webm")).unwrap();
+        fs::remove_file(env.file("recording.webm")).unwrap();
         let (_, error) = failed(env.run(Some(Language::En), None).0);
         assert!(error.starts_with("recording not found: "), "{error}");
     }
@@ -665,7 +661,7 @@ mod tests {
         let env = setup("pipe-hostjob", vec![(200, EN)]);
         let queued = Job {
             job_id: "host-1".into(),
-            recording: env.file("webm"),
+            recording: env.file("recording.webm"),
             title: None,
             stage: Stage::Queued,
             error: None,

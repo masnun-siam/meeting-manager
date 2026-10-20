@@ -43,7 +43,7 @@ flowchart LR
 | Store | Owner | Doc |
 |---|---|---|
 | `chrome.storage.session` / `.local`, OPFS `recordings/` | Extension | [extension.md](extension.md#state-storage) |
-| Recording and side files (`.meta.json`, `.transcript.md`, `.summary.md`, …) next to the `.webm` | Tool | [features/processing.md](features/processing.md#files) |
+| Recording and side files in the recording's folder (`meta.json`, `transcript.md`, `summary.md`, …) | Tool | [features/processing.md](features/processing.md#files) |
 | Job files under `~/Library/Application Support/meeting-manager/jobs/` | Tool | [features/processing.md](features/processing.md#job-lifecycle) |
 | `~/.config/meeting-manager/config.toml`, Keychain item, Chrome host manifest | Tool | [features/setup.md](features/setup.md) |
 | Vault note | Tool | [features/processing.md](features/processing.md#files) |

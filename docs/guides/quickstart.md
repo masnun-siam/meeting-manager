@@ -20,7 +20,7 @@ Load `extension/dist/` in `chrome://extensions` (Developer mode → **Load unpac
 4. Open the **Jobs** tab and watch it move through extracting → transcribing → summarising → done. A macOS notification says when it is ready.
 5. Click **Open summary**, or find the note in your vault folder (`<vault>/Meetings/` by default).
 
-The recording, transcript, summary and `meta.json` sit side by side in `~/Downloads/Meetings/`.
+The recording, transcript, summary and `meta.json` sit in the meeting's folder under `~/Downloads/Meetings/`.
 
 ## Next
 
