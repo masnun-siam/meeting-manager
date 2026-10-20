@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ArchiveRequest, JobSummary, OpenRequest, RetryRequest, TrashRequest } from '../shared/native';
 import { sendNative } from '../shared/nativeClient';
 import styles from './JobsTab.module.css';
 import { useJobs } from './useJobs';
 
 const RECORDING_FILE = 'recording.webm';
+const CONFIRM_MS = 3000;
 
 const label = (path: string) => {
   const parts = path.split('/');
@@ -53,6 +54,19 @@ export function JobsTab() {
 }
 
 function JobRow({ job, run }: { job: JobSummary; run: (request: JobAction) => void }) {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), CONFIRM_MS);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
+  function trash() {
+    setArmed(!armed);
+    if (armed) run({ type: 'trash', job_id: job.job_id });
+  }
+
   return (
     <li className={styles.job}>
       <strong>{job.title ?? label(job.recording)}</strong>
@@ -77,9 +91,14 @@ function JobRow({ job, run }: { job: JobSummary; run: (request: JobAction) => vo
           </button>
         )}
         {(job.stage === 'done' || job.stage === 'failed') && (
-          <button type="button" onClick={() => run({ type: 'archive', job_id: job.job_id })}>
-            Archive
-          </button>
+          <>
+            <button type="button" onClick={() => run({ type: 'archive', job_id: job.job_id })}>
+              Archive
+            </button>
+            <button type="button" onClick={trash}>
+              {armed ? 'Confirm trash' : 'Trash'}
+            </button>
+          </>
         )}
       </div>
     </li>
