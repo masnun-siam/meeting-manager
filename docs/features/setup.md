@@ -33,7 +33,7 @@ TOML, no secrets (`config::Config`). Paths are absolute because Chrome starts th
 
 | Key | Meaning | Default |
 |---|---|---|
-| `recordings_dir` | Folder `.webm` files must be in to be processed | `~/Downloads/Meetings` |
+| `recordings_dir` | Folder whose `<name>/recording.webm` files are processed | `~/Downloads/Meetings` |
 | `vault_dir` | Obsidian vault root | prompted |
 | `vault_folder` | Subfolder in the vault for notes | `Meetings` (also serde default) |
 | `ffmpeg_path` | Absolute path to `ffmpeg` | found on `PATH` |

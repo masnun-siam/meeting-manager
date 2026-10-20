@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Context, anyhow};
 
 use crate::Language;
-use crate::config::Config;
+use crate::config::{Config, check_recording};
 use crate::deepgram::Deepgram;
 use crate::jobs::{Job, JobStore, Stage, new_job_id, now_utc, write_atomic};
 use crate::lock::Lock;
@@ -146,6 +146,16 @@ impl Pipeline {
         job_id: Option<String>,
         out: &mut impl Write,
     ) -> Ending {
+        let recording = match check_recording(&self.config.recordings_dir, recording) {
+            Ok(recording) => recording,
+            Err(reason) => {
+                return Ending::Failed {
+                    stage: Stage::Queued,
+                    error: anyhow!(reason),
+                };
+            }
+        };
+        let recording = recording.as_path();
         let job = match self.start_job(recording, job_id) {
             Ok(job) => job,
             Err(error) => {
@@ -652,8 +662,42 @@ mod tests {
     fn a_missing_recording_fails_without_a_lock() {
         let env = setup("pipe-missing", vec![]);
         fs::remove_file(env.file("recording.webm")).unwrap();
-        let (_, error) = failed(env.run(Some(Language::En), None).0);
-        assert!(error.starts_with("recording not found: "), "{error}");
+        let (stage, error) = failed(env.run(Some(Language::En), None).0);
+        assert_eq!(stage, Stage::Queued);
+        assert!(error.contains("No such file"), "{error}");
+        assert!(env.pipeline.jobs.list(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_flat_recording_is_refused_without_a_job() {
+        let env = setup("pipe-flat", vec![]);
+        let flat = env.rec.join(format!("{NAME}.webm"));
+        fs::copy(env.file("recording.webm"), &flat).unwrap();
+        let mut out = Vec::new();
+        let ending = env
+            .pipeline
+            .run(&flat, false, Some(Language::En), None, &mut out);
+        let (stage, error) = failed(ending);
+        assert_eq!(stage, Stage::Queued);
+        assert!(error.contains("is not in its own folder"), "{error}");
+        assert!(env.pipeline.jobs.list(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_archived_recording_is_processed() {
+        let env = setup("pipe-archived", vec![(200, EN)]);
+        let archived = env.rec.join("Archive").join(NAME);
+        fs::create_dir_all(env.rec.join("Archive")).unwrap();
+        fs::rename(env.rec.join(NAME), &archived).unwrap();
+        let mut out = Vec::new();
+        let ending = env.pipeline.run(
+            &archived.join("recording.webm"),
+            false,
+            Some(Language::En),
+            None,
+            &mut out,
+        );
+        assert_eq!(done(ending), "Standup");
     }
 
     #[test]

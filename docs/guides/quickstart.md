@@ -24,6 +24,6 @@ The recording, transcript, summary and `meta.json` sit in the meeting's folder u
 
 ## Next
 
-- Picked the wrong language? `meeting process <file.webm> --language en`.
-- Want a fresh summary? `meeting process <file.webm>` reuses the transcript, so Deepgram is not billed again.
+- Picked the wrong language? `meeting process <folder>/recording.webm --language en`.
+- Want a fresh summary? `meeting process <folder>/recording.webm` reuses the transcript, so Deepgram is not billed again.
 - Something failed? `meeting doctor`, then `~/Library/Logs/meeting-manager/meeting.log`.
