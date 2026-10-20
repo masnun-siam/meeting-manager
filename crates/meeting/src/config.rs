@@ -186,7 +186,7 @@ mod tests {
             "m/recording.txt",
             "x.m4a",
             "m/recording.m4a.part",
-            "m/recording.M4A",
+            "upper/recording.M4A",
         ] {
             fs::write(rec.join(file), "x").unwrap();
         }
