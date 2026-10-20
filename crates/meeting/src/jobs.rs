@@ -101,6 +101,28 @@ impl JobStore {
         jobs.truncate(limit);
         Ok(jobs)
     }
+
+    /// Deletes every job whose `recording` is `recording`. Unparsable files are left alone.
+    pub fn remove_for(&self, recording: &Path) -> anyhow::Result<()> {
+        let entries = match fs::read_dir(&self.dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            r => r.with_context(|| format!("cannot read {}", self.dir.display()))?,
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let job = fs::read(&path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Job>(&b).ok());
+            if job.is_some_and(|j| j.recording == recording) {
+                fs::remove_file(&path)
+                    .with_context(|| format!("cannot remove {}", path.display()))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Writes to `<path>.tmp` then renames, so a reader never sees a half-written file.
@@ -282,5 +304,45 @@ mod tests {
     #[test]
     fn job_ids_are_distinct() {
         assert_ne!(new_job_id(), new_job_id());
+    }
+
+    #[test]
+    fn remove_for_deletes_only_that_recordings_jobs() {
+        let dir = temp("jobs-remove-for");
+        let store = JobStore {
+            dir: dir.join("jobs"),
+        };
+        let missing = JobStore {
+            dir: dir.join("none"),
+        };
+        for (id, rec) in [
+            ("a", "/r/m/recording.webm"),
+            ("b", "/r/m/recording.webm"),
+            ("c", "/r/o/recording.webm"),
+        ] {
+            store
+                .write(&Job {
+                    job_id: id.into(),
+                    recording: rec.into(),
+                    title: None,
+                    stage: Stage::Done,
+                    error: None,
+                    started_at: "2026-10-19T14:30:00Z".into(),
+                    updated_at: "2026-10-19T14:30:00Z".into(),
+                    summary_path: None,
+                })
+                .unwrap();
+        }
+        store.remove_for(Path::new("/r/m/recording.webm")).unwrap();
+        let left: Vec<_> = store
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .map(|j| j.job_id)
+            .collect();
+        let missing_ok = missing.remove_for(Path::new("/x")).is_ok();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(left, ["c"]);
+        assert!(missing_ok);
     }
 }

@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,8 @@ use crate::config::{Config, check_recording};
 use crate::doctor;
 use crate::jobs::{Job, JobStore, Stage, new_job_id, now_utc};
 use crate::lock::{self, Lock};
+use crate::meta::Meta;
+use crate::vault;
 
 /// Requests are a few dozen bytes; anything bigger is not from our extension.
 const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
@@ -25,6 +28,7 @@ enum Request {
     Health,
     Process { path: PathBuf, language: Language },
     Retry { job_id: String },
+    Archive { job_id: String },
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -146,6 +150,7 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
             start_checked(host, config_of(host), &path, Some(language))
         }
         Request::Retry { job_id } => retry(host, &job_id),
+        Request::Archive { job_id } => archive(host, config_of(host), &job_id),
         Request::Health => Ok(json!({"ok": true, "checks": doctor::checks(&doctor::Env {
             config: &host.config,
             key: host.key,
@@ -190,6 +195,100 @@ fn retry(host: &Host, job_id: &str) -> anyhow::Result<Value> {
         return Ok(error("unknown_job", "no such job"));
     };
     start_checked(host, config_of(host), &job.recording, None)
+}
+
+/// Moves a recording's folder to `Archive/`, repoints its `meta.json` and vault note, and
+/// removes its jobs. The folder moves first, so a later failure leaves it archived and the
+/// jobs in place.
+fn archive(host: &Host, config: &Config, job_id: &str) -> anyhow::Result<Value> {
+    if !valid_job_id(job_id) {
+        return Ok(error("unknown_job", "no such job"));
+    }
+    let Some(job) = host.jobs.read(job_id)? else {
+        return Ok(error("unknown_job", "no such job"));
+    };
+    if !job.recording.is_file() {
+        host.jobs.remove_for(&job.recording)?;
+        return Ok(json!({"ok": true}));
+    }
+    let recording = match check_recording(&config.recordings_dir, &job.recording) {
+        Ok(recording) => recording,
+        Err(reason) => return Ok(error("invalid_path", reason)),
+    };
+    // `check_recording` guarantees a parent folder with a parent of its own.
+    let folder = recording.parent().expect("recording is inside a folder");
+    let root = folder
+        .parent()
+        .expect("folder is inside the recordings dir");
+    // Not `root`'s name: the recordings directory may itself be called `Archive`.
+    let top = fs::canonicalize(&config.recordings_dir)
+        .with_context(|| format!("cannot read {}", config.recordings_dir.display()))?;
+    if root != top {
+        return Ok(error(
+            "invalid_path",
+            format!("{} is already archived", folder.display()),
+        ));
+    }
+    if lock::is_held(&Lock::path_for(&recording)) {
+        return Ok(error("already_processing", "already processing"));
+    }
+    let name = folder
+        .file_name()
+        .expect("folder has a name")
+        .to_string_lossy();
+    let archive_dir = root.join("Archive");
+    let step = |what: &str, e: &dyn Display| error("archive_failed", format!("{what}: {e}"));
+    if let Err(e) = fs::create_dir_all(&archive_dir) {
+        return Ok(step(
+            "move",
+            &format!("cannot create {}: {e}", archive_dir.display()),
+        ));
+    }
+    // `rename` onto an empty directory succeeds on macOS, so a free name is chosen first.
+    let target = (1..)
+        .map(|n| match n {
+            1 => archive_dir.join(&*name),
+            n => archive_dir.join(format!("{name}-{n}")),
+        })
+        .find(|t| !t.exists())
+        .expect("an unbounded range has a free name");
+    if let Err(e) = fs::rename(folder, &target) {
+        return Ok(step(
+            "move",
+            &format!(
+                "cannot move {} to {}: {e}",
+                folder.display(),
+                target.display()
+            ),
+        ));
+    }
+    let new_recording = target.join("recording.webm");
+    let meta_path = target.join("meta.json");
+    let repointed = Meta::load(&meta_path).and_then(|meta| {
+        meta.map_or(Ok(()), |mut m| {
+            m.recording = new_recording.clone();
+            m.save(&meta_path)
+        })
+    });
+    if let Err(e) = repointed {
+        return Ok(step(
+            "meta.json",
+            &format!("{}: {e:#}", meta_path.display()),
+        ));
+    }
+    if let Err(e) = vault::repoint_note(
+        &config.vault_dir,
+        &config.vault_folder,
+        &recording,
+        &new_recording,
+        &target.join("transcript.md"),
+    ) {
+        return Ok(step("vault note", &format!("{e:#}")));
+    }
+    if let Err(e) = host.jobs.remove_for(&job.recording) {
+        return Ok(step("jobs", &format!("{}: {e:#}", host.jobs.dir.display())));
+    }
+    Ok(json!({"ok": true}))
 }
 
 /// `dispatch` only reaches a request handler once the config has loaded.
@@ -674,5 +773,218 @@ mod tests {
                 .unwrap()
                 .starts_with("queued: cannot start meeting process: ")
         );
+    }
+
+    /// A folder `rec/<name>/recording.webm` plus a job (and optional vault note) for it.
+    fn archivable(host: &Host, dir: &Path, name: &str, job_id: &str) -> PathBuf {
+        let folder = dir.join("rec").join(name);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("recording.webm"), "x").unwrap();
+        let recording = fs::canonicalize(folder.join("recording.webm")).unwrap();
+        let mut j = job(job_id, "2026-10-19T14:30:00Z", None);
+        j.recording = recording.clone();
+        host.jobs.write(&j).unwrap();
+        recording
+    }
+
+    fn archive_req(host: &Host, id: &str) -> Value {
+        one(host, json!({"type": "archive", "job_id": id}))
+    }
+
+    #[test]
+    fn archive_moves_the_folder_and_rewrites_meta_note_and_jobs() {
+        let dir = temp("native-archive");
+        let host = host(&dir);
+        let old = archivable(&host, &dir, "m", "a");
+        archivable(&host, &dir, "m", "b");
+        archivable(&host, &dir, "other", "c");
+        let meta = Meta {
+            recording: old.clone(),
+            language: Language::En,
+            recorded_at: "2026-10-19T14:30".into(),
+            duration_s: None,
+            title: None,
+            speakers: vec![],
+            runs: vec![],
+        };
+        meta.save(&Meta::path_for(&old)).unwrap();
+        let transcript = old.with_file_name("transcript.md");
+        fs::create_dir_all(dir.join("vault")).unwrap();
+        let note = vault::write_note(
+            &dir.join("vault"),
+            "Meetings",
+            &vault::Note {
+                recorded_at: "2026-10-19T14:30",
+                title: "T",
+                language: Language::En,
+                speakers: &[],
+                recording: &old,
+                transcript: &transcript,
+                body: "body\n",
+            },
+        )
+        .unwrap();
+        let reply = archive_req(&host, "a");
+        let new = fs::canonicalize(dir.join("rec/Archive/m/recording.webm")).unwrap();
+        let moved = Meta::load(&new.with_file_name("meta.json"))
+            .unwrap()
+            .unwrap();
+        let text = fs::read_to_string(&note).unwrap();
+        let remaining: Vec<_> = host
+            .jobs
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .map(|j| j.job_id)
+            .collect();
+        let old_gone = !dir.join("rec/m").exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply, json!({"ok": true}));
+        assert!(old_gone);
+        assert_eq!(
+            moved,
+            Meta {
+                recording: new.clone(),
+                ..meta
+            }
+        );
+        assert!(text.contains(&format!("recording: {:?}\n", new.to_string_lossy())));
+        assert!(text.contains(&format!(
+            "transcript: {:?}\n",
+            new.with_file_name("transcript.md").to_string_lossy()
+        )));
+        assert!(text.ends_with("---\n\nbody\n"));
+        assert_eq!(remaining, ["c"]);
+    }
+
+    #[test]
+    fn archive_picks_a_free_name() {
+        let dir = temp("native-archive-name");
+        let host = host(&dir);
+        archivable(&host, &dir, "m", "a");
+        fs::create_dir_all(dir.join("rec/Archive/m")).unwrap();
+        fs::create_dir_all(dir.join("rec/Archive/m-2")).unwrap();
+        let reply = archive_req(&host, "a");
+        let landed = dir.join("rec/Archive/m-3/recording.webm").is_file();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(landed);
+    }
+
+    #[test]
+    fn archive_refuses_already_archived_flat_and_outside_paths() {
+        let dir = temp("native-archive-refuse");
+        let host = host(&dir);
+        archivable(&host, &dir, "Archive/done", "arch");
+        let flat = dir.join("rec/flat.webm");
+        fs::write(&flat, "x").unwrap();
+        let outside = dir.join("outside.webm");
+        fs::write(&outside, "x").unwrap();
+        for (id, path) in [("flat", flat), ("out", outside)] {
+            let mut j = job(id, "2026-10-19T14:30:00Z", None);
+            j.recording = fs::canonicalize(path).unwrap();
+            host.jobs.write(&j).unwrap();
+        }
+        let replies: Vec<_> = ["arch", "flat", "out"]
+            .map(|id| archive_req(&host, id))
+            .into();
+        let kept = host.jobs.list(10).unwrap().len();
+        let still_there = dir.join("rec/Archive/done/recording.webm").is_file();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(replies.iter().all(|r| r["code"] == "invalid_path"));
+        assert!(
+            replies[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("already archived")
+        );
+        assert_eq!(kept, 3);
+        assert!(still_there);
+    }
+
+    #[test]
+    fn archive_refuses_a_held_lock() {
+        let dir = temp("native-archive-lock");
+        let host = host(&dir);
+        let recording = archivable(&host, &dir, "m", "a");
+        let _lock = Lock::acquire(&Lock::path_for(&recording)).unwrap();
+        let reply = archive_req(&host, "a");
+        let stayed = recording.is_file();
+        let kept = host.jobs.read("a").unwrap().is_some();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["code"], "already_processing");
+        assert!(stayed && kept);
+    }
+
+    #[test]
+    fn archive_of_a_missing_recording_clears_its_jobs() {
+        let dir = temp("native-archive-missing");
+        let host = host(&dir);
+        let recording = archivable(&host, &dir, "m", "a");
+        fs::remove_file(&recording).unwrap();
+        let reply = archive_req(&host, "a");
+        let left = host.jobs.list(10).unwrap().len();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply, json!({"ok": true}));
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn archive_rejects_unknown_ids() {
+        let dir = temp("native-archive-unknown");
+        let host = host(&dir);
+        let codes: Vec<_> = ["nope", "../x"]
+            .map(|id| archive_req(&host, id)["code"].clone())
+            .into();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(codes, ["unknown_job"; 2]);
+    }
+
+    #[test]
+    fn archive_without_meta_or_note_succeeds() {
+        let dir = temp("native-archive-bare");
+        let host = host(&dir);
+        archivable(&host, &dir, "m", "a");
+        let reply = archive_req(&host, "a");
+        let landed = dir.join("rec/Archive/m/recording.webm").is_file();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(landed);
+    }
+
+    #[test]
+    fn archive_failure_after_the_move_keeps_the_jobs() {
+        let dir = temp("native-archive-fail");
+        let host = host(&dir);
+        let recording = archivable(&host, &dir, "m", "a");
+        fs::create_dir(Meta::path_for(&recording)).unwrap();
+        let reply = archive_req(&host, "a");
+        let landed = dir.join("rec/Archive/m/recording.webm").is_file();
+        let kept = host.jobs.read("a").unwrap().is_some();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["code"], "archive_failed");
+        assert!(reply["message"].as_str().unwrap().contains("meta.json"));
+        assert!(landed && kept);
+    }
+
+    #[test]
+    fn archive_works_when_the_recordings_dir_is_named_archive() {
+        let dir = temp("native-archive-named");
+        let mut host = host(&dir);
+        let Ok(config) = host.config.as_mut() else {
+            unreachable!()
+        };
+        config.recordings_dir = dir.join("Archive");
+        let folder = dir.join("Archive/m");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("recording.webm"), "x").unwrap();
+        let mut j = job("a", "2026-10-19T14:30:00Z", None);
+        j.recording = fs::canonicalize(folder.join("recording.webm")).unwrap();
+        host.jobs.write(&j).unwrap();
+        let reply = archive_req(&host, "a");
+        let landed = dir.join("Archive/Archive/m/recording.webm").is_file();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(landed);
     }
 }
