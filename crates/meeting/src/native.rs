@@ -220,7 +220,10 @@ fn archive(host: &Host, config: &Config, job_id: &str) -> anyhow::Result<Value> 
     let root = folder
         .parent()
         .expect("folder is inside the recordings dir");
-    if root.file_name().is_some_and(|n| n == "Archive") {
+    // Not `root`'s name: the recordings directory may itself be called `Archive`.
+    let top = fs::canonicalize(&config.recordings_dir)
+        .with_context(|| format!("cannot read {}", config.recordings_dir.display()))?;
+    if root != top {
         return Ok(error(
             "invalid_path",
             format!("{} is already archived", folder.display()),
@@ -962,5 +965,26 @@ mod tests {
         assert_eq!(reply["code"], "archive_failed");
         assert!(reply["message"].as_str().unwrap().contains("meta.json"));
         assert!(landed && kept);
+    }
+
+    #[test]
+    fn archive_works_when_the_recordings_dir_is_named_archive() {
+        let dir = temp("native-archive-named");
+        let mut host = host(&dir);
+        let Ok(config) = host.config.as_mut() else {
+            unreachable!()
+        };
+        config.recordings_dir = dir.join("Archive");
+        let folder = dir.join("Archive/m");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("recording.webm"), "x").unwrap();
+        let mut j = job("a", "2026-10-19T14:30:00Z", None);
+        j.recording = fs::canonicalize(folder.join("recording.webm")).unwrap();
+        host.jobs.write(&j).unwrap();
+        let reply = archive_req(&host, "a");
+        let landed = dir.join("Archive/Archive/m/recording.webm").is_file();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(landed);
     }
 }
