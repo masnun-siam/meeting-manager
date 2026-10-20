@@ -25,7 +25,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 |---|---|
 | `tabCapture` | `chrome.tabCapture.getMediaStreamId` in `recordingControl.ts` |
 | `offscreen` | `chrome.offscreen.createDocument` / `closeDocument` |
-| `downloads` | Saving `Meetings/<name>.webm` in `save.ts` |
+| `downloads` | Saving `Meetings/<name>/recording.webm` in `save.ts` |
 | `nativeMessaging` | Talking to the Rust host, see [features/native-messaging.md](features/native-messaging.md) |
 | `storage` | `chrome.storage.session` (status) and `chrome.storage.local` (language) |
 

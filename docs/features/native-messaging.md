@@ -64,7 +64,7 @@ sequenceDiagram
     participant S as JobStore (jobs/*.json)
     participant P as meeting process
 
-    BG->>C: downloads.download Meetings/name.webm
+    BG->>C: downloads.download Meetings/name/recording.webm
     C-->>BG: saved path
     BG->>C: sendNativeMessage {type: process, path, language}
     C->>H: spawn with origin arg, frame on stdin

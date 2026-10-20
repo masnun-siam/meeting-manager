@@ -25,20 +25,15 @@ export function nextFreeName(base: string, taken: Set<string>): string {
   return `${base}-${n}`;
 }
 
-/** Names already saved under `base`, from Chrome's download history. */
+/** Folder names already saved under `base`, from Chrome's download history. */
 // ponytail: files Chrome did not download are invisible here, so `conflictAction: 'uniquify'`
-// then gives `name (1).webm` instead of `-2`. Scan the folder through the host if that matters.
+// then gives `recording (1).webm` inside the existing folder instead of a `-2` folder. Scan the folder through the host if that matters.
 export async function takenNames(base: string): Promise<Set<string>> {
-  const items = await chrome.downloads.search({ filenameRegex: `Meetings/${base}(-\\d+)?\\.webm$`, exists: true });
-  return new Set(
-    items.map(
-      (item) =>
-        item.filename
-          .split(/[\\/]/)
-          .pop()
-          ?.replace(/\.webm$/, '') ?? '',
-    ),
-  );
+  const items = await chrome.downloads.search({
+    filenameRegex: `Meetings/${base}(-\\d+)?/recording\\.webm$`,
+    exists: true,
+  });
+  return new Set(items.map((item) => item.filename.split(/[\\/]/).at(-2) ?? ''));
 }
 
 function errorNotice(error: string): Notice {
@@ -94,7 +89,7 @@ export async function saveRecording({ startedAt, name, language, process }: Save
     | { error: string }
     | undefined;
   if (!file || 'error' in file) return errorNotice(file?.error ?? 'no recording file');
-  const saved = await download(file.url, `Meetings/${name}.webm`);
+  const saved = await download(file.url, `Meetings/${name}/recording.webm`);
   if ('error' in saved) return errorNotice(saved.error);
   // The file is saved; a failed cleanup must not stop processing. Recovery (#28) tolerates a leftover.
   await deleteRecordingFile(startedAt).catch(() => undefined);

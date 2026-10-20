@@ -26,7 +26,7 @@ beforeEach(() => {
   for (const m of [download, search, sendMessage, removeEntry, vi.mocked(sendNative)]) m.mockReset();
   sendMessage.mockResolvedValue({ url: 'blob:x' });
   removeEntry.mockResolvedValue(undefined);
-  search.mockResolvedValue([{ filename: '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430.webm' }]);
+  search.mockResolvedValue([{ filename: '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm' }]);
   vi.stubGlobal('chrome', {
     runtime: { sendMessage },
     downloads: {
@@ -55,8 +55,12 @@ describe('naming', () => {
   });
 
   it('reads taken names from the download history', async () => {
-    search.mockResolvedValue([{ filename: '/d/Meetings/a.webm' }, { filename: 'C:\\d\\Meetings\\a-2.webm' }]);
+    search.mockResolvedValue([
+      { filename: '/d/Meetings/a/recording.webm' },
+      { filename: 'C:\\d\\Meetings\\a-2\\recording.webm' },
+    ]);
     expect(await takenNames('a')).toEqual(new Set(['a', 'a-2']));
+    expect(search).toHaveBeenCalledWith({ filenameRegex: 'Meetings/a(-\\d+)?/recording\\.webm$', exists: true });
   });
 });
 
@@ -67,14 +71,14 @@ describe('saveRecording', () => {
     expect(await saveRecording(opts)).toEqual({ kind: 'saved' });
     expect(download).toHaveBeenCalledWith({
       url: 'blob:x',
-      filename: 'Meetings/meeting-2026-10-19_1430.webm',
+      filename: 'Meetings/meeting-2026-10-19_1430/recording.webm',
       saveAs: false,
       conflictAction: 'uniquify',
     });
     expect(removeEntry).toHaveBeenCalledWith(STARTED);
     expect(sendNative).toHaveBeenCalledWith({
       type: 'process',
-      path: '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430.webm',
+      path: '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm',
       language: 'en',
     });
   });
