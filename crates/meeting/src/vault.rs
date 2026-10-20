@@ -61,6 +61,51 @@ pub fn write_note(vault_dir: &Path, folder: &str, note: &Note) -> anyhow::Result
     Ok(target)
 }
 
+/// Points the note for `old_recording` at the new recording and transcript paths, touching
+/// only those two frontmatter lines. No note for the recording is not an error.
+pub fn repoint_note(
+    vault_dir: &Path,
+    folder: &str,
+    old_recording: &Path,
+    new_recording: &Path,
+    new_transcript: &Path,
+) -> anyhow::Result<()> {
+    let Some(note) = find_existing(&vault_dir.join(folder), old_recording) else {
+        return Ok(());
+    };
+    let text =
+        fs::read_to_string(&note).with_context(|| format!("cannot read {}", note.display()))?;
+    let quote =
+        |p: &Path| serde_json::to_string(&p.to_string_lossy()).expect("a string serialises");
+    let (recording, transcript) = (quote(new_recording), quote(new_transcript));
+    let mut in_frontmatter = false;
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        let body = line.trim_end_matches(['\r', '\n']);
+        let ending = &line[body.len()..];
+        if i == 0 {
+            in_frontmatter = body == "---";
+        } else if in_frontmatter && body == "---" {
+            in_frontmatter = false;
+        }
+        match (in_frontmatter && i > 0, body) {
+            (true, b) if b.starts_with("recording: ") => {
+                out.push_str(&format!("recording: {recording}{ending}"))
+            }
+            (true, b) if b.starts_with("transcript: ") => {
+                out.push_str(&format!("transcript: {transcript}{ending}"))
+            }
+            _ => out.push_str(line),
+        }
+    }
+    let tmp = note.with_file_name(format!(
+        ".{}.tmp",
+        note.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    fs::write(&tmp, out).with_context(|| format!("cannot write {}", tmp.display()))?;
+    fs::rename(&tmp, &note).with_context(|| format!("cannot write {}", note.display()))
+}
+
 fn render(date: &str, note: &Note) -> String {
     let language = match note.language {
         Language::Bn => "bn",
@@ -335,5 +380,55 @@ mod tests {
         let mut n = note("T", "b", &sp, Path::new(REC));
         n.recorded_at = "2026-10-19";
         assert!(write_note(&vault, "Meetings", &n).is_err());
+    }
+
+    #[test]
+    fn repoint_note_rewrites_only_the_two_paths() {
+        let dir = temp("vault-repoint");
+        let (old, new) = (
+            Path::new("/r/m/recording.webm"),
+            Path::new("/r/Archive/m/recording.webm"),
+        );
+        let sp = speakers();
+        let written = write_note(
+            &dir,
+            "Meetings",
+            &note("T", "line\nrecording: keep\n", &sp, old),
+        )
+        .unwrap();
+        let before = fs::read_to_string(&written).unwrap();
+        repoint_note(
+            &dir,
+            "Meetings",
+            old,
+            new,
+            Path::new("/r/Archive/m/transcript.md"),
+        )
+        .unwrap();
+        let after = fs::read_to_string(&written).unwrap();
+        let transcript = before
+            .lines()
+            .find(|l| l.starts_with("transcript: "))
+            .unwrap();
+        let want = before
+            .replace("\"/r/m/recording.webm\"", "\"/r/Archive/m/recording.webm\"")
+            .replace(transcript, "transcript: \"/r/Archive/m/transcript.md\"");
+        // same note found by its new path, and a rerun replaces it
+        let again = write_note(&dir, "Meetings", &note("T", "b", &sp, new)).unwrap();
+        let count = md_files(&dir.join("Meetings")).len();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(after, want);
+        assert_ne!(before, after);
+        assert_eq!(again, written);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn repoint_note_without_a_match_is_ok() {
+        let dir = temp("vault-repoint-none");
+        let p = Path::new("/r/x/recording.webm");
+        let result = repoint_note(&dir, "Nope", p, p, p);
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(result.is_ok());
     }
 }

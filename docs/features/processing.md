@@ -100,6 +100,7 @@ stateDiagram-v2
 - A stage is skipped when the plan says its output is already fresh. A run with a fresh transcript goes straight to `summarising`.
 - `Job.error` is `"<stage>: <first line of the error>"`. Failing at `queued` means the recording was missing, locked, or had no language.
 - A re-run with the same `--job-id` updates that job in place and keeps its `started_at`; without one, a new `job_id` is made. Each run is one entry in `meta.json` `runs`, keyed by `job_id`.
+- Archive ([native-messaging.md](native-messaging.md#archive)) moves the folder and rewrites `meta.json`'s `recording` and the note's `recording`/`transcript` paths, so a later `meeting process` on the archived recording updates the same note.
 - stdout prints each stage name, then `done: <summary path>` (or `done: No speech detected`).
 
 ## Resume, retries, language

@@ -54,7 +54,7 @@ Arrows are `crate::` imports in non-test code.
 flowchart TD
     main --> pipeline & native & install & doctor & notify & logging & secret & deepgram & jobs & config
     pipeline --> plan & extract & deepgram & transcript & summarise & summary_md & vault & meta & jobs & lock & config
-    native --> jobs & lock & doctor & config
+    native --> jobs & lock & doctor & config & vault & meta
     install --> doctor & jobs & config
     summary_md --> summarise
     summarise --> meta

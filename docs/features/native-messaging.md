@@ -31,11 +31,23 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 |---|---|---|---|
 | `process` | `path`, `language` (`bn`\|`en`) | `{ok, job_id}` | `start_checked`; spawns `meeting process` |
 | `retry` | `job_id` | `{ok, job_id}` | Same as `process` on the old job's recording, no `--language`; `job_id` is the new job |
+| `archive` | `job_id` | `{ok}` | See [Archive](#archive) |
 | `list_jobs` | `limit` | `{ok, jobs: JobSummary[]}` | Newest `started_at` first via `JobStore::list` |
 | `open` | `job_id`, `what` (`summary`\|`folder`) | `{ok}` | Runs `/usr/bin/open` on `summary_path` or the recording's parent dir |
 | `health` | none | `{ok, checks: {name, ok, fix}[]}` | `doctor::checks`, same list as `meeting doctor` ([setup.md](setup.md)) |
 
 `JobSummary` (`native.ts`) mirrors `jobs::Job`: `job_id`, `recording`, `title`, `stage`, `error`, `started_at`, `updated_at`, `summary_path`. Optional fields are `null`, never omitted. Stages: `queued`, `extracting`, `transcribing`, `summarising`, `writing`, `done`, `failed`.
+
+## Archive
+
+`archive` acts on the job's recording folder, never on a path from the extension.
+
+1. Unknown or malformed `job_id` → `unknown_job`. Recording file gone → delete its jobs, reply `{ok: true}`.
+2. `check_recording` → `invalid_path`; folder already under `Archive/` → `invalid_path` ("already archived"); held lock → `already_processing`.
+3. Rename the folder to `<recordings_dir>/Archive/<name>[-2, -3, ...]` (first free name).
+4. Set `meta.json`'s `recording` (skipped if absent), then `vault::repoint_note` rewrites the note's `recording:` and `transcript:` lines (skipped if no note), then `JobStore::remove_for` deletes every job for the recording.
+
+A failure after step 3 replies `archive_failed`; the folder stays in `Archive/` and the jobs stay.
 
 ## Errors
 
@@ -47,6 +59,7 @@ Error reply: `{ok: false, code, message}`.
 | `not_configured` | No or invalid config |
 | `invalid_path` | `check_recording` failed: not absolute, not `<recordings_dir>/<name>/recording.webm` or `<recordings_dir>/Archive/<name>/recording.webm`, missing, not a file, outside `recordings_dir` (after canonicalising, so symlinks out are refused) |
 | `already_processing` | `lock::is_held` on the recording's lock; no job is written |
+| `archive_failed` | `archive` failed after the check: the message names the step (`move`, `meta.json`, `vault note`, `jobs`) and the path |
 | `unknown_job` | Id missing from the store, or not `[A-Za-z0-9-]+` (stops path traversal) |
 | `missing_file` | `open` target no longer exists, or `summary_path` is null |
 | `host_missing` | Client only, not a wire code: Chrome says "Specified native messaging host not found"; `sendNative` returns `HOST_MISSING_MESSAGE` |
