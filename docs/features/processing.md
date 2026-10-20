@@ -40,11 +40,11 @@ sequenceDiagram
         P->>FS: .deepgram.json
     end
     opt plan.render
-        P->>FS: .transcript.md
+        P->>FS: transcript.md
     end
     alt transcript has speech
         P->>C: transcript on stdin (summarising)
-        P->>FS: .summary.md (writing)
+        P->>FS: summary.md (writing)
         P->>V: note (replace if same recording)
     else no speech
         Note over P: title "No speech detected", no Claude, no note
@@ -115,7 +115,7 @@ stateDiagram-v2
 
 - Summarise and write always run, so re-running a finished job rewrites the summary and note without calling Deepgram or ffmpeg.
 - Retry after a failure is just running again. After a `summarising` failure the audio and raw JSON still exist, so Deepgram and ffmpeg are skipped.
-- `--retranscribe` or `--language` forces a fresh transcription: `plan.delete_transcript_and_raw` removes `.transcript.md` and `.deepgram.json` first (the audio is reused if fresh).
+- `--retranscribe` or `--language` forces a fresh transcription: `plan.delete_transcript_and_raw` removes `transcript.md` and `deepgram.json` first (the audio is reused if fresh).
 - Language: `--language bn|en` wins, else the language stored in `meta.json`. With neither, the run fails with `no language stored for this recording; pass --language bn|en`. The language is saved to `meta.json` before any stage.
 - The Keychain is read only when Deepgram is actually called, so a resume never needs it.
 

@@ -4,7 +4,7 @@ use crate::summarise::{ActionItem, InsightKind, SpeakerGuess, Summary};
 
 const INFERRED: &str = "(inferred)";
 
-/// Renders the body of `<name>.summary.md`, which is also the body of the vault note.
+/// Renders the body of `summary.md`, which is also the body of the vault note.
 pub fn render(s: &Summary) -> String {
     let mut out = format!("# {}\n\n{}\n", s.title, s.summary);
     section(&mut out, "Key points", &s.key_points, |p| format!("- {p}"));
