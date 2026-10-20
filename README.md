@@ -30,7 +30,7 @@ Then load `extension/dist/` as an unpacked extension in `chrome://extensions`. S
 
 1. On the meeting tab, open the extension popup, pick **Bengali** or **English** and press **Start**. The first time, a page asks for mic permission; grant it and press Start again.
 2. **Pause**/**Resume** as needed, then **Stop & save**. Recording also stops at 3 hours or when the tab closes.
-3. Processing runs in the background, even if Chrome quits. A macOS notification says when it is done; the popup's **Jobs** tab shows progress and opens the summary or folder, **Retry** reruns a failed job, and **Archive** moves a finished meeting to `~/Downloads/Meetings/Archive/`. **Trash** (click twice) moves it to the macOS Trash and keeps the vault note.
+3. Processing runs in the background, even if Chrome quits. A macOS notification says when it is done; the popup's **Jobs** tab shows progress and opens the summary or folder, **Retry** reruns a failed job, and **Archive** moves a finished meeting to `~/Downloads/Meetings/Archive/`. **Trash** (click twice, needs macOS 15+) moves it to the macOS Trash and keeps the vault note.
 
 Outputs, in the meeting's folder `~/Downloads/Meetings/<name>/`:
 
