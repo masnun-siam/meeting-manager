@@ -8,10 +8,14 @@ const MEET_CODE = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 const ZOOM_ID = /^\d{9,11}$/;
 const TEAMS_HOSTS = ['teams.microsoft.com', 'teams.live.com', 'teams.cloud.microsoft'];
 
+/** Minutes east of UTC at `at` (Dhaka is 360), never -0. */
+export function utcOffsetMin(at: number): number {
+  return -new Date(at).getTimezoneOffset() || 0;
+}
+
 /** Trims, removes control characters and cuts to `max` characters. */
 export function cleanText(value: string, max: number): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
-  const clean = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
+  const clean = value.replace(/\p{Cc}/gu, '').trim();
   return [...clean].slice(0, max).join('');
 }
 

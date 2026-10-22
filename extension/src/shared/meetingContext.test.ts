@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { cleanText, contextForHandoff, formatClock, identityFromTab, trimToLimit } from './meetingContext';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  cleanText,
+  contextForHandoff,
+  formatClock,
+  identityFromTab,
+  trimToLimit,
+  utcOffsetMin,
+} from './meetingContext';
 import type { MeetingContextState } from './messages';
 
 const id = (url: string | undefined, title: string | undefined = 'T') =>
@@ -124,5 +131,22 @@ describe('contextForHandoff and trimToLimit', () => {
     expect(out.speaking.length).toBeLessThan(5_000);
     expect(out.speaking).toEqual(payload.speaking.slice(0, out.speaking.length));
     expect(out.truncated).toEqual(['speaking']);
+  });
+});
+
+describe('utcOffsetMin', () => {
+  it.each([
+    [-360, 360],
+    [300, -300],
+  ])('turns getTimezoneOffset %i into %i', (raw, want) => {
+    vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(raw);
+    expect(utcOffsetMin(0)).toBe(want);
+    vi.restoreAllMocks();
+  });
+
+  it('is 0, not -0, in UTC', () => {
+    vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(0);
+    expect(Object.is(utcOffsetMin(0), 0)).toBe(true);
+    vi.restoreAllMocks();
   });
 });

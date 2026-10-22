@@ -2,7 +2,7 @@
 // so a service worker that slept mid-recording carries on.
 
 import { meetingContextEnabled } from '../shared/flags';
-import { contextForHandoff, identityFromTab, trimToLimit } from '../shared/meetingContext';
+import { contextForHandoff, identityFromTab, trimToLimit, utcOffsetMin } from '../shared/meetingContext';
 import {
   MEETING_CONTEXT_KEY,
   type MeetingContextState,
@@ -94,7 +94,7 @@ async function clearContext(): Promise<void> {
 /** Stores the captured tab's identity and the first segment. Never fails Start. */
 async function storeContext(tab: chrome.tabs.Tab, startedAt: number): Promise<void> {
   try {
-    const offset = -new Date(startedAt).getTimezoneOffset() || 0;
+    const offset = utcOffsetMin(startedAt);
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
     const context: MeetingContextState = {
       identity: identityFromTab({ url: tab.url, title: tab.title }, startedAt, offset, zone),
