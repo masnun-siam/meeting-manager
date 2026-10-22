@@ -63,6 +63,7 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 | `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`). |
 | `audio.ogg` | `extract::extract` (via `.part`, renamed on success) | Mono, 16 kHz, Opus 32 kbps. Deleted on success. |
 | `deepgram.json` | `write_atomic` | Raw Deepgram response. Deleted on success. |
+| `context.json` | `native::store_context` (host, on `process`) | Kept, only with the context flag on. The extension's meeting context after the PRD limits; reused by `retry`, moved with the folder on Archive/Trash. Not read yet (#101, #103). |
 | `transcript.md` | `transcript::render` | Kept. Lines `[hh:mm:ss] Speaker N: text`, header with language and speaker count. |
 | `summary.md` | `summary_md::render` | Kept. Same body as the vault note. |
 | `<vault_dir>/<vault_folder>/YYYY-MM-DD HHMM <title>.md` | `vault::write_note` | Kept. Frontmatter: `date`, `language`, `speakers`, `recording`, `transcript`. |

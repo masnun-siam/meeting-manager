@@ -11,8 +11,9 @@ use serde_json::{Value, json};
 
 use crate::Language;
 use crate::config::{Config, check_recording};
+use crate::context;
 use crate::doctor;
-use crate::jobs::{Job, JobStore, Stage, new_job_id, now_utc};
+use crate::jobs::{self, Job, JobStore, Stage, new_job_id, now_utc};
 use crate::lock::{self, Lock};
 use crate::meta::Meta;
 use crate::vault;
@@ -23,13 +24,30 @@ const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Request {
-    ListJobs { limit: usize },
-    Open { job_id: String, what: OpenWhat },
+    ListJobs {
+        limit: usize,
+    },
+    Open {
+        job_id: String,
+        what: OpenWhat,
+    },
     Health,
-    Process { path: PathBuf, language: Language },
-    Retry { job_id: String },
-    Archive { job_id: String },
-    Trash { job_id: String },
+    Process {
+        path: PathBuf,
+        language: Language,
+        /// A `Value`, so a malformed context never becomes `bad_request`.
+        #[serde(default)]
+        context: Option<Value>,
+    },
+    Retry {
+        job_id: String,
+    },
+    Archive {
+        job_id: String,
+    },
+    Trash {
+        job_id: String,
+    },
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -47,6 +65,8 @@ pub struct Host {
     pub key: fn() -> anyhow::Result<String>,
     pub manifest: PathBuf,
     pub exe: PathBuf,
+    /// Whether `FEATURE_MEETING_CONTEXT` was set at build time; off ignores `context`.
+    pub context: bool,
 }
 
 /// Opens with `/usr/bin/open`: Chrome starts the host with a bare `PATH`.
@@ -167,9 +187,17 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
     match request {
         Request::ListJobs { limit } => Ok(json!({"ok": true, "jobs": host.jobs.list(limit)?})),
         Request::Open { job_id, what } => open(host, &job_id, what),
-        Request::Process { path, language } => {
-            start_checked(host, config_of(host), &path, Some(language))
-        }
+        Request::Process {
+            path,
+            language,
+            context,
+        } => start_checked(
+            host,
+            config_of(host),
+            &path,
+            Some(language),
+            context.as_ref(),
+        ),
         Request::Retry { job_id } => retry(host, &job_id),
         Request::Archive { job_id } => archive(host, config_of(host), &job_id),
         Request::Trash { job_id } => trash(host, config_of(host), &job_id),
@@ -216,7 +244,7 @@ fn retry(host: &Host, job_id: &str) -> anyhow::Result<Value> {
     let Some(job) = host.jobs.read(job_id)? else {
         return Ok(error("unknown_job", "no such job"));
     };
-    start_checked(host, config_of(host), &job.recording, None)
+    start_checked(host, config_of(host), &job.recording, None, None)
 }
 
 /// Moves a recording's folder to `Archive/`, repoints its `meta.json` and vault note, and
@@ -362,6 +390,7 @@ fn start_checked(
     config: &Config,
     path: &Path,
     language: Option<Language>,
+    context: Option<&Value>,
 ) -> anyhow::Result<Value> {
     let recording = match check_recording(&config.recordings_dir, path) {
         Ok(recording) => recording,
@@ -369,6 +398,9 @@ fn start_checked(
     };
     if lock::is_held(&Lock::path_for(&recording)) {
         return Ok(error("already_processing", "already processing"));
+    }
+    if let (true, Some(raw)) = (host.context, context) {
+        store_context(&recording, raw);
     }
     let now = now_utc();
     let mut job = Job {
@@ -392,6 +424,27 @@ fn start_checked(
         host.jobs.write(&job)?;
     }
     Ok(json!({"ok": true, "job_id": job.job_id}))
+}
+
+/// Writes `context.json` beside the recording. Never fails the request and never logs a value.
+fn store_context(recording: &Path, raw: &Value) {
+    if raw.is_null() {
+        return;
+    }
+    match context::check(raw) {
+        Err(rule) => tracing::warn!("context dropped: {rule}"),
+        Ok(ctx) => {
+            let written = serde_json::to_vec(&ctx)
+                .map_err(anyhow::Error::from)
+                .and_then(|bytes| {
+                    jobs::write_atomic(&recording.with_file_name("context.json"), &bytes)
+                });
+            match written {
+                Ok(()) => tracing::info!("context written"),
+                Err(_) => tracing::warn!("context not written"),
+            }
+        }
+    }
 }
 
 /// Own process group and no stdio, so the job outlives Chrome closing the pipe.
@@ -475,6 +528,7 @@ mod tests {
             key: || Ok("k".into()),
             manifest: dir.join("host.json"),
             exe: dir.join("meeting"),
+            context: true,
         }
     }
 
@@ -805,6 +859,109 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(reply["code"], "already_processing");
         assert!(!wrote_jobs);
+    }
+
+    fn ctx() -> Value {
+        json!({"version": 1, "platform": "other", "started_at_ms": 1, "utc_offset_min": 0})
+    }
+
+    fn process_with(host: &Host, recording: &Path, context: Value) -> Value {
+        one(
+            host,
+            json!({"type": "process", "path": recording, "language": "en", "context": context}),
+        )
+    }
+
+    #[test]
+    fn process_writes_context_json_before_the_job() {
+        let dir = temp("native-ctx");
+        let host = host(&dir);
+        let recording = webm(&dir);
+        let reply = process_with(&host, &recording, ctx());
+        let file = fs::read_to_string(recording.with_file_name("context.json")).unwrap();
+        let job_written = host.jobs.dir.exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(reply["job_id"].is_string());
+        assert!(job_written);
+        assert_eq!(serde_json::from_str::<Value>(&file).unwrap()["version"], 1);
+    }
+
+    #[test]
+    fn process_without_a_usable_context_writes_no_file_and_still_replies_ok() {
+        let dir = temp("native-ctx-none");
+        let host = host(&dir);
+        let recording = webm(&dir);
+        let target = recording.with_file_name("context.json");
+        let mut replies = vec![
+            one(
+                &host,
+                json!({"type": "process", "path": recording, "language": "en"}),
+            ),
+            process_with(&host, &recording, Value::Null),
+            process_with(&host, &recording, json!(5)),
+            process_with(&host, &recording, json!({"version": 2})),
+        ];
+        let off = Host {
+            context: false,
+            ..host
+        };
+        replies.push(process_with(&off, &recording, ctx()));
+        let wrote = target.exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(replies.iter().all(|r| r["ok"] == true), "{replies:?}");
+        assert!(!wrote);
+    }
+
+    #[test]
+    fn an_unwritable_folder_still_starts_the_job() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp("native-ctx-ro");
+        let host = host(&dir);
+        let recording = webm(&dir);
+        let folder = recording.parent().unwrap();
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o555)).unwrap();
+        let reply = process_with(&host, &recording, ctx());
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+    }
+
+    #[test]
+    fn a_context_without_a_new_one_is_kept_by_process_and_retry() {
+        let dir = temp("native-ctx-keep");
+        let host = host(&dir);
+        let recording = webm(&dir);
+        process_with(&host, &recording, ctx());
+        let target = recording.with_file_name("context.json");
+        let before = fs::read(&target).unwrap();
+        let reply = one(
+            &host,
+            json!({"type": "process", "path": recording, "language": "en"}),
+        );
+        let mut j = job("r", "2026-10-19T14:30:00Z", None);
+        j.recording = recording.clone();
+        j.stage = Stage::Failed;
+        host.jobs.write(&j).unwrap();
+        let retried = one(&host, json!({"type": "retry", "job_id": "r"}));
+        let after = fs::read(&target).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(retried["ok"], true);
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn archive_moves_context_json_with_the_folder() {
+        let dir = temp("native-ctx-archive");
+        let host = host(&dir);
+        let old = archivable(&host, &dir, "m", "a");
+        fs::write(old.with_file_name("context.json"), "{}").unwrap();
+        let reply = archive_req(&host, "a");
+        let moved = dir.join("rec/Archive/m/context.json").is_file();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(moved);
     }
 
     #[test]
