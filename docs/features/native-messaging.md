@@ -85,7 +85,7 @@ sequenceDiagram
 
     BG->>C: downloads.download Meetings/name/recording.webm
     C-->>BG: saved path
-    BG->>C: sendNativeMessage {type: process, path, language}
+    BG->>C: sendNativeMessage {type: process, path, language, context?}
     C->>H: spawn with origin arg, frame on stdin
     H->>H: origin check, check_recording, lock check
     H->>S: write Job (stage queued)
