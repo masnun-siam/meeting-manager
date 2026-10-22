@@ -68,7 +68,7 @@ impl Summary {
     }
 }
 
-fn is_hh_mm_ss(s: &str) -> bool {
+pub(crate) fn is_hh_mm_ss(s: &str) -> bool {
     s.len() == 8
         && s.bytes().enumerate().all(|(i, b)| {
             if i % 3 == 2 {

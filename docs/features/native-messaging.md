@@ -1,6 +1,6 @@
 # Native messaging
 
-Covers: crates/meeting/src/native.rs, crates/meeting/tests/native_host.rs, extension/src/shared/native.ts, extension/src/shared/nativeClient.ts, extension/src/background/save.ts, extension/src/popup/JobsTab.tsx, extension/src/popup/useJobs.ts
+Covers: crates/meeting/src/native.rs, crates/meeting/src/context.rs, crates/meeting/tests/native_host.rs, extension/src/shared/native.ts, extension/src/shared/nativeClient.ts, extension/src/background/save.ts, extension/src/popup/JobsTab.tsx, extension/src/popup/useJobs.ts
 
 The extension talks to the `meeting` binary through Chrome native messaging. Chrome starts `meeting <origin>` (no subcommand: the host manifest can't add arguments; `chrome_args` in `main.rs` turns it into `native-host <origin>`) per `chrome.runtime.sendNativeMessage` call; the host answers and exits at end of input. See [../architecture.md](../architecture.md), [processing.md](processing.md), [setup.md](setup.md).
 
@@ -29,8 +29,8 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 
 | Request (`type`) | Fields | Success reply | Notes |
 |---|---|---|---|
-| `process` | `path`, `language` (`bn`\|`en`) | `{ok, job_id}` | `start_checked`; spawns `meeting process` |
-| `retry` | `job_id` | `{ok, job_id}` | Same as `process` on the old job's recording, no `--language`; `job_id` is the new job |
+| `process` | `path`, `language` (`bn`\|`en`), optional `context` | `{ok, job_id}` | `start_checked`; spawns `meeting process`. With `Host.context` on (`FEATURE_MEETING_CONTEXT=1` build), a `context` is checked by `context::check` and written to `context.json` beside the recording before the job file; a missing, rejected or unwritable context is logged by rule name only and never changes the reply. Off: `context` is ignored. |
+| `retry` | `job_id` | `{ok, job_id}` | Same as `process` on the old job's recording, no `--language`, no `context` (an existing `context.json` stays); `job_id` is the new job |
 | `archive` | `job_id` | `{ok}` | See [Archive](#archive) |
 | `trash` | `job_id` | `{ok}` | See [Trash](#trash) |
 | `list_jobs` | `limit` | `{ok, jobs: JobSummary[]}` | Newest `started_at` first via `JobStore::list` |

@@ -1,6 +1,6 @@
 # Rust crate: `meeting`
 
-Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
+Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
 
 One binary crate (`meeting`, edition 2024, no lib). Dependencies: `clap`, `serde`, `serde_json`, `toml`, `anyhow`, `tracing`, `tracing-subscriber`, `ureq` (HTTP), `keyring` (Keychain). External programs: `ffmpeg`, `claude`, `osascript`. See [architecture.md](architecture.md) for how the crate fits with the extension.
 
@@ -43,6 +43,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `secret.rs` | Keychain access for the Deepgram key | `deepgram_key`, `set_key`, `read_hidden` |
 | `install.rs` | `meeting install` | `install` |
 | `doctor.rs` | `meeting doctor` checks, manifest path | `checks`, `Env`, `manifest_path` |
+| `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut) | `Context`, `check` |
 | `native.rs` | Chrome native messaging host | `Host`, `serve` |
 | `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `stub`, `envelope`, `temp`, `VALID` |
 
@@ -56,7 +57,8 @@ Arrows are `crate::` imports in non-test code.
 flowchart TD
     main --> pipeline & native & install & doctor & notify & logging & secret & deepgram & jobs & config
     pipeline --> plan & extract & deepgram & transcript & summarise & summary_md & vault & meta & jobs & lock & config
-    native --> jobs & lock & doctor & config & vault & meta
+    native --> jobs & lock & doctor & config & vault & meta & context
+    context --> summarise
     install --> doctor & jobs & config
     summary_md --> summarise
     summarise --> meta

@@ -1,4 +1,5 @@
 mod config;
+mod context;
 mod deepgram;
 mod doctor;
 mod extract;
@@ -97,8 +98,6 @@ fn context_gate(value: Option<&str>) -> bool {
 
 /// Whether the tool was built with `FEATURE_MEETING_CONTEXT=1`. Read at build time
 /// because Chrome starts the host with launchd's environment, not the shell's.
-// ponytail: unused until #95 reads it.
-#[allow(dead_code)]
 pub fn context_enabled() -> bool {
     context_gate(option_env!("FEATURE_MEETING_CONTEXT"))
 }
@@ -153,6 +152,7 @@ fn run(command: Command) -> anyhow::Result<()> {
             key: secret::deepgram_key,
             manifest: doctor::manifest_path(&config::home()?),
             exe: std::env::current_exe()?,
+            context: context_enabled(),
         };
         return native::serve(
             &host,
