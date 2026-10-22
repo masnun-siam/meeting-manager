@@ -1,9 +1,10 @@
 import { crx } from '@crxjs/vite-plugin';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
-import manifest from './manifest.config.ts';
+import manifest, { flagFromEnv } from './manifest.config.ts';
 
 export default defineConfig({
+  define: { __FEATURE_MEETING_CONTEXT__: JSON.stringify(flagFromEnv()) },
   plugins: [react(), crx({ manifest })],
   build: {
     rollupOptions: {

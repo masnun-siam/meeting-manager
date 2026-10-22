@@ -32,6 +32,7 @@ Extension, from `extension/`:
 | `npm ci` | Install from lockfile |
 | `npm run dev` | Vite dev server with CRXJS hot reload |
 | `npm run build` | Builds the unpacked extension into `extension/dist/` |
+| `FEATURE_MEETING_CONTEXT=1 npm run build` | Same with the meeting-context feature on (manifest adds Meet access and the content script); unset is off; see `FLAGS.md` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | `biome check .` (CI runs `biome ci .`) |
 | `npm test` | `vitest run` (jsdom, setup in `src/test/setup.ts`) |
