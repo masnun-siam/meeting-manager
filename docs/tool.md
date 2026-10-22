@@ -76,6 +76,7 @@ flowchart TD
 - Dependency injection by struct fields and fn pointers, not traits: `Pipeline.key: fn() -> Result<String>`, `Deepgram { base_url, retry_delays }`, `native::Host { open, key, ... }`, `doctor::Env`. Tests swap the fields.
 - Subprocesses (`ffmpeg`, `claude`, `osascript`, `ps`) use absolute paths from config or constants, because Chrome starts the host with a bare `PATH`.
 - Writes that readers may see use write-to-`.tmp`-then-rename (`write_atomic`, `extract` uses `.part`, `vault::write_note` uses a dotted `.tmp`). `config.rs` `save_to` writes directly.
+- Feature flag: `FEATURE_MEETING_CONTEXT` is read once at build time in `main.rs` (`context_enabled`, on only for `1`) and passed to code as a plain `bool`.
 - Logging: `tracing` macros, file only, via `logging::init()`. See Gotchas.
 - Time: UTC strings built by hand (`jobs::format_utc`), no time crate.
 - Not removing a file that is absent: `remove` helpers treat `NotFound` as success (`pipeline.rs`, `lock.rs`).
