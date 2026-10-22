@@ -91,6 +91,18 @@ pub enum Language {
     En,
 }
 
+fn context_gate(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// Whether the tool was built with `FEATURE_MEETING_CONTEXT=1`. Read at build time
+/// because Chrome starts the host with launchd's environment, not the shell's.
+// ponytail: unused until #95 reads it.
+#[allow(dead_code)]
+pub fn context_enabled() -> bool {
+    context_gate(option_env!("FEATURE_MEETING_CONTEXT"))
+}
+
 fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = Cli::try_parse_from(chrome_args(std::env::args_os())).unwrap_or_else(|e| {
@@ -271,6 +283,14 @@ fn process(
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn the_gate_is_on_only_for_the_value_1() {
+        assert!(context_gate(Some("1")));
+        for off in [None, Some("0"), Some(""), Some("true")] {
+            assert!(!context_gate(off), "{off:?}");
+        }
+    }
 
     #[test]
     fn cli_is_valid() {
