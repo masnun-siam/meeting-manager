@@ -293,7 +293,7 @@ Checked by Siam from the vault notes of the first 10 Google Meet recordings afte
 
 ## Epics
 
-- **E1 Meeting context for the summary** — covers FR-1 to FR-11. Issue: —
+- **E1 Meeting context for the summary** — covers FR-1 to FR-11. Issue: #92
     - Order inside the epic: (1) flag, `FLAGS.md`, identity, hand-off and `context.json` (FR-1, FR-6, FR-11); (2) calendar setting and match (FR-7, FR-8); (3) context block, prompt and note metadata (FR-9, FR-10), which is usable with calendar data alone; (4) a spike on a real Meet call proving the roster, title and speaking indicator can be read; (5) Meet capture (FR-2–4); (6) FR-5.
     - Spike rule: if the speaking indicator can't be read reliably on a real call, FR-4 is dropped (a Change log line here), the naming goal relies on the roster and attendees, and the same Change log line restates the naming target in Success metrics (kept or lowered).
 

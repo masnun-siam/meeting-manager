@@ -4,4 +4,4 @@ Build-time env vars, default off. Merging deploys code dark; only a release turn
 
 | Flag | PRD | Epic | Default | Status |
 |---|---|---|---|---|
-| `FEATURE_MEETING_CONTEXT` | [meeting-context](docs/prds/meeting-context.md) | (pending) | off | off |
+| `FEATURE_MEETING_CONTEXT` | [meeting-context](docs/prds/meeting-context.md) | [#92](https://github.com/masnun-siam/meeting-manager/issues/92) | off | off |
