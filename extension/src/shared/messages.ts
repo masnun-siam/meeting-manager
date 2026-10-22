@@ -26,6 +26,37 @@ export type OffscreenEvent =
   | { type: 'offscreen_stopped'; startedAt: number; reason: StopReason }
   | { type: 'offscreen_error'; message: string };
 
+/** Service worker → Meet content script (`chrome.tabs.sendMessage`). `context_start` is answered `{ ok: true }`, `context_stop` with the final `ContextUpdate` payload (no `type`). */
+export type ContentCommand = { type: 'context_start'; startedAt: number } | { type: 'context_stop' };
+
+/** Everyone Meet shows speaking from `at` (wall-clock epoch ms) on; empty means nobody. */
+export interface SpeakingChange {
+  at: number;
+  names: string[];
+}
+
+/** Content script → service worker: what it has read so far. `participants` is the full union, `speaking` only the changes since the last batch. */
+export interface ContextUpdate {
+  type: 'context_update';
+  meetingTitle?: string | null;
+  participants?: { name: string; self: boolean }[];
+  speaking?: SpeakingChange[];
+  gaveUp?: boolean;
+}
+
+/** Content script → service worker on load; the reply is a `ContextHelloReply`. */
+export interface ContextHello {
+  type: 'context_hello';
+}
+
+export interface ContextHelloReply {
+  recording: boolean;
+  startedAt?: number;
+}
+
+/** Content script → service worker. */
+export type ContentEvent = ContextUpdate | ContextHello;
+
 /** The Record tab's last message after a save or hand-off (#26 writes these). */
 export type Notice =
   | { kind: 'saved' }

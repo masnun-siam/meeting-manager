@@ -11,6 +11,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | Service worker (module) | `manifest.config.ts` `background` | `src/background/serviceWorker.ts` | State owner. Registers all listeners at top level. |
 | Popup | `action.default_popup` | `src/popup/index.html` -> `main.tsx` -> `Popup` | Tabs: Record, Jobs. |
 | Offscreen document | `vite.config.ts` `rollupOptions.input` only; created at runtime by `ensureOffscreen()` | `src/offscreen/offscreen.html` -> `offscreen.ts` | Capture and mixing. No UI. |
+| Meet content script | `manifest.config.ts` `content_scripts`, only with `FEATURE_MEETING_CONTEXT=1` | `src/content/meet.ts` | Reads roster, title and speaking on Meet (stub until #105). |
 | Mic permission page | `vite.config.ts` `rollupOptions.input` only; opened by `openMicPermissionPage()` | `src/permission/permission.html` -> `main.tsx` -> `MicPermission` | One-time mic grant. |
 
 - Offscreen and permission pages are not in the manifest, so `vite.config.ts` lists them as extra build inputs. A new unreferenced page needs the same.
@@ -19,7 +20,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 
 ## Permissions
 
-`manifest.test.ts` asserts exactly these five.
+`manifest.test.ts` asserts exactly these five. A build with `FEATURE_MEETING_CONTEXT=1` (read in `manifest.config.ts` by `flagFromEnv`, `buildManifest(true)`) adds `activeTab`, `host_permissions` for `https://meet.google.com/*` and the content script; unset, the manifest is unchanged.
 
 | Permission | Used for |
 |---|---|
@@ -44,7 +45,9 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/popup/useRecorderStatus.ts` | Live status hook | `useRecorderStatus` |
 | `src/popup/JobsTab.tsx`, `useJobs.ts` | Jobs UI | see [features/native-messaging.md](features/native-messaging.md) |
 | `src/permission/MicPermission.tsx` | Mic grant page | `MicPermission` |
-| `src/shared/messages.ts` | All cross-context types | `PopupCommand`, `OffscreenCommand`, `OffscreenEvent`, `RecorderStatus`, `Notice`, `RECORDER_STATUS_KEY` |
+| `src/shared/flags.ts` | Build-time flag, defined in `vite.config.ts` | `meetingContextEnabled` |
+| `src/content/meet.ts` | Meet content script (flag-on build only) | stub |
+| `src/shared/messages.ts` | All cross-context types | `ContentCommand`, `ContentEvent`, `PopupCommand`, `OffscreenCommand`, `OffscreenEvent`, `RecorderStatus`, `Notice`, `RECORDER_STATUS_KEY` |
 | `src/shared/recordingState.ts` | Pure lifecycle | `transition`, `elapsedMs`, `remainingMs`, `RECORDING_CAP_MS` |
 | `src/shared/recordingFile.ts` | OPFS file per recording | `appendChunk`, `getRecordingFile`, `deleteRecordingFile`, `RECORDINGS_DIR` |
 | `src/shared/micPermission.ts` | Mic permission helpers | `micPermissionState`, `openMicPermissionPage`, `MIC_PERMISSION_PAGE` |
@@ -72,6 +75,8 @@ flowchart LR
 | Popup -> SW | `PopupCommand` | `start`, `pause`, `resume`, `stop` |
 | SW -> offscreen | `OffscreenCommand` | `offscreen_start`, `offscreen_pause`, `offscreen_resume`, `offscreen_stop`, `offscreen_file_url` |
 | Offscreen -> SW | `OffscreenEvent` | `offscreen_started`, `offscreen_stopped`, `offscreen_error` |
+| SW -> Meet content script | `ContentCommand` | `context_start`, `context_stop` |
+| Meet content script -> SW | `ContentEvent` | `context_update`, `context_hello` |
 
 - The SW routes by `type` using the `POPUP_COMMANDS` and `OFFSCREEN_EVENTS` sets and ignores the rest.
 - Fire-and-forget, except `offscreen_file_url`: the offscreen document replies via `sendResponse` with `{ url }` or `{ error }`.
