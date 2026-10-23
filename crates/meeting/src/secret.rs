@@ -264,6 +264,8 @@ mod tests {
             (format!("http://x/{SENTINEL}.ics"), "not https"),
             (format!("webcal://x/{SENTINEL}.ics"), "not https"),
             (SENTINEL.to_string(), "not https"),
+            (format!("httpé://{SENTINEL}.ics"), "not https"),
+            (format!("https://é/{SENTINEL}é"), "not an .ics address"),
             (address("basic"), "not an .ics address"),
             (address("basic?f=.ics"), "not an .ics address"),
             (address("basic#.ics"), "not an .ics address"),
