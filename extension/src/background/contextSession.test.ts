@@ -46,6 +46,9 @@ const paused: Segment[] = [
   { wallStart: T0 + 120_000, wallEnd: null, offsetMs: 60_000 },
 ];
 
+// The same, stopped at 150 s.
+const stopped: Segment[] = [paused[0], { ...paused[1], wallEnd: T0 + 150_000 }];
+
 const change = (s: number, ...names: string[]) => ({ at: T0 + s * 1000, names });
 const interval = (from: number, to: number, ...names: string[]) => ({ fromMs: from * 1000, toMs: to * 1000, names });
 
@@ -71,26 +74,50 @@ describe('applyBatch speaking', () => {
     expect(applyBatch(first, { speaking: [change(10)] }).speaking).toEqual([interval(0, 10, 'A')]);
   });
 
-  it('maps each change across a pause inside one batch and drops changes while paused', () => {
+  it('maps each change across a pause inside one batch; a change in the pause starts at Resume', () => {
     const next = applyBatch(context({ segments: paused }), {
       speaking: [change(10, 'A'), change(90, 'B'), change(130, 'A'), change(140)],
     });
-    // A ends at the pause; B (during the pause) is dropped; A again from its next change.
-    expect(next.speaking).toEqual([interval(10, 60, 'A'), interval(70, 80, 'A')]);
+    expect(next.speaking).toEqual([interval(10, 60, 'A'), interval(60, 70, 'B'), interval(70, 80, 'A')]);
   });
 
-  it('ends an interval still open in a closed segment at its end at hand-off', () => {
-    const next = settleContext(applyBatch(context({ segments: paused }), { speaking: [change(50, 'A')] }));
-    expect(next.speaking).toEqual([interval(50, 60, 'A')]);
+  it('keeps the interval of a speaker open through Pause and Resume as one', () => {
+    const next = applyBatch(context({ segments: paused }), { speaking: [change(10, 'A'), change(130)] });
+    expect(next.speaking).toEqual([interval(10, 70, 'A')]);
+  });
+
+  it('gives a speaker who starts in the pause an interval from Resume', () => {
+    const next = applyBatch(context({ segments: paused }), { speaking: [change(90, 'B'), change(140)] });
+    expect(next.speaking).toEqual([interval(60, 80, 'B')]);
+  });
+
+  it('gives a speaker who stops in the pause nothing after Resume', () => {
+    const next = applyBatch(context({ segments: paused }), { speaking: [change(10, 'A'), change(90)] });
+    expect(next.speaking).toEqual([interval(10, 60, 'A')]);
+  });
+
+  it('covers a speaker open from before the pause until a change after Resume (QA repro)', () => {
+    const next = applyBatch(context({ segments: paused }), {
+      speaking: [change(10, 'A'), change(50, 'B'), change(128)],
+    });
+    expect(next.speaking).toEqual([interval(10, 50, 'A'), interval(50, 68, 'B')]);
+  });
+
+  it('ends an interval still open at the last segment end at hand-off', () => {
+    const next = settleContext(applyBatch(context({ segments: stopped }), { speaking: [change(50, 'A')] }));
+    expect(next.speaking).toEqual([interval(50, 90, 'A')]);
     expect(next.openSpeaking).toBeNull();
     expect(settleContext(context())).toEqual(context());
+    expect(
+      settleContext(applyBatch(context({ segments: paused }), { speaking: [change(50, 'A')] })).openSpeaking,
+    ).toEqual(change(50, 'A'));
   });
 
   it('lets a late batch end an interval before the pause, without overlap', () => {
-    const late = applyBatch(context({ segments: paused, openSpeaking: change(10, 'A') }), {
+    const late = applyBatch(context({ segments: stopped, openSpeaking: change(10, 'A') }), {
       speaking: [change(56, 'B')],
     });
-    expect(settleContext(late).speaking).toEqual([interval(10, 56, 'A'), interval(56, 60, 'B')]);
+    expect(settleContext(late).speaking).toEqual([interval(10, 56, 'A'), interval(56, 90, 'B')]);
   });
 
   it('drops intervals under 1 s', () => {
@@ -203,13 +230,13 @@ describe('storage and the content script', () => {
 
   const state = () => stored[MEETING_CONTEXT_KEY] as MeetingContextState;
 
-  it('closes and opens segments; an interval open at the pause ends there', async () => {
+  it('closes and opens segments; an interval open at the pause continues from Resume', async () => {
     stored[MEETING_CONTEXT_KEY] = context({ openSpeaking: change(10, 'A') });
     await closeSegment(T0 + 60_000);
     await closeSegment(T0 + 70_000);
     await openSegment(T0 + 120_000, 60_000);
     expect(state().segments).toEqual(paused);
-    expect(applyBatch(state(), { speaking: [change(130, 'B')] }).speaking).toEqual([interval(10, 60, 'A')]);
+    expect(applyBatch(state(), { speaking: [change(130, 'B')] }).speaking).toEqual([interval(10, 70, 'A')]);
   });
 
   it('sends context_start to a Meet tab and leaves the state alone on success', async () => {

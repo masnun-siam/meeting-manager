@@ -84,43 +84,44 @@ function addInterval(state: MeetingContextState, interval: MeetingContextState['
   }
 }
 
-/** Ends the open interval at `wallMs`, or at its segment's end if that comes first. */
+/** Ends the open set at `wallMs`: its wall-clock span is mapped onto every segment it overlaps, so pause time yields nothing. */
 function closeSpeaking(state: MeetingContextState, wallMs: number): void {
   const open = state.openSpeaking;
   state.openSpeaking = null;
-  const segment = open && segmentAt(state.segments, open.at);
-  if (!open || !segment) return;
-  const end = Math.min(wallMs, segment.wallEnd ?? Number.POSITIVE_INFINITY);
-  addInterval(state, {
-    fromMs: segment.offsetMs + (open.at - segment.wallStart),
-    toMs: segment.offsetMs + (end - segment.wallStart),
-    names: open.names,
-  });
+  if (!open) return;
+  for (const s of state.segments) {
+    const from = Math.max(open.at, s.wallStart);
+    const to = Math.min(wallMs, s.wallEnd ?? Number.POSITIVE_INFINITY);
+    if (to > from) {
+      addInterval(state, {
+        fromMs: s.offsetMs + (from - s.wallStart),
+        toMs: s.offsetMs + (to - s.wallStart),
+        names: open.names,
+      });
+    }
+  }
 }
 
 /**
- * For the hand-off: an interval still open in a closed segment ends at that segment's end.
- * Not done at pause or stop, so a late batch with earlier changes can still end it sooner (the next change in
- * another segment ends it at the pause anyway).
+ * For the hand-off: an interval still open ends at the last segment's end (Stop).
+ * Not done at pause or stop, so a late batch with earlier changes can still end it sooner.
  */
 export function settleContext(state: MeetingContextState): MeetingContextState {
-  const wallEnd = state.openSpeaking && segmentAt(state.segments, state.openSpeaking.at)?.wallEnd;
-  if (typeof wallEnd !== 'number') return state;
+  const wallEnd = state.segments.at(-1)?.wallEnd;
+  if (!state.openSpeaking || typeof wallEnd !== 'number') return state;
   const next = structuredClone(state);
   closeSpeaking(next, wallEnd);
   return next;
 }
 
 function applySpeaking(state: MeetingContextState, change: { at: number; names: string[] }): void {
-  if (mapToRecordingMs(state.segments, change.at) === null) return;
   let names = cleanNames(change.names);
   if (names.length > MAX_SPEAKERS) {
     names = names.slice(0, MAX_SPEAKERS);
     markTruncated(state, 'speaking');
   }
   const open = state.openSpeaking;
-  const sameSegment = open && segmentAt(state.segments, open.at) === segmentAt(state.segments, change.at);
-  if (sameSegment && sameNames(open.names, names)) return;
+  if (open && sameNames(open.names, names)) return;
   closeSpeaking(state, change.at);
   state.openSpeaking = names.length > 0 ? { at: change.at, names } : null;
 }
