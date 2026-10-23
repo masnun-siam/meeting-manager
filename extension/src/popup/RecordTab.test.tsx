@@ -1,9 +1,12 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Notice, RecorderStatus } from '../shared/messages';
+import type { MeetingContextState, Notice, RecorderStatus } from '../shared/messages';
 import { initialRecordingState, type RecordingState } from '../shared/recordingState';
 import { RecordTab } from './RecordTab';
+
+const flag = vi.hoisted(() => ({ on: false }));
+vi.mock('../shared/flags', () => ({ meetingContextEnabled: () => flag.on }));
 
 const T0 = new Date('2026-01-01T10:00:00Z').getTime();
 
@@ -15,26 +18,38 @@ const recording = (extra: Partial<RecorderStatus> = {}) =>
   status({ phase: 'recording', startedAt: T0 - 240_000, recordedMs: 0, resumedAt: T0 - 240_000 }, extra);
 
 let stored: RecorderStatus | null;
+let storedContext: MeetingContextState | null;
 let local: Record<string, unknown>;
-let listener: ((changes: Record<string, { newValue?: unknown }>) => void) | undefined;
+let listeners: ((changes: Record<string, { newValue?: unknown }>) => void)[];
+const sessionGet = vi.fn();
+
+const listener = (changes: Record<string, { newValue?: unknown }>) => {
+  for (const fn of listeners) fn(changes);
+};
 const sendMessage = vi.fn();
 const localSet = vi.fn();
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(T0);
+  flag.on = false;
   stored = null;
+  storedContext = null;
   local = {};
-  listener = undefined;
+  listeners = [];
+  sessionGet.mockReset().mockImplementation(async (key: string) => {
+    const value = { recorder: stored, meeting_context: storedContext }[key];
+    return value ? { [key]: value } : {};
+  });
   sendMessage.mockReset().mockResolvedValue(undefined);
   localSet.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal('chrome', {
     storage: {
       session: {
-        get: vi.fn(async () => (stored ? { recorder: stored } : {})),
+        get: sessionGet,
         onChanged: {
           addListener: vi.fn((fn) => {
-            listener = fn;
+            listeners.push(fn);
           }),
           removeListener: vi.fn(),
         },
@@ -176,7 +191,7 @@ describe('RecordTab', () => {
     setup();
     await screen.findByRole('button', { name: 'Start' });
 
-    act(() => listener?.({ recorder: { newValue: recording() } }));
+    act(() => listener({ recorder: { newValue: recording() } }));
 
     expect(await screen.findByRole('timer')).toHaveTextContent('● REC');
     expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
@@ -189,5 +204,178 @@ describe('RecordTab', () => {
     await user.click(await screen.findByRole('button', { name: 'Start' }));
 
     expect(await screen.findByText('Could not reach the recorder: Receiving end does not exist.')).toBeInTheDocument();
+  });
+
+  describe('context line', () => {
+    const paused = () => status({ phase: 'paused', startedAt: T0 - 300_000, recordedMs: 61_000 });
+
+    function context(
+      extra: Partial<MeetingContextState> = {},
+      platform: 'meet' | 'zoom' = 'meet',
+    ): MeetingContextState {
+      return {
+        identity: {
+          platform,
+          url: null,
+          meeting_id: null,
+          tab_title: 'Meet - abc-defg-hij',
+          started_at_ms: T0,
+          utc_offset_min: 360,
+          time_zone: null,
+        },
+        segments: [],
+        meetingTitle: null,
+        participants: [],
+        speaking: [],
+        openSpeaking: null,
+        truncated: [],
+        capture: 'reading',
+        reloadHint: false,
+        ...extra,
+      };
+    }
+
+    const people = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `P${i}`, self: false }));
+
+    function visibleLine() {
+      return screen.getByRole('status').querySelector('[aria-hidden="true"]')?.textContent;
+    }
+
+    function announced() {
+      return screen.getByRole('status').querySelector('span')?.textContent;
+    }
+
+    beforeEach(() => {
+      flag.on = true;
+    });
+
+    it.each<[string, Partial<MeetingContextState>, string, string]>([
+      ['reading', {}, 'Meet: reading participants…', 'Meet: reading participants…'],
+      [
+        'captured with a meeting title',
+        { capture: 'captured', meetingTitle: 'Weekly sync', participants: people(3) },
+        'Weekly sync · 3 seen',
+        'Meet details captured',
+      ],
+      [
+        'captured with only a tab title',
+        { capture: 'captured', participants: people(2) },
+        'Meet - abc-defg-hij · 2 seen',
+        'Meet details captured',
+      ],
+      [
+        'unavailable',
+        { capture: 'unavailable' },
+        "Meet details unavailable — names won't be captured. Recording is fine.",
+        "Meet details unavailable — names won't be captured. Recording is fine.",
+      ],
+      [
+        'unavailable with the reload hint',
+        { capture: 'unavailable', reloadHint: true },
+        "Meet details unavailable — names won't be captured. Recording is fine. Reload the Meet tab next time.",
+        "Meet details unavailable — names won't be captured. Recording is fine. Reload the Meet tab next time.",
+      ],
+      [
+        'captured after the reload hint was set',
+        { capture: 'captured', reloadHint: true, participants: people(1) },
+        'Meet - abc-defg-hij · 1 seen',
+        'Meet details captured',
+      ],
+    ])('shows %s', async (_, extra, text, announce) => {
+      stored = recording();
+      storedContext = context(extra);
+      setup();
+
+      await waitFor(() => expect(visibleLine()).toBe(text));
+      expect(announced()).toBe(announce);
+    });
+
+    it('shows just the count with no title', async () => {
+      stored = recording();
+      storedContext = context({ capture: 'captured', participants: people(4) });
+      storedContext.identity.tab_title = null;
+      setup();
+
+      await waitFor(() => expect(visibleLine()).toBe('4 seen'));
+    });
+
+    it('shows the other-sites line, without a prefix when the tab title is null', async () => {
+      stored = recording();
+      storedContext = context({}, 'zoom');
+      storedContext.identity.tab_title = 'Zoom Meeting';
+      setup();
+
+      await waitFor(() => expect(visibleLine()).toBe('Zoom Meeting · names are captured on Google Meet only'));
+      expect(announced()).toBe('Zoom Meeting · names are captured on Google Meet only');
+
+      const untitled = context({}, 'zoom');
+      untitled.identity.tab_title = null;
+      act(() => listener({ meeting_context: { newValue: untitled } }));
+      await waitFor(() => expect(visibleLine()).toBe('names are captured on Google Meet only'));
+    });
+
+    it('announces only state changes, not a rising count', async () => {
+      stored = recording();
+      storedContext = context();
+      setup();
+      await waitFor(() => expect(visibleLine()).toBe('Meet: reading participants…'));
+
+      act(() => listener({ meeting_context: { newValue: context({ capture: 'captured', participants: people(1) }) } }));
+      await waitFor(() => expect(visibleLine()).toBe('Meet - abc-defg-hij · 1 seen'));
+      const span = screen.getByRole('status').querySelector('span');
+      expect(span?.textContent).toBe('Meet details captured');
+
+      act(() => listener({ meeting_context: { newValue: context({ capture: 'captured', participants: people(5) }) } }));
+      await waitFor(() => expect(visibleLine()).toBe('Meet - abc-defg-hij · 5 seen'));
+      expect(screen.getByRole('status').querySelector('span')).toBe(span);
+      expect(announced()).toBe('Meet details captured');
+
+      act(() => listener({ meeting_context: { newValue: context({ capture: 'unavailable' }) } }));
+      expect(announced()).toBe("Meet details unavailable — names won't be captured. Recording is fine.");
+    });
+
+    it('keeps the line while paused', async () => {
+      stored = paused();
+      storedContext = context({ capture: 'captured', participants: people(2) });
+      setup();
+
+      await waitFor(() => expect(visibleLine()).toBe('Meet - abc-defg-hij · 2 seen'));
+    });
+
+    it.each([
+      ['idle', status(initialRecordingState)],
+      ['saving', status({ phase: 'saving', startedAt: T0 - 60_000, recordedMs: 60_000, reason: 'user' })],
+    ])('shows no line when %s', async (_, value) => {
+      stored = value;
+      storedContext = context({ capture: 'captured', participants: people(2) });
+      setup();
+
+      await waitFor(() => expect(sessionGet).toHaveBeenCalledWith('meeting_context'));
+      await screen.findByRole('combobox', { name: 'Language' });
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    });
+
+    it('clears the line when the recording leaves recording and paused', async () => {
+      stored = recording();
+      storedContext = context();
+      setup();
+      await waitFor(() => expect(visibleLine()).toBe('Meet: reading participants…'));
+
+      act(() => listener({ recorder: { newValue: status(initialRecordingState) } }));
+
+      await screen.findByRole('button', { name: 'Start' });
+      expect(visibleLine()).toBeUndefined();
+    });
+
+    it('neither reads the context nor shows a line with the flag off', async () => {
+      flag.on = false;
+      stored = recording();
+      storedContext = context({ capture: 'captured', participants: people(2) });
+      setup();
+
+      await screen.findByRole('timer');
+      expect(sessionGet).not.toHaveBeenCalledWith('meeting_context');
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    });
   });
 });
