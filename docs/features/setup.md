@@ -13,7 +13,7 @@ First-run order: `meeting install`, `meeting config set-key`, `meeting doctor`. 
 3. Writes the native host manifest atomically (`jobs::write_atomic`).
 4. Writes the config file. An existing `recordings_dir` is kept; otherwise `~/Downloads/Meetings`.
 5. Warns if `claude` is not logged in; prints where recordings are read from.
-6. `main.rs` then prints the next step (`config set-key` if no key is stored, else `doctor`).
+6. `main.rs` then prints the next step (`config set-key` if no key is stored, else `doctor`; `install_next`). With `FEATURE_MEETING_CONTEXT=1` one more line names `meeting config set-calendar` as optional.
 
 Re-running is safe: existing values become the defaults.
 
@@ -49,6 +49,16 @@ TOML, no secrets (`config::Config`). Paths are absolute because Chrome starts th
 - Stored in the macOS Keychain through the `keyring` crate: service `meeting-manager`, account `deepgram`.
 - `secret::deepgram_key` reads it; a missing item errors with "run `meeting config set-key`". The value is never logged or printed.
 
+## Calendar address (`meeting config set-calendar`)
+
+Only in a build with `FEATURE_MEETING_CONTEXT=1`. With the gate off the subcommand is hidden from `meeting config --help` and `run` refuses it with "unrecognized subcommand 'set-calendar'" (clap cannot remove a derived subcommand; `cli` in `main.rs` hides it).
+
+- `secret::set_calendar` holds the logic; `main.rs` passes the hidden-prompt answer, the Keychain entry, `fetch_calendar` (`calendar_fetch::fetch` with `Policy::REAL`) and stdout.
+- Trimmed answer. Empty: removes a stored address and prints "Removed.", or "Nothing stored.".
+- Refused before any fetch: not starting with `https://` (any case) gives "not https"; a path (after the host, before any `?` or `#`) not ending in `.ics` (any case) gives "not an .ics address". Both add "expected an https:// address whose path ends in .ics".
+- Then fetched and parsed (`ical::parse`): a failed fetch gives "could not fetch: <kind>" (`FetchError` text), a parse error "not an iCalendar file". Only after both succeed is it stored (scheme lower-cased) and "Saved. Found N events." printed.
+- Stored in the Keychain: service `meeting-manager`, account `calendar-ics`; `secret::calendar_address` reads it (`None` when absent). Never in `config.toml`, the log or any output.
+
 ## `meeting doctor`
 
 Runs `doctor::checks`; prints `✓ name` or `✗ name: fix`; exits non-zero with "N checks failed". The same list is the native `health` reply.
@@ -62,5 +72,6 @@ Runs `doctor::checks`; prints `✓ name` or `✗ name: fix`; exits non-zero with
 | `claude` | `claude_path` is a file | Install Claude Code, then `meeting install` |
 | `claude_login` | `claude auth status --json` exits 0 with `loggedIn: true` | Run `claude auth login` |
 | `native_host` | Manifest JSON equals `expected_manifest(current exe, config.extension_id)` | Run `meeting install` |
+| `calendar` | Only with `FEATURE_MEETING_CONTEXT=1`. No address stored, or the stored one fetches (20 s, `Policy::REAL`) and parses | Names the cause (`offline`, `rejected (http <status>)`, `not an iCalendar feed`, `failed (<kind>)`, Keychain unreadable) and `meeting config set-calendar`; never the address |
 
-Without a config, the five checks after `deepgram_key` all fail with the install fix. Order is as listed.
+Without a config, the five checks after `deepgram_key` all fail with the install fix; `calendar` does not need the config and still runs. Order is as listed. An unreachable calendar can make `doctor` and `health` take up to 20 s.
