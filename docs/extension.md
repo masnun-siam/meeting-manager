@@ -50,7 +50,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock`, `MEET_CODE` |
 | `src/shared/flags.ts` | Build-time flag, defined in `vite.config.ts` | `meetingContextEnabled` |
 | `src/content/meet.ts` | Meet content script (flag-on build only): 1 s reads, 10 s batches, 60 s give-up, `context_hello` resume | `chrome.runtime.onMessage` listener |
-| `src/content/meetReader.ts` | Pure Meet page reads | `readRoster`, `readTitle` |
+| `src/content/meetReader.ts` | Pure Meet page reads | `readRoster`, `readTitle`, `readSpeaking`, `diffSpeaking` |
 | `src/shared/messages.ts` | All cross-context types | `ContentCommand`, `ContentEvent`, `PopupCommand`, `OffscreenCommand`, `OffscreenEvent`, `RecorderStatus`, `Notice`, `RECORDER_STATUS_KEY` |
 | `src/shared/recordingState.ts` | Pure lifecycle | `transition`, `elapsedMs`, `remainingMs`, `RECORDING_CAP_MS` |
 | `src/shared/recordingFile.ts` | OPFS file per recording | `appendChunk`, `getRecordingFile`, `deleteRecordingFile`, `RECORDINGS_DIR` |
@@ -140,7 +140,7 @@ Roster and title reading is implemented in `src/content/meetReader.ts` (#105): t
 
 Findings:
 
-- **Panel closed:** not captured. Each grid tile also carries the name in a `span.notranslate`, but whether the grid alone lists everyone (pagination) is untested; #105 should keep the panel as the source and fall back to tiles.
+- **Panel closed:** not captured. Each grid tile also carries the name in a `span.notranslate`, but the people panel is the only source (PRD Non-goal: no tile fallback; the lobby also shows an own tile and tiles have no `(You)` marker). The Record tab line tells the user to open the panel (#127).
 - **Left participants:** the roster only shows who is present now, so the content script builds the union itself.
 - **Own name:** readable. Meet shows the real name plus `(You)`, so `self` can be set from the `(You)` item.
 - **Ad-hoc meeting, no title:** Meet shows the meeting code as the title (`Meet - abc-defg-hij` in `document.title` and in the bottom-bar title `div`). #105 must treat a title that matches `^[a-z]{3}-[a-z]{4}-[a-z]{3}$` as no title (null). `meet-ad-hoc.html` is the real capture (panel closed, only your own tile); `meet-no-title.html` is the title removed by hand.
@@ -148,4 +148,4 @@ Findings:
 - **Mic state is not speech:** the item's mic wrapper classes (`FTMc0c`, `biFrsd`) and the mute button `aria-label` ("Mute <name>'s microphone" versus "You can't unmute someone else") follow mic on/off only. A silent unmuted participant has neither speaking class (`sxlEM` alone also appears when unmuted).
 - **Two speakers:** `meet-two-speakers.html` was captured with two guests unmuted, but only one tile carried the speaking classes, so at most one speaker is flagged at a time (or only one was talking); two simultaneous speakers cannot be told apart. #106 must tolerate one flagged tile at a time.
 - **Not tested:** shared-room tile, presentation tile, join/leave, compact layout, tile pagination, panel-closed call with several people.
-- **Fixture notes:** `meet-full.html` and the derived fixtures have the speaking classes stripped (the host's own tile carried them in the source capture). Scripts, styles, URLs, `js*` attributes and svg contents were removed. The lobby guest is named `Guest Example`.
+- **Fixture notes:** `meet-full.html` and the derived fixtures have the speaking classes stripped (the host's own tile carried them in the source capture). Scripts, styles, URLs, page meta tokens, `js*` attributes and svg contents were removed. The lobby guest is named `Guest Example`.
