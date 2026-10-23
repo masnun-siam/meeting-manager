@@ -888,4 +888,19 @@ mod tests {
         let err = parse(&event("DESCRIPTION:secret\r\nRRULE:secret\r\n")).unwrap_err();
         assert_eq!(err.to_string(), "cannot read the calendar: bad RRULE");
     }
+
+    #[test]
+    fn every_truncation_of_a_feed_is_an_error_not_a_panic() {
+        let bytes = GOOGLE.as_bytes();
+        let end = GOOGLE
+            .rfind("END:VCALENDAR")
+            .expect("fixture ends the calendar");
+        for len in 0..end {
+            let text = String::from_utf8_lossy(bytes.get(..len).expect("in range"));
+            assert!(
+                parse(&text).is_err(),
+                "prefix of {len} bytes should be an error"
+            );
+        }
+    }
 }
