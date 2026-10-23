@@ -1,7 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MEETING_CONTEXT_KEY, RECORDER_STATUS_KEY, type RecorderStatus } from '../shared/messages';
+import {
+  type ContextUpdate,
+  MEETING_CONTEXT_KEY,
+  type MeetingContextState,
+  RECORDER_STATUS_KEY,
+  type RecorderStatus,
+} from '../shared/messages';
 import { MIC_PERMISSION_PAGE } from '../shared/micPermission';
-import { handleOffscreenEvent, handlePopupCommand, handleTabRemoved, OFFSCREEN_PAGE } from './recordingControl';
+import {
+  handleContentEvent,
+  handleOffscreenEvent,
+  handlePopupCommand,
+  handleTabRemoved,
+  OFFSCREEN_PAGE,
+} from './recordingControl';
 import { saveRecording } from './save';
 
 const flag = vi.hoisted(() => ({ on: false }));
@@ -15,6 +27,7 @@ vi.mock('./save', async (importOriginal) => ({
 
 const T0 = new Date('2026-01-01T10:00:00Z').getTime();
 const TAB = 7;
+const EXTENSION = 'ext-id';
 
 let stored: Record<string, unknown>;
 let hasDocument: boolean;
@@ -27,6 +40,7 @@ const closeDocument = vi.fn();
 const sendMessage = vi.fn();
 const tabsCreate = vi.fn();
 const tabsQuery = vi.fn();
+const tabsSendMessage = vi.fn();
 
 const status = () => stored[RECORDER_STATUS_KEY] as RecorderStatus;
 const sent = () => sendMessage.mock.calls.map(([m]) => m.type);
@@ -43,7 +57,15 @@ beforeEach(() => {
   permission = 'granted';
   flag.on = false;
   failContextWrite = false;
-  for (const mock of [setBadgeText, getMediaStreamId, createDocument, closeDocument, sendMessage, tabsCreate]) {
+  for (const mock of [
+    setBadgeText,
+    getMediaStreamId,
+    createDocument,
+    closeDocument,
+    sendMessage,
+    tabsCreate,
+    tabsSendMessage,
+  ]) {
     mock.mockReset();
   }
   getMediaStreamId.mockResolvedValue('stream-1');
@@ -69,7 +91,7 @@ beforeEach(() => {
       },
     },
     action: { setBadgeText, setBadgeBackgroundColor: vi.fn() },
-    tabs: { query: tabsQuery, create: tabsCreate },
+    tabs: { query: tabsQuery, create: tabsCreate, sendMessage: tabsSendMessage },
     tabCapture: { getMediaStreamId },
     offscreen: {
       hasDocument: async () => hasDocument,
@@ -77,7 +99,7 @@ beforeEach(() => {
       closeDocument,
       Reason: { USER_MEDIA: 'USER_MEDIA' },
     },
-    runtime: { sendMessage, getURL: (path: string) => `chrome-extension://id/${path}` },
+    runtime: { id: EXTENSION, sendMessage, getURL: (path: string) => `chrome-extension://id/${path}` },
   });
 });
 
@@ -220,8 +242,119 @@ describe('meeting context', () => {
     flag.on = false;
     await startRecording();
     expect(stored[MEETING_CONTEXT_KEY]).toBeUndefined();
+    await handleContentEvent(update, recordedTab);
     await stop();
     expect(vi.mocked(saveRecording).mock.lastCall?.[0].context).toBeUndefined();
+    expect(tabsSendMessage).not.toHaveBeenCalled();
+  });
+
+  const recordedTab = { id: EXTENSION, tab: { id: TAB } as chrome.tabs.Tab };
+  const update: ContextUpdate = { type: 'context_update', participants: [{ name: 'Ann', self: true }] };
+  const context = () => stored[MEETING_CONTEXT_KEY] as MeetingContextState;
+
+  it('sends context_start to a Meet tab after Start', async () => {
+    tabsSendMessage.mockResolvedValue({ ok: true });
+    await startRecording();
+    expect(tabsSendMessage).toHaveBeenCalledWith(TAB, { type: 'context_start', startedAt: T0 });
+    expect(context()).toMatchObject({ capture: 'reading', reloadHint: false });
+  });
+
+  it('sends no context_start to a Zoom tab', async () => {
+    tabsQuery.mockResolvedValue([{ id: TAB, url: 'https://app.zoom.us/wc/123456789/join', title: 'Zoom' }]);
+    await startRecording();
+    expect(tabsSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps recording when context_start throws, with the reload hint', async () => {
+    tabsSendMessage.mockRejectedValue(new Error('Could not establish connection'));
+    await startRecording();
+    expect(status().state.phase).toBe('recording');
+    expect(context()).toMatchObject({ capture: 'unavailable', reloadHint: true });
+  });
+
+  it('closes and opens segments on pause, resume and stop', async () => {
+    await startRecording();
+    vi.setSystemTime(T0 + 60_000);
+    await handlePopupCommand({ type: 'pause' });
+    vi.setSystemTime(T0 + 120_000);
+    await handlePopupCommand({ type: 'resume' });
+    vi.setSystemTime(T0 + 150_000);
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handlePopupCommand({ type: 'stop' });
+    expect(context().segments).toEqual([
+      { wallStart: T0, wallEnd: T0 + 60_000, offsetMs: 0 },
+      { wallStart: T0 + 120_000, wallEnd: T0 + 150_000, offsetMs: 60_000 },
+    ]);
+  });
+
+  it('merges batches from the recorded tab while recording or paused', async () => {
+    await startRecording();
+    await handleContentEvent(update, recordedTab);
+    await handlePopupCommand({ type: 'pause' });
+    await handleContentEvent({ type: 'context_update', participants: [{ name: 'Bob', self: false }] }, recordedTab);
+    expect(context()).toMatchObject({
+      capture: 'captured',
+      participants: [
+        { name: 'Ann', self: true },
+        { name: 'Bob', self: false },
+      ],
+    });
+  });
+
+  it.each([
+    ['another tab', { id: EXTENSION, tab: { id: TAB + 1 } as chrome.tabs.Tab }],
+    ['another extension', { id: 'other', tab: { id: TAB } as chrome.tabs.Tab }],
+    ['no tab', { id: EXTENSION }],
+  ])('ignores a batch from %s', async (_, sender) => {
+    await startRecording();
+    const before = structuredClone(context());
+    await handleContentEvent(update, sender);
+    expect(context()).toEqual(before);
+    expect(await handleContentEvent({ type: 'context_hello' }, sender)).toEqual({ recording: false });
+  });
+
+  it('ignores batches while saving and after hand-off', async () => {
+    await startRecording();
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handlePopupCommand({ type: 'stop' });
+    const before = structuredClone(context());
+    await handleContentEvent(update, recordedTab);
+    expect(context()).toEqual(before);
+    expect(await handleContentEvent({ type: 'context_hello' }, recordedTab)).toEqual({ recording: false });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    await handleContentEvent(update, recordedTab);
+    expect(stored[MEETING_CONTEXT_KEY]).toBeUndefined();
+  });
+
+  it('answers context_hello from the recorded tab, so a reloaded tab carries on', async () => {
+    await startRecording();
+    await handleContentEvent(update, recordedTab);
+    expect(await handleContentEvent({ type: 'context_hello' }, recordedTab)).toEqual({
+      recording: true,
+      startedAt: T0,
+    });
+    await handleContentEvent({ type: 'context_update', participants: [{ name: 'Bob', self: false }] }, recordedTab);
+    expect(context().participants.map((p) => p.name)).toEqual(['Ann', 'Bob']);
+  });
+
+  it('merges the final batch before the hand-off', async () => {
+    await startRecording();
+    tabsSendMessage.mockResolvedValue(update);
+    await stop();
+    expect(tabsSendMessage).toHaveBeenLastCalledWith(TAB, { type: 'context_stop' });
+    expect(saveRecording).toHaveBeenLastCalledWith(
+      expect.objectContaining({ context: expect.objectContaining({ participants: [{ name: 'Ann', self: true }] }) }),
+    );
+  });
+
+  it('does not ask a closed tab for the final batch', async () => {
+    await startRecording();
+    tabsSendMessage.mockClear();
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handleTabRemoved(TAB);
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'tab_closed' });
+    expect(tabsSendMessage).not.toHaveBeenCalled();
+    expect(saveRecording).toHaveBeenCalled();
   });
 });
 
