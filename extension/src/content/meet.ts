@@ -1,7 +1,14 @@
-// Meet content script: idle until the service worker sends `context_start`, then reads the roster and title
-// once a second and reports them in batches. A content script lives as long as its page, so state is module-level.
-import type { ContentCommand, ContextHello, ContextHelloReply, ContextUpdate } from '../shared/messages';
-import { readRoster, readTitle } from './meetReader';
+// Meet content script: idle until the service worker sends `context_start`, then reads the roster, title and who
+// is speaking once a second and reports them in batches. A content script lives as long as its page, so state is
+// module-level.
+import type {
+  ContentCommand,
+  ContextHello,
+  ContextHelloReply,
+  ContextUpdate,
+  SpeakingChange,
+} from '../shared/messages';
+import { diffSpeaking, readRoster, readSpeaking, readTitle } from './meetReader';
 
 const READ_MS = 1_000;
 const BATCH_EVERY = 10; // reads, so 10 s
@@ -16,6 +23,8 @@ interface Session {
   selfName: string | null;
   title: string | null;
   sent: string;
+  speaking: string[];
+  pendingSpeaking: SpeakingChange[];
   gaveUp: boolean;
 }
 
@@ -35,6 +44,12 @@ function readPage(s: Session): void {
     if (p.self && s.selfName === null) s.selfName = p.name;
   }
   s.title = guarded(() => readTitle(document), null) ?? s.title;
+  const speaking = readSpeaking(document);
+  const change = diffSpeaking(s.speaking, speaking, Date.now());
+  if (change) {
+    s.speaking = speaking;
+    s.pendingSpeaking.push(change);
+  }
 }
 
 function collected(s: Session): Batch {
@@ -44,10 +59,15 @@ function collected(s: Session): Batch {
   return batch;
 }
 
-/** What changed since the last batch sent, or null. */
-function unsent(s: Session): Batch | null {
+/** What changed since the last batch sent, or null. Marks it sent. */
+function takeUnsent(s: Session): Batch | null {
   const batch = collected(s);
-  return Object.keys(batch).length > 0 && JSON.stringify(batch) !== s.sent ? batch : null;
+  const json = JSON.stringify(batch);
+  const changed = Object.keys(batch).length > 0 && json !== s.sent;
+  if (!changed && s.pendingSpeaking.length === 0) return null;
+  s.sent = json;
+  if (s.pendingSpeaking.length > 0) batch.speaking = s.pendingSpeaking.splice(0);
+  return batch;
 }
 
 function send(message: ContextUpdate | ContextHello): Promise<unknown> {
@@ -63,9 +83,8 @@ function tick(s: Session): void {
   s.ticks++;
   if (!s.gaveUp || s.ticks % BATCH_EVERY === 0) readPage(s);
   if (s.ticks % BATCH_EVERY !== 0) return;
-  const batch = unsent(s);
+  const batch = takeUnsent(s);
   if (batch) {
-    s.sent = JSON.stringify(batch);
     s.gaveUp = false;
     void send({ type: 'context_update', ...batch });
   } else if (!s.gaveUp && s.ticks >= GIVE_UP_AFTER && s.union.size === 0 && !s.title) {
@@ -84,6 +103,8 @@ function start(): void {
     selfName: null,
     title: null,
     sent: '',
+    speaking: [],
+    pendingSpeaking: [],
     gaveUp: false,
   };
   session = s;
@@ -96,7 +117,7 @@ function stop(): Batch {
   session = null;
   clearInterval(s.timer);
   readPage(s);
-  return unsent(s) ?? {};
+  return takeUnsent(s) ?? {};
 }
 
 chrome.runtime.onMessage.addListener((message: ContentCommand, _sender, sendResponse) => {

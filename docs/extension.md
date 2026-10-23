@@ -11,7 +11,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | Service worker (module) | `manifest.config.ts` `background` | `src/background/serviceWorker.ts` | State owner. Registers all listeners at top level. |
 | Popup | `action.default_popup` | `src/popup/index.html` -> `main.tsx` -> `Popup` | Tabs: Record, Jobs. |
 | Offscreen document | `vite.config.ts` `rollupOptions.input` only; created at runtime by `ensureOffscreen()` | `src/offscreen/offscreen.html` -> `offscreen.ts` | Capture and mixing. No UI. |
-| Meet content script | `manifest.config.ts` `content_scripts`, only with `FEATURE_MEETING_CONTEXT=1` | `src/content/meet.ts` | Idle until `context_start`; then reads roster and title on Meet and sends `context_update` batches (speaking: #106). |
+| Meet content script | `manifest.config.ts` `content_scripts`, only with `FEATURE_MEETING_CONTEXT=1` | `src/content/meet.ts` | Idle until `context_start`; then reads roster, title and who is speaking on Meet and sends `context_update` batches. |
 | Mic permission page | `vite.config.ts` `rollupOptions.input` only; opened by `openMicPermissionPage()` | `src/permission/permission.html` -> `main.tsx` -> `MicPermission` | One-time mic grant. |
 
 - Offscreen and permission pages are not in the manifest, so `vite.config.ts` lists them as extra build inputs. A new unreferenced page needs the same.
@@ -127,7 +127,7 @@ flowchart LR
 
 Spike result (#104), from one real call with 3 participants (host plus two guests, started from a calendar event) in the top frame. Fixtures are sanitised `outerHTML` in `extension/src/content/fixtures/` (fake names `Sam Host` (self), `Alex Example`, `Riley Sample`, code `abc-defg-hij`). The people panel was open in every capture except `meet-ad-hoc.html` and `meet-lobby.html`.
 
-Roster and title reading is implemented in `src/content/meetReader.ts` (#105): the people panel is the only roster source (no tile fallback, so the lobby and a closed panel read nothing), and a title matching the meeting code is null.
+Roster and title reading is implemented in `src/content/meetReader.ts` (#105): the people panel is the only roster source (no tile fallback, so the lobby and a closed panel read nothing), and a title matching the meeting code is null. Speaking reading is implemented there too (#106): `readSpeaking` maps each flagged tile's `data-participant-id` to its roster item, so names match `readRoster` and nothing is read with the panel closed; `meet.ts` adds each change of the set (`{ at, names }`, wall-clock ms, order ignored, no debounce) to the next batch's `speaking` and to the `context_stop` reply.
 
 **FR-4 verdict: speaking indicator reliable on this call: #106 goes ahead.** Its selector is an obfuscated class pair, so #106 must treat "no match" as "no speaking data", never as an error.
 

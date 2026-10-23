@@ -4,7 +4,7 @@ import { readRoster } from './meetReader';
 
 vi.mock('./meetReader', async (importOriginal) => {
   const real = await importOriginal<typeof import('./meetReader')>();
-  return { readRoster: vi.fn(real.readRoster), readTitle: vi.fn(real.readTitle) };
+  return { ...real, readRoster: vi.fn(real.readRoster), readTitle: vi.fn(real.readTitle) };
 });
 
 type Listener = (message: ContentCommand, sender: unknown, sendResponse: (reply: unknown) => void) => void;
@@ -33,14 +33,21 @@ function command(message: ContentCommand): unknown {
 
 const updates = () => sendMessage.mock.calls.map(([m]) => m).filter((m) => m.type === 'context_update');
 
-function setPage(names: string[], title?: string) {
+function setPage(names: string[], title?: string, speaking: string[] = []) {
   document.title = title ? `Meet - ${title}` : 'Meet';
   const items = names
     .map(
-      (n, i) => `<div role="listitem" aria-label="${n}"><span>${n}</span>${i === 0 ? '<span>(You)</span>' : ''}</div>`,
+      (n, i) =>
+        `<div role="listitem" aria-label="${n}" data-participant-id="d/${n}"><span>${n}</span>${i === 0 ? '<span>(You)</span>' : ''}</div>`,
     )
     .join('');
-  document.body.innerHTML = names.length ? `<div role="list" aria-label="Participants">${items}</div>` : '';
+  const tiles = names
+    .map(
+      (n) =>
+        `<div data-participant-id="d/${n}" data-tile-media-id="d/${n}"><div class="${speaking.includes(n) ? 'kssMZb v5h6Xc' : ''}"></div></div>`,
+    )
+    .join('');
+  document.body.innerHTML = names.length ? `<div role="list" aria-label="Participants">${items}</div>${tiles}` : '';
 }
 
 beforeEach(() => {
@@ -171,6 +178,50 @@ describe('Meet content script', () => {
     command({ type: 'context_start', startedAt: 1 });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(updates()).toEqual([{ type: 'context_update', meetingTitle: 'Sync' }]);
+  });
+
+  it('batches ordered speaking changes with wall-clock times, and none while unchanged', async () => {
+    vi.setSystemTime(1_000_000);
+    setPage(['Sam', 'Alex'], 'Sync');
+    await load();
+    command({ type: 'context_start', startedAt: 1 });
+    await vi.advanceTimersByTimeAsync(2_000);
+    setPage(['Sam', 'Alex'], 'Sync', ['Alex']);
+    await vi.advanceTimersByTimeAsync(3_000);
+    setPage(['Sam', 'Alex'], 'Sync', ['Alex', 'Sam']);
+    await vi.advanceTimersByTimeAsync(2_000);
+    setPage(['Sam', 'Alex'], 'Sync');
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(updates()[0].speaking).toEqual([
+      { at: 1_003_000, names: ['Alex'] },
+      { at: 1_006_000, names: ['Alex', 'Sam'] },
+      { at: 1_008_000, names: [] },
+    ]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(updates()).toHaveLength(1);
+  });
+
+  it('sends a batch when only speaking changed', async () => {
+    vi.setSystemTime(1_000_000);
+    setPage(['Sam', 'Alex'], 'Sync');
+    await load();
+    command({ type: 'context_start', startedAt: 1 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    setPage(['Sam', 'Alex'], 'Sync', ['Sam']);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(updates()).toHaveLength(2);
+    expect(updates()[1].speaking).toEqual([{ at: 1_011_000, names: ['Sam'] }]);
+  });
+
+  it('includes a speaking change made after the last batch in the context_stop reply', async () => {
+    vi.setSystemTime(1_000_000);
+    setPage(['Sam', 'Alex'], 'Sync');
+    await load();
+    command({ type: 'context_start', startedAt: 1 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    setPage(['Sam', 'Alex'], 'Sync', ['Alex']);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(command({ type: 'context_stop' })).toMatchObject({ speaking: [{ at: 1_011_000, names: ['Alex'] }] });
   });
 
   it('survives a sendMessage that throws (extension reloaded)', async () => {
