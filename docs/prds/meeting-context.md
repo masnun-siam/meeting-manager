@@ -39,6 +39,7 @@ The single user of the extension and the `meeting` tool, on their own Mac, in Ch
 - Calendar matching by time, RRULE expansion, `COUNT`-limited series and all-day events.
 - In-call chat, live captions, shared screen content, slides or attachments from the invite.
 - Notes of earlier meetings in the same series as context.
+- Reading names or the speaking indicator from the video grid tiles when the people panel is closed: the panel is the only source, and the FR-5 line tells the user to open it.
 - Injecting the content script into Meet tabs that were open before the extension was installed or reloaded (no `scripting` permission). Those tabs show the "reload the Meet tab" state (FR-5).
 - A manual step to map speakers to names, and a user-entered title (both still non-goals from [meeting-recorder.md](meeting-recorder.md)).
 - Changing the Deepgram request (D11).
@@ -55,12 +56,12 @@ The single user of the extension and the `meeting` tool, on their own Mac, in Ch
     - Acceptance: a 3-person Meet call where one person joins 5 minutes in and leaves 10 minutes later: all 3 names are in `context.json`, the user's own once with `self: true`.
 - **FR-3 Meet title.** On a Google Meet tab, the extension reads the meeting title Meet shows in the call (the calendar event name, when the meeting came from one), cut to 300 characters. A meeting with no title (an ad-hoc link) records null.
     - Acceptance: join a Meet from a calendar event called "Weekly sync"; `context.json` has `meeting_title: "Weekly sync"`. An instant meeting has `meeting_title: null`.
-- **FR-4 Meet speaking timeline.** On a Google Meet tab, the extension records who Meet shows as speaking, as intervals on the recording's own clock (paused time excluded, the same clock as the transcript's `[hh:mm:ss]`). The clock mapping uses the recording's segments (Technical design › Frontend), so a pause or resume inside a batch is mapped correctly and changes during a pause are dropped. Intervals shorter than 1 s are dropped; adjacent intervals for the same names are merged; at most 10 names per interval (cut to the first 10) and 5,000 intervals (the earliest kept); either cut lists `speaking` in `truncated`. On Stop, the content script sends a final batch before hand-off, so the last seconds are kept; if it doesn't answer within 2 s (for example the tab was closed), hand-off goes ahead with what was already merged.
+- **FR-4 Meet speaking timeline.** On a Google Meet tab, the extension records who Meet shows as speaking, as intervals on the recording's own clock (paused time excluded, the same clock as the transcript's `[hh:mm:ss]`). The clock mapping uses the recording's segments (Technical design › Frontend), so a pause or resume inside a batch is mapped correctly and speaking time during a pause is dropped; whoever Meet shows as speaking at Resume (still talking from before the pause, or started during it) gets an interval from Resume. Intervals shorter than 1 s are dropped; adjacent intervals for the same names are merged; at most 10 names per interval (cut to the first 10) and 5,000 intervals (the earliest kept); either cut lists `speaking` in `truncated`. On Stop, the content script sends a final batch before hand-off, so the last seconds are kept; if it doesn't answer within 2 s (for example the tab was closed), hand-off goes ahead with what was already merged.
     - Acceptance: in a 2-person Meet call where A talks for about 30 s, then B for about 30 s, `context.json` has an interval for A starting within 2 s of A's first transcript line and one for B likewise. With a 1-minute pause in the middle, intervals after the pause still line up within 2 s. Someone who speaks only in the last 5 s before Stop has an interval. Closing the Meet tab mid-call saves the recording within the usual time, with the roster collected so far.
 - **FR-5 Context line while recording.** While a recording runs (flag on), the Record tab shows one line under the timer, inside its existing `role="status"` region, updated at most once per batch:
     - Meet, waiting: "Meet: reading participants…" from Start until the first batch.
-    - Meet, captured: "<meeting title or tab title> · N seen" (N is the union so far).
-    - Meet, unavailable: "Meet details unavailable — names won't be captured. Recording is fine." when the content script didn't answer at Start (for example a tab opened before the extension was reloaded: the line adds "Reload the Meet tab next time.") or has found nothing for 60 s. The content script keeps checking every 10 s after that, and the line moves to captured as soon as something is found (for example once the user is admitted from the lobby).
+    - Meet, captured: "<meeting title or tab title> · N seen" (N is the union so far). With N = 0 (a title was read but the people panel is closed) the line adds " · open the people panel to capture names".
+    - Meet, unavailable: "Meet details unavailable — names won't be captured. Recording is fine." when the content script didn't answer at Start (for example a tab opened before the extension was reloaded: the line adds "Reload the Meet tab next time.") or has found nothing for 60 s; in the second case the line adds " Open the people panel to capture names." The content script keeps checking every 10 s after that, and the line moves to captured as soon as something is found (for example once the user is admitted from the lobby).
     - Other sites: "<tab title> · names are captured on Google Meet only".
     - Screen readers hear the line only when its state changes (reading → captured → unavailable), not on each change of N.
     - While paused the line stays as last shown; it clears when the recording leaves the recording/paused phases.
@@ -167,7 +168,7 @@ flowchart TD
 - **Meet tab reloads mid-recording.** The new content script sends `context_hello`; if its tab is the recorded one, it resumes reporting and the roster union and timeline continue.
 - **Meet tab opened before the extension was installed or reloaded.** No content script runs in it; `context_start` fails, which never affects recording; FR-5 shows the unavailable line with the reload hint; the recording gets FR-1 identity only.
 - **Host access to meet.google.com turned off** in Chrome's site access: same as above.
-- **Paused recording.** Speaking changes during a pause are dropped; the segments keep later intervals aligned.
+- **Paused recording.** Speaking time during a pause is dropped; a speaker still flagged at Resume (talking through the pause or started during it) gets an interval from Resume; the segments keep later intervals aligned.
 - **Service worker sleeps.** Context and segments live in `chrome.storage.session` (key `meeting_context`), never only in memory.
 - **Browser crash.** `storage.session` is cleared, so a recording recovered at the next start is processed without `context.json`, as today (D14).
 - **Hand-off fails** (host missing or not configured): the recording is saved, `meeting_context` is cleared, and a later manual `meeting process` runs without context. Accepted.
@@ -254,7 +255,7 @@ Claude call (FR-9): the command line is unchanged apart from the system prompt s
 ### Frontend (Chrome extension)
 
 - **Content script for `https://meet.google.com/*`, top frame only** (FR-2–4): idle until `context_start`; then reads the roster, the meeting title and the speaking indicator at most once a second, and sends a `context_update` batch every 10 s when something changed. Any part it can't find yields nothing for that part; it never throws. After 60 s with nothing found it sends `gaveUp` and checks every 10 s from then on; the next batch with data clears it. On `context_stop` it replies with a final batch. On load it sends `context_hello` and resumes if its tab is being recorded. It never reads chat, captions or anything else.
-- **Service worker** (FR-1, FR-4, FR-6): at Start reads the captured tab's URL and title (granted by `activeTab` from the popup click), builds the identity, opens the first segment, sends `context_start` (a failure sets the FR-5 unavailable state and nothing else); on pause/resume closes/opens segments; merges batches through `serial()` into `meeting_context`, mapping each wall-clock change into the segment that contains it and dropping changes outside any segment; at Stop sends `context_stop` and merges the final batch, waiting at most 2 s; when saving, trims to 256 KiB, adds `context` to `process` and clears `meeting_context`.
+- **Service worker** (FR-1, FR-4, FR-6): at Start reads the captured tab's URL and title (granted by `activeTab` from the popup click), builds the identity, opens the first segment, sends `context_start` (a failure sets the FR-5 unavailable state and nothing else); on pause/resume closes/opens segments; merges batches through `serial()` into `meeting_context`, mapping each wall-clock speaking interval onto every segment it overlaps (time outside any segment is dropped); at Stop sends `context_stop` and merges the final batch, waiting at most 2 s; when saving, trims to 256 KiB, adds `context` to `process` and clears `meeting_context`.
 - **Record tab** (FR-5): the line and its four states, from `meeting_context`, in the existing status region.
 - **Manifest** (FR-11): computed from the flag; the `key` is unchanged.
 - **No new npm packages.**
@@ -320,7 +321,10 @@ None.
 
 ## Change log
 
-None. Approved 2026-10-22 by the PRD panel (CTO, CEO, Critical, Security, QA, UX) after 7 rounds.
+Approved 2026-10-22 by the PRD panel (CTO, CEO, Critical, Security, QA, UX) after 7 rounds.
+
+- 2026-10-23 (#126): FR-4, Edge cases and the service worker design: a speaker Meet still flags at Resume gets an interval from Resume; only the time inside a pause is dropped.
+- 2026-10-23 (#127): the people panel stays the only roster and speaking source (no grid-tile fallback, added to Non-goals); FR-5 tells the user to open it when nothing is seen.
 
 ## Related
 
