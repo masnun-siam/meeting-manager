@@ -1,0 +1,10 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261021T100000
+UID:esterdaycall@google.com
+LOCATION:https://us02web.zoom.us/j/81234567890
+SUMMARY:Yesterday call
+END:VEVENT
+END:VCALENDAR

@@ -1,0 +1,10 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=America/Los_Angeles:20261022T100000
+UID:oreignzonereadaslocal@google.com
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Foreign zone read as local
+END:VEVENT
+END:VCALENDAR

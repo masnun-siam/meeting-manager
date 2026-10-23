@@ -1,0 +1,11 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261022T100000
+UID:ewweeklyseries@google.com
+RRULE:FREQ=WEEKLY;BYDAY=TH
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:New weekly series
+END:VEVENT
+END:VCALENDAR
