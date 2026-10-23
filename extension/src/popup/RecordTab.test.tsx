@@ -258,6 +258,12 @@ describe('RecordTab', () => {
         'Meet details captured',
       ],
       [
+        'captured with a title and nobody seen',
+        { capture: 'captured', meetingTitle: 'Weekly sync' },
+        'Weekly sync · 0 seen · open the people panel to capture names',
+        'Meet details captured · open the people panel to capture names',
+      ],
+      [
         'captured with only a tab title',
         { capture: 'captured', participants: people(2) },
         'Meet - abc-defg-hij · 2 seen',
@@ -266,8 +272,8 @@ describe('RecordTab', () => {
       [
         'unavailable',
         { capture: 'unavailable' },
-        "Meet details unavailable — names won't be captured. Recording is fine.",
-        "Meet details unavailable — names won't be captured. Recording is fine.",
+        "Meet details unavailable — names won't be captured. Recording is fine. Open the people panel to capture names.",
+        "Meet details unavailable — names won't be captured. Recording is fine. Open the people panel to capture names.",
       ],
       [
         'unavailable with the reload hint',
@@ -288,6 +294,15 @@ describe('RecordTab', () => {
 
       await waitFor(() => expect(visibleLine()).toBe(text));
       expect(announced()).toBe(announce);
+    });
+
+    it('shows the panel hint with no title and nobody seen', async () => {
+      stored = recording();
+      storedContext = context({ capture: 'captured' });
+      storedContext.identity.tab_title = null;
+      setup();
+
+      await waitFor(() => expect(visibleLine()).toBe('0 seen · open the people panel to capture names'));
     });
 
     it('shows just the count with no title', async () => {
@@ -319,6 +334,14 @@ describe('RecordTab', () => {
       storedContext = context();
       setup();
       await waitFor(() => expect(visibleLine()).toBe('Meet: reading participants…'));
+
+      act(() => listener({ meeting_context: { newValue: context({ capture: 'captured' }) } }));
+      await waitFor(() =>
+        expect(visibleLine()).toBe('Meet - abc-defg-hij · 0 seen · open the people panel to capture names'),
+      );
+      expect(screen.getByRole('status').querySelector('span')?.textContent).toBe(
+        'Meet details captured · open the people panel to capture names',
+      );
 
       act(() => listener({ meeting_context: { newValue: context({ capture: 'captured', participants: people(1) }) } }));
       await waitFor(() => expect(visibleLine()).toBe('Meet - abc-defg-hij · 1 seen'));
