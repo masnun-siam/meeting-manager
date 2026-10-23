@@ -2,6 +2,7 @@ mod calendar;
 mod calendar_fetch;
 mod config;
 mod context;
+mod context_block;
 mod deepgram;
 mod doctor;
 mod extract;

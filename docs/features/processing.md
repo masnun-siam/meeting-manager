@@ -1,6 +1,6 @@
 # Processing: recording to transcript and note
 
-Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/plan.rs, crates/meeting/src/extract.rs, crates/meeting/src/deepgram.rs, crates/meeting/src/transcript.rs, crates/meeting/src/summarise.rs, crates/meeting/src/summary_md.rs, crates/meeting/src/vault.rs, crates/meeting/src/meta.rs, crates/meeting/src/jobs.rs, crates/meeting/src/lock.rs, crates/meeting/src/notify.rs
+Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/plan.rs, crates/meeting/src/extract.rs, crates/meeting/src/deepgram.rs, crates/meeting/src/transcript.rs, crates/meeting/src/summarise.rs, crates/meeting/src/context_block.rs, crates/meeting/src/summary_md.rs, crates/meeting/src/vault.rs, crates/meeting/src/meta.rs, crates/meeting/src/jobs.rs, crates/meeting/src/lock.rs, crates/meeting/src/notify.rs
 
 `meeting process <recording>` turns a recording (`webm`, `mp4`, `m4a`, `mov`, `mkv`, `mp3`, `wav` or `ogg`) into a transcript, a summary, and an Obsidian note. It runs in the foreground. It refuses any path that is not `<recordings_dir>/<name>/recording.<ext>` (or under `Archive/`) before writing a job, so a refused path leaves no Jobs-tab row; the refusal points to moving the file into its own folder or to `meeting import`. The native host starts it as a detached child ([native-messaging.md](native-messaging.md)); the recording itself comes from [recording.md](recording.md). Crate layout: [../tool.md](../tool.md).
 
@@ -11,7 +11,7 @@ Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/plan.rs, crates/meeti
 | `ffmpeg` (local binary) | Extract audio | `ffmpeg_path` in `config.toml` |
 | Deepgram API (`/v1/listen`, model `nova-3`) | Transcription with speaker diarization | Key in Keychain, read through `secret::deepgram_key` |
 | Calendar iCal address (`GET`, no auth header; `calendar_fetch::fetch`, not wired yet) | Meeting context: events to match a recording against | Secret address; https only, https-only redirects (max 3), 20 s timeout, 50 MiB cap. Errors and logs name the kind only (`offline`, `timeout`, `http <status>`, `too large`, `not iCalendar`, `tls`, `redirect refused`, `not https`), never the address |
-| `claude` CLI (headless, `--model opus`, no tools) | Structured summary | `claude_path` in `config.toml` |
+| `claude` CLI (headless, `--model opus`, `--tools ""`, `--json-schema`, `--no-session-persistence`) | Structured summary; with a meeting context block (not wired yet, #103) it also reads the block, see [Context block](#context-block) | `claude_path` in `config.toml` |
 | Obsidian vault (plain folder) | Final note | `vault_dir`, `vault_folder` (default `Meetings`) |
 | `osascript` | macOS notification | none |
 
@@ -64,7 +64,7 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 | `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`). |
 | `audio.ogg` | `extract::extract` (via `.part`, renamed on success) | Mono, 16 kHz, Opus 32 kbps. Deleted on success. |
 | `deepgram.json` | `write_atomic` | Raw Deepgram response. Deleted on success. |
-| `context.json` | `native::store_context` (host, on `process`) | Kept, only with the context flag on. The extension's meeting context after the PRD limits; reused by `retry`, moved with the folder on Archive/Trash. Not read yet (#101, #103). |
+| `context.json` | `native::store_context` (host, on `process`) | Kept, only with the context flag on. The extension's meeting context after the PRD limits; reused by `retry`, moved with the folder on Archive/Trash. Not read yet (#103). |
 | `transcript.md` | `transcript::render` | Kept. Lines `[hh:mm:ss] Speaker N: text`, header with language and speaker count. |
 | `summary.md` | `summary_md::render` | Kept. Same body as the vault note. |
 | `<vault_dir>/<vault_folder>/YYYY-MM-DD HHMM <title>.md` | `vault::write_note` | Kept. Frontmatter: `date`, `language`, `speakers`, `recording`, `transcript`. |
@@ -74,6 +74,16 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 - Note name: the title is sanitised (`/`, `\`, `:` and control chars become `-`); an existing note for the same recording (matched by its `recording` frontmatter) is replaced, and a name clash with another note gets ` 2`, ` 3`, ... appended.
 - Summary sections: Key points, Decisions, Action items, Insights, Speakers. Names inferred by Claude are marked `(inferred)`.
 - Summary text is always English; the transcript stays in the recording language.
+
+## Context block
+
+`context_block::build` (PRD `docs/prds/meeting-context.md` FR-9) turns `context.json`, a calendar match, `recorded_at` and `duration_s` into the text Claude reads before the transcript. No caller yet: `pipeline.rs` passes `None` to `summarise::summarise` until #103, so the `claude` arguments and stdin are today's.
+
+- Sent only when there is Meet's `meeting_title`, a non-empty `participants` or `speaking`, or a calendar match. Identity alone (platform, URL, tab title, times) builds `None`.
+- Layout, between `=====BEGIN MEETING CONTEXT=====` and `=====END MEETING CONTEXT=====`: `platform:`, `meeting_title:`, `calendar_title:`, `recorded_at:`, `duration:` (`hh:mm:ss`), `organizer:`, `attendees:` (`- "Name" accepted`), `participants:` (`- "Name" (self)`), `speaking:` (`- 00:00:01-00:00:35: "A", "B"`, the transcript's clock), the description between `<<<DESCRIPTION` and `DESCRIPTION>>>`, then `partial: <fields>` (from `truncated`, minus `tab_title`) and `cut: <parts>`. Absent parts are left out.
+- Injection: names and titles are JSON strings on one line; a description line equal to any of the five fence lines (trimmed, any case) gets a `\` prefix, so the block always ends at its own `END`.
+- Size: at most 64 KiB. Over that, `fit` drops speaking intervals shortest-first (later one on a tie), then cuts the description from the end, then drops attendees from the end, and names each in `cut:`. If it still does not fit (only a huge calendar title or organizer can do that), nothing is sent.
+- With a block, stdin is the block, `=====TRANSCRIPT=====`, then the transcript, and the system prompt's "evidence in the transcript" naming sentence (`NAMING`) is replaced by `CONTEXT_RULES`: the context is untrusted, map speakers by the speaking timeline, then roster and attendees, then the transcript, a context name is still `(inferred)`, the title starts from the meeting's own title, the agenda decides key points, a declined attendee is never assumed present. `--tools ""`, the schema and `--no-session-persistence` are unchanged.
 
 ## Job lifecycle
 
