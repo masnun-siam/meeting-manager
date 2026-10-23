@@ -14,6 +14,7 @@ The user presses Start in the popup. The extension records the active tab and th
 | Recorder | `offscreen/recorder.ts` | `getUserMedia` for tab and mic, mix, `MediaRecorder`, chunk writes, 3 h cap timer. |
 | File | `shared/recordingFile.ts` | `recordings/<startedAt>.webm` in the origin-private file system. |
 | Save | `background/save.ts` | Download, delete temp file, native `process` call. With `FEATURE_MEETING_CONTEXT=1`, Start stores the tab identity in `storage.session` `meeting_context` and the `process` message carries it as `context` (trimmed to 256 KiB); the key is cleared after hand-off. Recovered recordings send none. |
+| Context session | `background/contextSession.ts` | Flag on: sends `context_start` / `context_stop` to a Meet tab, keeps the recording segments and merges content-script batches into `meeting_context`. See [extension.md](../extension.md). |
 | Recover | `background/recover.ts` | Re-save leftovers at browser start. |
 | Mic page | `permission/MicPermission.tsx` | Grants mic permission once. |
 
@@ -32,16 +33,18 @@ sequenceDiagram
   SW->>SW: tabCapture.getMediaStreamId(active tab)
   SW->>O: ensureOffscreen, then offscreen_start
   SW->>SW: status = recording (badge REC)
+  SW->>SW: flag on: meeting_context with the first segment; Meet tab: context_start (2 s max)
   O->>O: tab stream + mic stream, mix, MediaRecorder(5 s chunks)
   O-->>SW: offscreen_started {micIncluded}
   loop every 5 s
     O->>FS: appendChunk
   end
   P->>SW: stop
-  SW->>SW: status = saving
+  SW->>SW: status = saving, close the open segment
   SW->>O: offscreen_stop
   O->>FS: flush last chunk
   O-->>SW: offscreen_stopped {startedAt, reason}
+  SW->>SW: Meet tab, not tab_closed: context_stop, merge the final batch (2 s max)
   SW->>O: offscreen_file_url
   O-->>SW: blob URL
   SW->>D: download Meetings/name/recording.webm
@@ -56,6 +59,7 @@ Rules:
 
 - Start only works from `idle`. It records the active tab of the last focused window.
 - Stop before `offscreen_started` is deferred: status becomes `saving`, and `offscreenStarted` sends `offscreen_stop` once the recorder is up.
+- Segments (flag on): Start opens the first, pause sets its `wallEnd`, resume opens `{ wallStart, wallEnd: null, offsetMs: recordedMs }`, stop closes the open one. They map the content script's wall-clock speaking changes onto the recording clock.
 - Recordings under `MIN_PROCESS_MS` (10 s) are saved but not sent to the tool (`Notice` `too_short`). Recovered recordings are always sent.
 - Folder name: `recordingName(startedAt)` gives `meeting-YYYY-MM-DD_HHmm`; the recording is saved as `Meetings/<name>/recording.webm`. `nextFreeName` adds `-2`, `-3` for folder names Chrome's download history already has (`takenNames`). Folders Chrome did not create are invisible to this check, so `conflictAction: 'uniquify'` may produce `recording (1).webm` in the existing folder.
 - The temp file is deleted only after the download completes. A failed delete is ignored.
