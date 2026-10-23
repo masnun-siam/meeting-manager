@@ -22,10 +22,32 @@ export interface HealthCheck {
   fix: string;
 }
 
+/** `context.json` on the wire; the host rejects any other key. */
+export interface ContextPayload {
+  version: 1;
+  platform: 'meet' | 'zoom' | 'teams' | 'other';
+  url: string | null;
+  meeting_id: string | null;
+  tab_title: string | null;
+  meeting_title: string | null;
+  started_at_ms: number;
+  utc_offset_min: number;
+  time_zone: string | null;
+  participants: { name: string; self: boolean }[];
+  speaking: { from: string; to: string; names: string[] }[];
+  truncated: string[];
+}
+
+export type ContextIdentity = Pick<
+  ContextPayload,
+  'platform' | 'url' | 'meeting_id' | 'tab_title' | 'started_at_ms' | 'utc_offset_min' | 'time_zone'
+>;
+
 export interface ProcessRequest {
   type: 'process';
   path: string;
   language: Language;
+  context?: ContextPayload;
 }
 
 export interface RetryRequest {

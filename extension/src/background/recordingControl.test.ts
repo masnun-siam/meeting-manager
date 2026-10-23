@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RECORDER_STATUS_KEY, type RecorderStatus } from '../shared/messages';
+import { MEETING_CONTEXT_KEY, RECORDER_STATUS_KEY, type RecorderStatus } from '../shared/messages';
 import { MIC_PERMISSION_PAGE } from '../shared/micPermission';
 import { handleOffscreenEvent, handlePopupCommand, handleTabRemoved, OFFSCREEN_PAGE } from './recordingControl';
 import { saveRecording } from './save';
+
+const flag = vi.hoisted(() => ({ on: false }));
+vi.mock('../shared/flags', () => ({ meetingContextEnabled: () => flag.on }));
 
 vi.mock('./save', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./save')>()),
@@ -16,6 +19,7 @@ const TAB = 7;
 let stored: Record<string, unknown>;
 let hasDocument: boolean;
 let permission: PermissionState;
+let failContextWrite = false;
 const setBadgeText = vi.fn();
 const getMediaStreamId = vi.fn();
 const createDocument = vi.fn();
@@ -37,6 +41,8 @@ beforeEach(() => {
   stored = {};
   hasDocument = false;
   permission = 'granted';
+  flag.on = false;
+  failContextWrite = false;
   for (const mock of [setBadgeText, getMediaStreamId, createDocument, closeDocument, sendMessage, tabsCreate]) {
     mock.mockReset();
   }
@@ -54,7 +60,11 @@ beforeEach(() => {
       session: {
         get: async (key: string) => ({ [key]: stored[key] }),
         set: async (items: Record<string, unknown>) => {
+          if (failContextWrite && MEETING_CONTEXT_KEY in items) throw new Error('quota');
           Object.assign(stored, items);
+        },
+        remove: async (key: string) => {
+          delete stored[key];
         },
       },
     },
@@ -141,6 +151,77 @@ describe('start', () => {
     expect(status().tabId).toBeNull();
     expect(setBadgeText).toHaveBeenLastCalledWith({ text: '' });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('meeting context', () => {
+  beforeEach(() => {
+    flag.on = true;
+    tabsQuery.mockResolvedValue([
+      { id: TAB, url: 'https://meet.google.com/abc-defg-hij?authuser=1', title: 'Standup' },
+    ]);
+  });
+
+  const stop = async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handlePopupCommand({ type: 'stop' });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+  };
+
+  it('stores the identity and the first segment at start', async () => {
+    await startRecording();
+    expect(stored[MEETING_CONTEXT_KEY]).toMatchObject({
+      identity: {
+        platform: 'meet',
+        url: 'https://meet.google.com/abc-defg-hij',
+        meeting_id: 'abc-defg-hij',
+        tab_title: 'Standup',
+        started_at_ms: T0,
+        utc_offset_min: -new Date(T0).getTimezoneOffset() || 0,
+      },
+      segments: [{ wallStart: T0, wallEnd: null, offsetMs: 0 }],
+      capture: 'reading',
+    });
+  });
+
+  it('sends the context at hand-off and clears it', async () => {
+    await startRecording();
+    await stop();
+    expect(saveRecording).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ version: 1, platform: 'meet', started_at_ms: T0 }),
+      }),
+    );
+    expect(stored[MEETING_CONTEXT_KEY]).toBeUndefined();
+  });
+
+  it('clears it when saving throws', async () => {
+    vi.mocked(saveRecording).mockRejectedValueOnce(new Error('kaboom'));
+    await startRecording();
+    await stop();
+    expect(stored[MEETING_CONTEXT_KEY]).toBeUndefined();
+  });
+
+  it('does not stop Start when the context cannot be stored', async () => {
+    failContextWrite = true;
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await startRecording();
+    expect(status().state.phase).toBe('recording');
+  });
+
+  it('clears a leftover context when Start fails', async () => {
+    stored[MEETING_CONTEXT_KEY] = { old: true };
+    getMediaStreamId.mockRejectedValueOnce(new Error('no capture'));
+    await expect(startRecording()).rejects.toThrow();
+    expect(stored[MEETING_CONTEXT_KEY]).toBeUndefined();
+  });
+
+  it('writes nothing and sends no context with the flag off', async () => {
+    flag.on = false;
+    await startRecording();
+    expect(stored[MEETING_CONTEXT_KEY]).toBeUndefined();
+    await stop();
+    expect(vi.mocked(saveRecording).mock.lastCall?.[0].context).toBeUndefined();
   });
 });
 

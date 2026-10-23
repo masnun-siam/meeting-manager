@@ -1,5 +1,6 @@
 // Saves a finished recording through chrome.downloads and hands it to the native host.
 import type { Language, Notice } from '../shared/messages';
+import type { ContextPayload, ProcessRequest } from '../shared/native';
 import { sendNative } from '../shared/nativeClient';
 import { deleteRecordingFile } from '../shared/recordingFile';
 
@@ -10,6 +11,7 @@ export interface SaveOptions {
   name: string;
   language: Language;
   process: boolean;
+  context?: ContextPayload;
 }
 
 export function recordingName(startedAt: number): string {
@@ -73,9 +75,7 @@ function download(url: string, filename: string): Promise<{ path: string } | { e
   });
 }
 
-function noticeFor(
-  reply: Awaited<ReturnType<typeof sendNative<{ type: 'process'; path: string; language: Language }>>>,
-): Notice {
+function noticeFor(reply: Awaited<ReturnType<typeof sendNative<ProcessRequest>>>): Notice {
   if (reply.ok) return { kind: 'saved' };
   if (reply.code === 'host_missing' || reply.code === 'not_configured')
     return { kind: 'setup', message: reply.message };
@@ -83,7 +83,7 @@ function noticeFor(
 }
 
 /** Never throws: every outcome is a notice, and the origin-private file is deleted only after a save succeeds. */
-export async function saveRecording({ startedAt, name, language, process }: SaveOptions): Promise<Notice> {
+export async function saveRecording({ startedAt, name, language, process, context }: SaveOptions): Promise<Notice> {
   const file = (await chrome.runtime.sendMessage({ type: 'offscreen_file_url', startedAt })) as
     | { url: string }
     | { error: string }
@@ -95,7 +95,9 @@ export async function saveRecording({ startedAt, name, language, process }: Save
   await deleteRecordingFile(startedAt).catch(() => undefined);
   if (!process) return { kind: 'too_short' };
   try {
-    return noticeFor(await sendNative({ type: 'process', path: saved.path, language }));
+    return noticeFor(
+      await sendNative({ type: 'process', path: saved.path, language, ...(context ? { context } : {}) }),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { kind: 'error', message: `Could not reach the meeting tool: ${message}` };
