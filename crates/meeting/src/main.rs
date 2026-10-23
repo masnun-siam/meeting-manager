@@ -325,6 +325,9 @@ fn process(
         },
         key: secret::deepgram_key,
         claude_timeout: Duration::from_secs(15 * 60),
+        context: context_enabled(),
+        calendar: secret::calendar_address,
+        calendar_policy: Policy::REAL,
     };
     match pipeline.run(recording, retranscribe, language, job_id, &mut io::stdout()) {
         Ending::Done { title } => {

@@ -28,8 +28,6 @@ pub struct Note<'a> {
 }
 
 /// How the calendar match went; written only when a calendar is configured.
-// ponytail: unused until #103 supplies it.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CalendarOutcome {
     Matched,
@@ -49,8 +47,6 @@ impl CalendarOutcome {
 
 /// The note's `meeting_title` and `attendees`: the calendar title, else Meet's; the calendar
 /// attendees who did not decline, else the Meet roster.
-// ponytail: unused until #103 supplies it.
-#[allow(dead_code)]
 pub fn note_people(
     context: Option<&context::Context>,
     meeting: Option<&Meeting>,

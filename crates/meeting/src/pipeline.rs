@@ -9,13 +9,16 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Context, anyhow};
 
 use crate::Language;
+use crate::calendar::{self, Meeting, Recording};
+use crate::calendar_fetch::{self, Policy};
 use crate::config::{Config, check_recording};
+use crate::context_block::{self, Input};
 use crate::deepgram::Deepgram;
 use crate::jobs::{Job, JobStore, Stage, new_job_id, now_utc, write_atomic};
 use crate::lock::Lock;
 use crate::meta::{Meta, Run, Speaker, recorded_at_for};
-use crate::vault::{self, Note};
-use crate::{extract, plan, summarise, summary_md, transcript};
+use crate::vault::{self, CalendarOutcome, Note};
+use crate::{context, extract, ical, plan, summarise, summary_md, transcript};
 
 const NO_SPEECH: &str = "No speech detected";
 
@@ -26,6 +29,20 @@ pub struct Pipeline {
     /// Called only when Deepgram is, so a resume never needs the Keychain.
     pub key: fn() -> anyhow::Result<String>,
     pub claude_timeout: Duration,
+    /// `FEATURE_MEETING_CONTEXT`: off, `context.json` and the calendar are never read.
+    pub context: bool,
+    /// The secret iCal address. Called only for a context with a meeting ID.
+    pub calendar: fn() -> anyhow::Result<Option<String>>,
+    pub calendar_policy: Policy,
+}
+
+/// What the meeting context adds to the summary and the note; empty without one.
+#[derive(Default)]
+struct Extra {
+    block: Option<String>,
+    meeting_title: Option<String>,
+    attendees: Vec<String>,
+    calendar: Option<CalendarOutcome>,
 }
 
 pub enum Ending {
@@ -40,6 +57,7 @@ struct Paths {
     raw: PathBuf,
     transcript: PathBuf,
     summary: PathBuf,
+    context: PathBuf,
 }
 
 impl Paths {
@@ -50,6 +68,7 @@ impl Paths {
             raw: next_to("deepgram.json"),
             transcript: next_to("transcript.md"),
             summary: next_to("summary.md"),
+            context: next_to("context.json"),
             recording,
         }
     }
@@ -299,8 +318,13 @@ impl Pipeline {
         language: Language,
     ) -> anyhow::Result<String> {
         st.enter(Stage::Summarising)?;
-        let summary =
-            summarise::summarise(&self.config.claude_path, text, None, self.claude_timeout)?;
+        let extra = self.context_extra(p, st.meta());
+        let summary = summarise::summarise(
+            &self.config.claude_path,
+            text,
+            extra.block.as_deref(),
+            self.claude_timeout,
+        )?;
 
         st.enter(Stage::Writing)?;
         let body = summary_md::render(&summary);
@@ -317,9 +341,9 @@ impl Pipeline {
                 recording: &p.recording,
                 transcript: &p.transcript,
                 body: &body,
-                meeting_title: None,
-                attendees: &[],
-                calendar: None,
+                meeting_title: extra.meeting_title.as_deref(),
+                attendees: &extra.attendees,
+                calendar: extra.calendar,
             },
         )?;
         meta.title = Some(summary.title.clone());
@@ -333,6 +357,74 @@ impl Pipeline {
             })
             .collect();
         Ok(summary.title)
+    }
+
+    /// Rebuilt on every run, so a rerun picks up a changed invite.
+    fn context_extra(&self, p: &Paths, meta: &Meta) -> Extra {
+        if !self.context {
+            return Extra::default();
+        }
+        let Some(context) = context::load(&p.context) else {
+            return Extra::default();
+        };
+        let (meeting, calendar) = match &context.meeting_id {
+            Some(id) => self.look_up(&context, id),
+            None => (None, None),
+        };
+        let block = context_block::build(&Input {
+            context: Some(&context),
+            meeting: meeting.as_ref(),
+            recorded_at: &meta.recorded_at,
+            duration_s: meta.duration_s,
+        });
+        let (meeting_title, attendees) = vault::note_people(Some(&context), meeting.as_ref());
+        Extra {
+            block,
+            meeting_title,
+            attendees,
+            calendar,
+        }
+    }
+
+    /// The calendar event for this meeting, and the outcome; no outcome without a stored
+    /// address. Logs only the kind of failure, never the address or a value.
+    fn look_up(
+        &self,
+        context: &context::Context,
+        meeting_id: &str,
+    ) -> (Option<Meeting>, Option<CalendarOutcome>) {
+        let failed = |kind: &dyn std::fmt::Display| {
+            tracing::warn!("calendar {kind}");
+            (None, Some(CalendarOutcome::FetchFailed))
+        };
+        let address = match (self.calendar)() {
+            Ok(Some(address)) => address,
+            Ok(None) => return (None, None),
+            Err(_) => return failed(&"keychain"),
+        };
+        let text = match calendar_fetch::fetch(&address, &self.calendar_policy) {
+            Ok(text) => text,
+            Err(kind) => return failed(&kind),
+        };
+        let Ok(parsed) = ical::parse(&text) else {
+            return failed(&"not iCalendar");
+        };
+        let recording = Recording {
+            meeting_id: meeting_id.into(),
+            started_at_ms: context.started_at_ms,
+            utc_offset_min: context.utc_offset_min,
+            time_zone: context.time_zone.clone(),
+        };
+        match calendar::pick(&parsed, &recording) {
+            Some(meeting) => {
+                tracing::info!("calendar matched");
+                (Some(meeting), Some(CalendarOutcome::Matched))
+            }
+            None => {
+                tracing::info!("calendar no_match");
+                (None, Some(CalendarOutcome::NoMatch))
+            }
+        }
     }
 }
 
@@ -352,7 +444,9 @@ fn remove(path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VALID, envelope, mock, stub, temp};
+    use crate::test_support::{VALID, envelope, mock, mock_raw, stall, stub, temp};
+    use serde_json::{Value, json};
+    use std::cell::{Cell, RefCell};
     use std::process::Command;
     use std::sync::mpsc::Receiver;
 
@@ -362,6 +456,49 @@ mod tests {
     const EN: &str = include_str!("../tests/fixtures/deepgram/en_two_speakers.json");
     const EMPTY: &str = include_str!("../tests/fixtures/deepgram/empty.json");
     const NAME: &str = "meeting-2026-10-19_1430";
+    const GOOGLE: &str = include_str!("../tests/fixtures/calendar/google.ics");
+
+    thread_local! {
+        /// What the fake Keychain holds for this test's thread, and how often it was read.
+        static ADDRESS: RefCell<Option<String>> = const { RefCell::new(None) };
+        static READS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn stored_address() -> anyhow::Result<Option<String>> {
+        READS.set(READS.get() + 1);
+        Ok(ADDRESS.with_borrow(Clone::clone))
+    }
+
+    fn locked_keychain() -> anyhow::Result<Option<String>> {
+        READS.set(READS.get() + 1);
+        Err(anyhow!("cannot read the Keychain: locked"))
+    }
+
+    fn reads() -> usize {
+        READS.get()
+    }
+
+    /// Serves `responses` as the calendar, one per request; keep the receiver alive.
+    fn serve_calendar(responses: Vec<String>) -> Receiver<String> {
+        let (base, requests) = mock_raw(responses);
+        ADDRESS.set(Some(format!("{base}/basic.ics")));
+        requests
+    }
+
+    fn ok(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// A Meet call recorded during the 2026-10-21 09:00 New York instance of `GOOGLE`.
+    fn meet() -> Value {
+        json!({"version": 1, "platform": "meet", "meeting_id": "abc-defg-hij",
+            "meeting_title": "Meet title", "started_at_ms": 1_792_587_600_000_i64,
+            "utc_offset_min": -240, "time_zone": "America/New_York",
+            "participants": [{"name": "Rahim", "self": false}]})
+    }
 
     struct Env {
         rec: PathBuf,
@@ -410,6 +547,14 @@ mod tests {
             },
             key: || Ok("test-key".into()),
             claude_timeout: Duration::from_secs(10),
+            context: false,
+            calendar: stored_address,
+            calendar_policy: Policy {
+                https_only: false,
+                max_redirects: 3,
+                timeout: Duration::from_millis(300),
+                max_bytes: 8 * 1024,
+            },
         };
         Env {
             rec,
@@ -462,6 +607,31 @@ mod tests {
 
         fn requests(&self) -> Vec<String> {
             self.requests.try_iter().collect()
+        }
+
+        /// Turns the gate on and writes `context` beside the recording.
+        fn with_context(&mut self, context: &Value) {
+            self.pipeline.context = true;
+            fs::write(self.file("context.json"), context.to_string()).unwrap();
+        }
+
+        fn note(&self) -> String {
+            let mut notes = fs::read_dir(self.vault.join("Meetings")).unwrap();
+            let note = notes.next().unwrap().unwrap().path();
+            assert!(notes.next().is_none());
+            fs::read_to_string(note).unwrap()
+        }
+
+        /// What `claude` got: its arguments and its stdin.
+        fn sent(&self) -> (String, String) {
+            let read = |name| fs::read_to_string(self.tools.join(name)).unwrap();
+            (read("args.txt"), read("stdin.txt"))
+        }
+
+        /// A done run with the gate off and no context: what `claude` got and the note.
+        fn baseline(&self) -> ((String, String), String) {
+            done(self.run(Some(Language::En), None).0);
+            (self.sent(), self.note())
         }
     }
 
@@ -768,5 +938,191 @@ mod tests {
         assert_eq!(job.started_at, "2026-10-19T14:30:00Z");
         assert_eq!(job.stage, Stage::Done);
         assert_eq!(env.meta().runs[0].started_at, "2026-10-19T14:30:00Z");
+    }
+
+    #[test]
+    fn a_matched_invite_reaches_claude_and_the_note() {
+        let mut env = setup("pipe-cal-match", vec![(200, EN)]);
+        env.with_context(&meet());
+        let _calendar = serve_calendar(vec![ok(GOOGLE)]);
+        done(env.run(Some(Language::En), None).0);
+
+        let (_, stdin) = env.sent();
+        assert!(stdin.contains("BEGIN MEETING CONTEXT"), "{stdin}");
+        assert!(stdin.contains("Plans & goals"), "{stdin}");
+        let note = env.note();
+        assert!(note.contains("calendar: \"matched\""), "{note}");
+        assert!(
+            note.contains("meeting_title: \"Weekly sync, team; all\""),
+            "{note}"
+        );
+        assert!(note.contains("\"Doe, John\""), "{note}");
+        assert!(!note.contains("Room 4"), "{note}");
+        assert_eq!(reads(), 1);
+    }
+
+    #[test]
+    fn no_matching_event_records_no_match_and_keeps_the_meet_block() {
+        let mut env = setup("pipe-cal-nomatch", vec![(200, EN)]);
+        let mut context = meet();
+        context["meeting_id"] = json!("xyz-abcd-efg");
+        env.with_context(&context);
+        let _calendar = serve_calendar(vec![ok(GOOGLE)]);
+        done(env.run(Some(Language::En), None).0);
+
+        let (_, stdin) = env.sent();
+        assert!(
+            stdin.contains("Meet title") && !stdin.contains("Plans"),
+            "{stdin}"
+        );
+        let note = env.note();
+        assert!(note.contains("calendar: \"no_match\""), "{note}");
+        assert!(note.contains("meeting_title: \"Meet title\""), "{note}");
+    }
+
+    #[test]
+    fn every_calendar_failure_records_fetch_failed_and_finishes() {
+        let status =
+            |code| format!("HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let redirect = "HTTP/1.1 302 Found\r\nLocation: {base}/next.ics\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let over_cap = format!("BEGIN:VCALENDAR\r\n{}", "X".repeat(10 * 1024));
+        let cases: Vec<(&str, Option<Vec<String>>)> = vec![
+            ("non-2xx", Some(vec![status(404)])),
+            ("not iCalendar", Some(vec![ok("<html>sign in</html>")])),
+            (
+                "parse error",
+                Some(vec![ok("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n")]),
+            ),
+            ("four redirects", Some(vec![redirect.into(); 4])),
+            ("over the cap", Some(vec![ok(&over_cap)])),
+            ("stalled", None),
+        ];
+        for (case, responses) in cases {
+            let mut env = setup(
+                &format!("pipe-cal-{}", case.replace(' ', "-")),
+                vec![(200, EN)],
+            );
+            env.with_context(&meet());
+            let _calendar = match responses {
+                Some(responses) => Some(serve_calendar(responses)),
+                None => {
+                    ADDRESS.set(Some(format!("{}/basic.ics", stall())));
+                    None
+                }
+            };
+            done(env.run(Some(Language::En), None).0);
+            assert_eq!(env.job().stage, Stage::Done, "{case}");
+            let note = env.note();
+            assert!(
+                note.contains("calendar: \"fetch_failed\""),
+                "{case}: {note}"
+            );
+            assert!(
+                note.contains("meeting_title: \"Meet title\""),
+                "{case}: {note}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_keychain_error_records_fetch_failed_and_finishes() {
+        let mut env = setup("pipe-cal-keychain", vec![(200, EN)]);
+        env.with_context(&meet());
+        env.pipeline.calendar = locked_keychain;
+        done(env.run(Some(Language::En), None).0);
+        assert!(env.note().contains("calendar: \"fetch_failed\""));
+        assert_eq!(reads(), 1);
+    }
+
+    #[test]
+    fn no_stored_address_fetches_nothing_and_records_no_outcome() {
+        let mut env = setup("pipe-cal-unset", vec![(200, EN)]);
+        env.with_context(&meet());
+        done(env.run(Some(Language::En), None).0);
+        assert!(!env.note().contains("calendar:"));
+        assert_eq!(reads(), 1);
+    }
+
+    #[test]
+    fn without_context_or_gate_nothing_changes_and_the_keychain_is_not_read() {
+        let mut env = setup("pipe-cal-off", vec![(200, EN)]);
+        let _calendar = serve_calendar(vec![ok(GOOGLE)]);
+        let baseline = env.baseline();
+
+        // Gate on, no `context.json` (older recordings, imports).
+        env.pipeline.context = true;
+        done(env.run(None, None).0);
+        assert_eq!((env.sent(), env.note()), baseline);
+
+        // Gate off, `context.json` present.
+        env.with_context(&meet());
+        env.pipeline.context = false;
+        done(env.run(None, None).0);
+        assert_eq!((env.sent(), env.note()), baseline);
+
+        // Gate on, `context.json` that fails a rule.
+        let mut bad = meet();
+        bad["version"] = json!(2);
+        env.with_context(&bad);
+        done(env.run(None, None).0);
+        assert_eq!((env.sent(), env.note()), baseline);
+        assert_eq!(reads(), 0);
+    }
+
+    #[test]
+    fn a_context_without_a_meeting_id_never_reads_the_keychain() {
+        let mut env = setup("pipe-cal-teams", vec![(200, EN)]);
+        let calendar = serve_calendar(vec![ok(GOOGLE)]);
+        let (baseline, _) = env.baseline();
+        env.with_context(&json!({"version": 1, "platform": "teams",
+            "started_at_ms": 1_792_587_600_000_i64, "utc_offset_min": -240,
+            "participants": [{"name": "Rahim", "self": false}]}));
+        done(env.run(None, None).0);
+
+        assert_eq!(reads(), 0);
+        assert!(calendar.try_iter().next().is_none());
+        let (_, stdin) = env.sent();
+        assert_ne!(stdin, baseline.1);
+        assert!(stdin.contains("Rahim"), "{stdin}");
+        assert!(!env.note().contains("calendar:"));
+    }
+
+    #[test]
+    fn a_zoom_call_without_a_match_sends_what_it_sent_before() {
+        let mut env = setup("pipe-cal-zoom", vec![(200, EN)]);
+        let _calendar = serve_calendar(vec![ok(GOOGLE)]);
+        let (baseline, _) = env.baseline();
+        env.with_context(
+            &json!({"version": 1, "platform": "zoom", "meeting_id": "123456789",
+            "started_at_ms": 1_792_587_600_000_i64, "utc_offset_min": -240}),
+        );
+        done(env.run(None, None).0);
+
+        assert_eq!(env.sent(), baseline);
+        assert!(env.note().contains("calendar: \"no_match\""));
+    }
+
+    #[test]
+    fn a_rerun_fetches_the_calendar_again() {
+        let mut env = setup("pipe-cal-rerun", vec![(200, EN)]);
+        env.with_context(&meet());
+        let renamed = GOOGLE.replace("SUMMARY:Weekly", "SUMMARY:Renamed");
+        assert_ne!(renamed, GOOGLE);
+        let calendar = serve_calendar(vec![ok(GOOGLE), ok(&renamed)]);
+        done(env.run(Some(Language::En), None).0);
+        assert!(
+            env.note()
+                .contains("meeting_title: \"Weekly sync, team; all\"")
+        );
+
+        done(env.run(None, None).0);
+        let note = env.note();
+        assert!(
+            note.contains("meeting_title: \"Renamed sync, team; all\""),
+            "{note}"
+        );
+        assert!(note.contains("calendar: \"matched\""), "{note}");
+        assert_eq!(reads(), 2);
+        assert_eq!(calendar.try_iter().count(), 2);
     }
 }
