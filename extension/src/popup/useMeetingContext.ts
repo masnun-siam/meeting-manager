@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import { meetingContextEnabled } from '../shared/flags';
 import { MEETING_CONTEXT_KEY, type MeetingContextState } from '../shared/messages';
 
+const CAPTURES: unknown[] = ['reading', 'captured', 'unavailable'] satisfies MeetingContextState['capture'][];
+
 function isMeetingContext(value: unknown): value is MeetingContextState {
   if (typeof value !== 'object' || value === null) return false;
   if (!('capture' in value) || !('identity' in value) || !('participants' in value)) return false;
   const { capture, identity, participants } = value;
-  return (
-    typeof capture === 'string' && typeof identity === 'object' && identity !== null && Array.isArray(participants)
-  );
+  return CAPTURES.includes(capture) && typeof identity === 'object' && identity !== null && Array.isArray(participants);
 }
 
 function toContext(value: unknown): MeetingContextState | null {

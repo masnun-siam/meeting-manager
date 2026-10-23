@@ -367,6 +367,16 @@ describe('RecordTab', () => {
       expect(visibleLine()).toBeUndefined();
     });
 
+    it('ignores a stored context it does not understand', async () => {
+      stored = recording();
+      storedContext = { ...context(), capture: 'lost' as MeetingContextState['capture'] };
+      setup();
+
+      await waitFor(() => expect(sessionGet).toHaveBeenCalledWith('meeting_context'));
+      await screen.findByRole('timer');
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    });
+
     it('neither reads the context nor shows a line with the flag off', async () => {
       flag.on = false;
       stored = recording();
