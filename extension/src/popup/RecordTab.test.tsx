@@ -354,7 +354,9 @@ describe('RecordTab', () => {
       expect(announced()).toBe('Meet details captured');
 
       act(() => listener({ meeting_context: { newValue: context({ capture: 'unavailable' }) } }));
-      expect(announced()).toBe("Meet details unavailable — names won't be captured. Recording is fine.");
+      expect(announced()).toBe(
+        "Meet details unavailable — names won't be captured. Recording is fine. Open the people panel to capture names.",
+      );
     });
 
     it('keeps the line while paused', async () => {
