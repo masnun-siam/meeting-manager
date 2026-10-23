@@ -4,7 +4,7 @@ import type { ContextIdentity, ContextPayload } from './native';
 
 const MAX_URL = 2_000;
 const MAX_TITLE = 300;
-const MEET_CODE = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
+export const MEET_CODE = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 const ZOOM_ID = /^\d{9,11}$/;
 const TEAMS_HOSTS = ['teams.microsoft.com', 'teams.live.com', 'teams.cloud.microsoft'];
 
