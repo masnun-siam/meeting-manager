@@ -33,6 +33,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
 | `import.rs` | `meeting import`: validate, name and copy a source into a new meeting folder | `import` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
+| `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. No caller yet (#100, #103) | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
 | `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `Transcript`, `Utterance` |
 | `summarise.rs` | Run headless `claude`, validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
 | `summary_md.rs` | Render `Summary` to Markdown | `render`, `speaker_names` |
@@ -46,7 +47,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut) | `Context`, `check` |
 | `ical.rs` | In-house iCalendar reader for the calendar match: unfolding, unescaping, raw times, `VTIMEZONE` offsets, HTML description to text; malformed input is an `Err`, never a panic. No caller yet (`#[allow(dead_code)]` on `mod ical`) | `parse`, `Calendar`, `Event`, `When`, `Zone`, `Event::plain_description` |
 | `native.rs` | Chrome native messaging host | `Host`, `serve` |
-| `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `stub`, `envelope`, `temp`, `VALID` |
+| `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `mock_raw`, `stall`, `stub`, `envelope`, `temp`, `VALID` |
 
 Processing modules are covered in [features/processing.md](features/processing.md). `native.rs`: [features/native-messaging.md](features/native-messaging.md). `install.rs`, `doctor.rs`, `config.rs`, `secret.rs`: [features/setup.md](features/setup.md).
 
@@ -70,6 +71,7 @@ flowchart TD
 ```
 
 - `main.rs` is the only place that builds dependencies (`Config::load()`, `JobStore::default_dir()`, `secret::deepgram_key`) and passes them in.
+- `calendar_fetch` imports no `crate::` module and has no caller yet.
 - Stage modules (`extract`, `deepgram`, `transcript`, `summarise`, `summary_md`, `vault`) do not import each other, except `summary_md` using types from `summarise`. `pipeline.rs` is the only caller of all of them.
 - `ical` imports nothing from the crate.
 - `jobs::write_atomic` is the shared atomic-write helper (also used by `meta`, `pipeline`).

@@ -10,6 +10,7 @@ Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/plan.rs, crates/meeti
 |---|---|---|
 | `ffmpeg` (local binary) | Extract audio | `ffmpeg_path` in `config.toml` |
 | Deepgram API (`/v1/listen`, model `nova-3`) | Transcription with speaker diarization | Key in Keychain, read through `secret::deepgram_key` |
+| Calendar iCal address (`GET`, no auth header; `calendar_fetch::fetch`, not wired yet) | Meeting context: events to match a recording against | Secret address; https only, https-only redirects (max 3), 20 s timeout, 50 MiB cap. Errors and logs name the kind only (`offline`, `timeout`, `http <status>`, `too large`, `not iCalendar`, `tls`, `redirect refused`, `not https`), never the address |
 | `claude` CLI (headless, `--model opus`, no tools) | Structured summary | `claude_path` in `config.toml` |
 | Obsidian vault (plain folder) | Final note | `vault_dir`, `vault_folder` (default `Meetings`) |
 | `osascript` | macOS notification | none |
