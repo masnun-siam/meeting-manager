@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::Language;
+use crate::calendar_fetch::FetchError;
 use crate::config::{Config, check_recording};
 use crate::context;
 use crate::doctor;
@@ -67,6 +68,8 @@ pub struct Host {
     pub exe: PathBuf,
     /// Whether `FEATURE_MEETING_CONTEXT` was set at build time; off ignores `context`.
     pub context: bool,
+    pub calendar: fn() -> anyhow::Result<Option<String>>,
+    pub fetch: fn(&str) -> Result<String, FetchError>,
 }
 
 /// Opens with `/usr/bin/open`: Chrome starts the host with a bare `PATH`.
@@ -206,6 +209,9 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
             key: host.key,
             manifest: host.manifest.clone(),
             exe: host.exe.clone(),
+            context: host.context,
+            calendar: host.calendar,
+            fetch: host.fetch,
         })})),
     }
 }
@@ -529,6 +535,8 @@ mod tests {
             manifest: dir.join("host.json"),
             exe: dir.join("meeting"),
             context: true,
+            calendar: || Ok(None),
+            fetch: |_| panic!("no calendar is stored"),
         }
     }
 
@@ -748,12 +756,27 @@ mod tests {
                 .collect()
         };
         assert_eq!(configured["ok"], true);
-        assert_eq!(names(&configured).len(), 7);
+        assert_eq!(names(&configured).len(), 8);
+        assert_eq!(names(&configured).last().unwrap(), "calendar");
         assert_eq!(unconfigured["ok"], true);
         assert_eq!(unconfigured["checks"][0]["name"], "config");
         assert_eq!(unconfigured["checks"][0]["ok"], false);
         assert_eq!(unconfigured["checks"][1]["ok"], true);
         assert_eq!(evil["code"], "bad_request");
+    }
+
+    #[test]
+    fn health_has_no_calendar_check_with_the_gate_off() {
+        let dir = temp("native-health-off");
+        let host = Host {
+            context: false,
+            ..host(&dir)
+        };
+        let reply = one(&host, json!({"type": "health"}));
+        fs::remove_dir_all(&dir).unwrap();
+        let checks = reply["checks"].as_array().unwrap();
+        assert_eq!(checks.len(), 7);
+        assert!(checks.iter().all(|c| c["name"] != "calendar"));
     }
 
     #[test]

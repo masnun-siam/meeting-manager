@@ -13,6 +13,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `meeting process <recording> [--retranscribe] [--language bn\|en] [--job-id <id>]` | Builds a `Pipeline`, runs it in the foreground, sends a macOS notification at the end. `--job-id` is hidden: the native host passes it. | [features/processing.md](features/processing.md) |
 | `meeting install` | Registers the native host, writes config. | [features/setup.md](features/setup.md) |
 | `meeting config set-key` | Stores the Deepgram key in the Keychain (hidden prompt). | [features/setup.md](features/setup.md) |
+| `meeting config set-calendar` | Only with `FEATURE_MEETING_CONTEXT=1`: checks, fetches and parses the secret iCal address (hidden prompt), then stores it in the Keychain; empty answer removes it. | [features/setup.md](features/setup.md) |
 | `meeting import <file> --language bn\|en [--date "YYYY-MM-DD HH:MM"]` | Copies the file into a new meeting folder (`import::import`), prints `imported → <path>`, then runs the same foreground pipeline and notification as `process`. | [features/processing.md](features/processing.md) |
 | `meeting doctor` | Prints one line per check; exits non-zero if any failed. | [features/setup.md](features/setup.md) |
 | `meeting native-host [origin]` | Entry point Chrome launches (as `meeting <origin>`, rewritten by `chrome_args`). | [features/native-messaging.md](features/native-messaging.md) |
@@ -24,7 +25,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 
 | Module | Responsibility | Key symbols |
 |---|---|---|
-| `main.rs` | CLI parsing, wiring, exit code | `Cli`, `Command`, `Language`, `run` |
+| `main.rs` | CLI parsing (gate-dependent via `cli`), wiring, exit code | `Cli`, `Command`, `Language`, `cli`, `run`, `fetch_calendar` |
 | `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change | `Pipeline`, `Pipeline::run`, `Ending`, `State` |
 | `plan.rs` | Pure function: which stages to skip, from file mtimes | `plan`, `Plan`, `Files` |
 | `jobs.rs` | Job file store, `Stage` enum, atomic write, UTC time and ids | `Job`, `JobStore`, `Stage`, `write_atomic`, `now_utc`, `new_job_id` |
@@ -33,7 +34,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
 | `import.rs` | `meeting import`: validate, name and copy a source into a new meeting folder | `import` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
-| `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. No caller yet (#100, #103) | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
+| `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. Used by `set-calendar` and the `calendar` doctor check through `main::fetch_calendar` | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
 | `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `Transcript`, `Utterance` |
 | `summarise.rs` | Run headless `claude`, validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
 | `summary_md.rs` | Render `Summary` to Markdown | `render`, `speaker_names` |
@@ -41,11 +42,11 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `notify.rs` | macOS notification via `osascript` | `notify`, `message`, `Outcome` |
 | `logging.rs` | File logger init | `init` |
 | `config.rs` | `config.toml` load/save, `home()`, `check_recording` (the foldered-recording path rule), `RECORDING_EXTENSIONS` | `Config`, `home`, `check_recording`, `RECORDING_EXTENSIONS` |
-| `secret.rs` | Keychain access for the Deepgram key | `deepgram_key`, `set_key`, `read_hidden` |
+| `secret.rs` | Keychain access for the Deepgram key and the calendar address; `meeting config set-calendar` logic | `deepgram_key`, `set_key`, `calendar_address`, `set_calendar`, `read_hidden` |
 | `install.rs` | `meeting install` | `install` |
-| `doctor.rs` | `meeting doctor` checks, manifest path | `checks`, `Env`, `manifest_path` |
+| `doctor.rs` | `meeting doctor` checks (incl. the gated `calendar` check), manifest path | `checks`, `Env`, `manifest_path` |
 | `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut) | `Context`, `check` |
-| `ical.rs` | In-house iCalendar reader for the calendar match: unfolding, unescaping, raw times, `VTIMEZONE` offsets, HTML description to text; malformed input is an `Err`, never a panic. No caller yet (`#[allow(dead_code)]` on `mod ical`) | `parse`, `Calendar`, `Event`, `When`, `Zone`, `Event::plain_description` |
+| `ical.rs` | In-house iCalendar reader for the calendar match: unfolding, unescaping, raw times, `VTIMEZONE` offsets, HTML description to text; malformed input is an `Err`, never a panic. `secret` and `doctor` call `parse` and count `events`; the rest waits for #99 (`#[allow(dead_code)]` on `mod ical`) | `parse`, `Calendar`, `Event`, `When`, `Zone`, `Event::plain_description` |
 | `native.rs` | Chrome native messaging host | `Host`, `serve` |
 | `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `mock_raw`, `stall`, `stub`, `envelope`, `temp`, `VALID` |
 
@@ -57,9 +58,10 @@ Arrows are `crate::` imports in non-test code.
 
 ```mermaid
 flowchart TD
-    main --> pipeline & native & install & doctor & notify & logging & secret & deepgram & jobs & config
+    main --> pipeline & native & install & doctor & notify & logging & secret & deepgram & jobs & config & calendar_fetch
     pipeline --> plan & extract & deepgram & transcript & summarise & summary_md & vault & meta & jobs & lock & config
-    native --> jobs & lock & doctor & config & vault & meta & context
+    native --> jobs & lock & doctor & config & vault & meta & context & calendar_fetch
+    secret --> calendar_fetch & ical
     context --> summarise
     install --> doctor & jobs & config
     summary_md --> summarise
@@ -67,11 +69,11 @@ flowchart TD
     meta --> jobs
     jobs --> config
     logging --> config
-    doctor --> config
+    doctor --> config & calendar_fetch & ical
 ```
 
 - `main.rs` is the only place that builds dependencies (`Config::load()`, `JobStore::default_dir()`, `secret::deepgram_key`) and passes them in.
-- `calendar_fetch` imports no `crate::` module and has no caller yet.
+- `calendar_fetch` imports no `crate::` module.
 - Stage modules (`extract`, `deepgram`, `transcript`, `summarise`, `summary_md`, `vault`) do not import each other, except `summary_md` using types from `summarise`. `pipeline.rs` is the only caller of all of them.
 - `ical` imports nothing from the crate.
 - `jobs::write_atomic` is the shared atomic-write helper (also used by `meta`, `pipeline`).
