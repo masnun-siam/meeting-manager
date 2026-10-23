@@ -316,6 +316,15 @@ mod tests {
     }
 
     #[test]
+    fn picks_the_latest_series_started_before_the_recording() {
+        let ics = fixture!("latest_series");
+        assert_eq!(
+            title(ics, &dhaka(MEET, 22, 10, 0)).as_deref(),
+            Some("Newer series")
+        );
+    }
+
+    #[test]
     fn a_series_that_ended_is_no_match() {
         let ics = fixture!("ended_series");
         assert_eq!(picked(ics, &dhaka(MEET, 22, 10, 0)), None);
@@ -494,7 +503,13 @@ mod tests {
         };
         let cal = calendar_with(&[
             ("America/New_York", ny),
-            ("Asia/Dhaka", Zone::default()),
+            (
+                "Asia/Dhaka",
+                Zone {
+                    standard: Some(5 * 3600),
+                    daylight: Some(7 * 3600),
+                },
+            ),
             ("Empty", Zone::default()),
         ]);
         let recording = dhaka(MEET, 22, 10, 0);
@@ -616,6 +631,59 @@ mod tests {
             }]
         );
         assert_eq!(meeting(&event(Vec::new(), None)).organizer, None);
+    }
+
+    fn one(event: Event, recording: &Recording) -> Option<Meeting> {
+        let cal = Calendar {
+            events: vec![event],
+            zones: Default::default(),
+        };
+        pick(&cal, recording)
+    }
+
+    #[test]
+    fn an_instance_matches_up_to_twelve_hours_away() {
+        let recording = dhaka(MEET, 22, 10, 0);
+        let at = |hours: i64| Event {
+            start: When::Utc(utc(22, 4, 0) + hours * 3600),
+            ..event(Vec::new(), None)
+        };
+        assert!(one(at(11), &recording).is_some());
+        assert!(one(at(-12), &recording).is_some());
+        assert_eq!(one(at(13), &recording), None);
+        assert_eq!(one(at(-13), &recording), None);
+    }
+
+    #[test]
+    fn the_url_field_is_searched_for_the_id() {
+        let e = Event {
+            conference: None,
+            url: Some(format!("https://meet.google.com/{MEET}")),
+            ..event(Vec::new(), None)
+        };
+        assert!(one(e, &dhaka(MEET, 22, 10, 0)).is_some());
+    }
+
+    #[test]
+    fn an_all_day_event_is_skipped() {
+        let e = Event {
+            start: When::Date(utc(22, 0, 0)),
+            ..event(Vec::new(), None)
+        };
+        assert_eq!(one(e, &dhaka(MEET, 22, 10, 0)), None);
+    }
+
+    #[test]
+    fn a_date_only_until_runs_to_the_end_of_that_local_day() {
+        let series = |until_day: i64| Event {
+            start: When::Utc(utc(1, 4, 0)),
+            series: true,
+            until: Some(When::Date(utc(until_day, 0, 0))),
+            ..event(Vec::new(), None)
+        };
+        let recording = dhaka(MEET, 22, 10, 0);
+        assert!(one(series(22), &recording).is_some());
+        assert_eq!(one(series(21), &recording), None);
     }
 
     #[test]

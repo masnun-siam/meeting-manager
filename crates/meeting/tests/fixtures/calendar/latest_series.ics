@@ -1,0 +1,25 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20260903T100000
+UID:older@google.com
+RRULE:FREQ=WEEKLY;BYDAY=TH
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Older series
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20260910T100000
+UID:newer@google.com
+RRULE:FREQ=WEEKLY;BYDAY=TH
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Newer series
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261105T100000
+UID:future@google.com
+RRULE:FREQ=WEEKLY;BYDAY=TH
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Future series
+END:VEVENT
+END:VCALENDAR
