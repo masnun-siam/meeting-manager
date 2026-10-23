@@ -62,21 +62,28 @@ pub fn render(t: &Transcript, language: Language) -> String {
         out.push_str("No speech detected\n");
     }
     for u in &t.utterances {
-        let secs = u.start as u64;
         let text = u
             .transcript
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
         out.push_str(&format!(
-            "[{:02}:{:02}:{:02}] Speaker {}: {text}\n",
-            secs / 3600,
-            secs % 3600 / 60,
-            secs % 60,
+            "[{}] Speaker {}: {text}\n",
+            hh_mm_ss(u.start as u64),
             u.speaker
         ));
     }
     out
+}
+
+/// `secs` as the transcript's `hh:mm:ss` clock.
+pub fn hh_mm_ss(secs: u64) -> String {
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        secs % 3600 / 60,
+        secs % 60
+    )
 }
 
 /// True when the rendered transcript has at least one utterance line.

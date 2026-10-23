@@ -1,6 +1,6 @@
 # Rust crate: `meeting`
 
-Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, calendar.rs, calendar_fetch.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, ical.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
+Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, calendar.rs, calendar_fetch.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, context_block.rs, ical.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
 
 One binary crate (`meeting`, edition 2024, no lib). Dependencies: `clap`, `serde`, `serde_json`, `toml`, `anyhow`, `tracing`, `tracing-subscriber`, `ureq` (HTTP), `keyring` (Keychain). External programs: `ffmpeg`, `claude`, `osascript`. See [architecture.md](architecture.md) for how the crate fits with the extension.
 
@@ -35,8 +35,8 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `import.rs` | `meeting import`: validate, name and copy a source into a new meeting folder | `import` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
 | `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. Used by `set-calendar` and the `calendar` doctor check through `main::fetch_calendar` | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
-| `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `Transcript`, `Utterance` |
-| `summarise.rs` | Run headless `claude`, validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
+| `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `hh_mm_ss`, `Transcript`, `Utterance` |
+| `summarise.rs` | Run headless `claude` (optionally after a context block), validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
 | `summary_md.rs` | Render `Summary` to Markdown | `render`, `speaker_names` |
 | `vault.rs` | Write the Obsidian note | `write_note`, `Note` |
 | `notify.rs` | macOS notification via `osascript` | `notify`, `message`, `Outcome` |
@@ -46,6 +46,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `install.rs` | `meeting install` | `install` |
 | `doctor.rs` | `meeting doctor` checks (incl. the gated `calendar` check), manifest path | `checks`, `Env`, `manifest_path` |
 | `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut) | `Context`, `check` |
+| `context_block.rs` | Pure builder of the fenced, escaped, 64 KiB-capped meeting-context block for Claude; no caller until #103 | `build`, `Input`, `SEPARATOR` |
 | `ical.rs` | In-house iCalendar reader for the calendar match: unfolding, unescaping, raw times, `VTIMEZONE` offsets, HTML description to text; malformed input is an `Err`, never a panic. `secret` and `doctor` call `parse`; `calendar` reads the events | `parse`, `Calendar`, `Event`, `When`, `Zone`, `Event::plain_description` |
 | `native.rs` | Chrome native messaging host | `Host`, `serve` |
 | `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `mock_raw`, `stall`, `stub`, `envelope`, `temp`, `VALID` |
@@ -63,6 +64,8 @@ flowchart TD
     native --> jobs & lock & doctor & config & vault & meta & context & calendar_fetch
     secret --> calendar_fetch & ical
     context --> summarise
+    summarise --> context_block
+    context_block --> context & calendar & transcript
     install --> doctor & jobs & config
     summary_md --> summarise
     summarise --> meta
@@ -75,7 +78,8 @@ flowchart TD
 - `main.rs` is the only place that builds dependencies (`Config::load()`, `JobStore::default_dir()`, `secret::deepgram_key`) and passes them in.
 - `calendar_fetch` imports no `crate::` module.
 - Stage modules (`extract`, `deepgram`, `transcript`, `summarise`, `summary_md`, `vault`) do not import each other, except `summary_md` using types from `summarise`. `pipeline.rs` is the only caller of all of them.
-- `ical` imports nothing from the crate; `calendar` imports only `ical` and has no caller yet.
+- `ical` imports nothing from the crate; `calendar` imports only `ical`, and only `context_block` uses its types (no caller of `pick` yet).
+- `summarise` imports only `context_block::SEPARATOR`; `context_block` reads types from `context` and `calendar` and the clock format from `transcript`.
 - `jobs::write_atomic` is the shared atomic-write helper (also used by `meta`, `pipeline`).
 
 ## Conventions

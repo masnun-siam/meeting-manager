@@ -299,7 +299,8 @@ impl Pipeline {
         language: Language,
     ) -> anyhow::Result<String> {
         st.enter(Stage::Summarising)?;
-        let summary = summarise::summarise(&self.config.claude_path, text, self.claude_timeout)?;
+        let summary =
+            summarise::summarise(&self.config.claude_path, text, None, self.claude_timeout)?;
 
         st.enter(Stage::Writing)?;
         let body = summary_md::render(&summary);
