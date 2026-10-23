@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import adHoc from './fixtures/meet-ad-hoc.html?raw';
 import full from './fixtures/meet-full.html?raw';
 import lobby from './fixtures/meet-lobby.html?raw';
 import noRoster from './fixtures/meet-no-roster.html?raw';
+import noSpeaking from './fixtures/meet-no-speaking.html?raw';
 import noTitle from './fixtures/meet-no-title.html?raw';
-import { readRoster, readTitle } from './meetReader';
+import speakingA from './fixtures/meet-speaking-a.html?raw';
+import speakingB from './fixtures/meet-speaking-b.html?raw';
+import { diffSpeaking, readRoster, readSpeaking, readTitle } from './meetReader';
 
 const parse = (html: string) => new DOMParser().parseFromString(html, 'text/html');
 
@@ -84,5 +87,65 @@ describe('readTitle', () => {
   it('cuts to 300 characters and treats a blank name as none', () => {
     expect(readTitle(parse(`<title>Meet - ${'t'.repeat(400)}</title>`))).toBe('t'.repeat(300));
     expect(readTitle(parse('<title>Meet -  </title>'))).toBeNull();
+  });
+});
+
+describe('readSpeaking', () => {
+  it.each([
+    ['speaking a', speakingA, ['Alex Example']],
+    ['speaking b', speakingB, ['Riley Sample']],
+    ['full (speaking stripped)', full, []],
+    ['no speaking', noSpeaking, []],
+    ['no roster', noRoster, []],
+    ['lobby', lobby, []],
+  ])('on %s', (_name, html, expected) => {
+    expect(readSpeaking(parse(html))).toEqual(expected);
+  });
+
+  function speakingPage(tiles: { id: string; label: string; speaking: boolean }[]): Document {
+    const roster = tiles
+      .map(({ id, label }) => `<div role="listitem" aria-label="${label}" data-participant-id="${id}"></div>`)
+      .join('');
+    const grid = tiles
+      .map(
+        ({ id, speaking }) =>
+          `<div data-participant-id="${id}" data-tile-media-id="${id}"><div class="${speaking ? 'kssMZb v5h6Xc' : ''}"></div></div>`,
+      )
+      .join('');
+    return parse(`<div role="list" aria-label="Participants">${roster}</div>${grid}`);
+  }
+
+  it('returns both when two tiles are flagged, with the roster spelling', () => {
+    const doc = speakingPage([
+      { id: 'd/1', label: ' Alex\u0007 Example ', speaking: true },
+      { id: 'd/2', label: 'Riley', speaking: true },
+      { id: 'd/3', label: 'Sam', speaking: false },
+    ]);
+    expect(readSpeaking(doc)).toEqual(['Alex Example', 'Riley']);
+  });
+
+  it('is empty when the flagged tile is not in the roster', () => {
+    expect(readSpeaking(speakingPage([{ id: 'd/1', label: '', speaking: true }]))).toEqual([]);
+  });
+
+  it('never throws', () => {
+    const doc = parse('<p></p>');
+    vi.spyOn(doc, 'querySelectorAll').mockImplementation(() => {
+      throw new Error('Meet changed');
+    });
+    expect(readSpeaking(doc)).toEqual([]);
+  });
+});
+
+describe('diffSpeaking', () => {
+  it.each([
+    ['no change', [], [], null],
+    ['same set reordered', ['B', 'A'], ['A', 'B'], null],
+    ['A starts', [], ['A'], { at: 5, names: ['A'] }],
+    ['A to B', ['A'], ['B'], { at: 5, names: ['B'] }],
+    ['both', ['A'], ['B', 'A'], { at: 5, names: ['A', 'B'] }],
+    ['stop', ['A'], [], { at: 5, names: [] }],
+  ])('%s', (_name, prev, next, expected) => {
+    expect(diffSpeaking(prev, next, 5)).toEqual(expected);
   });
 });
