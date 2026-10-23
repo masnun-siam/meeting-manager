@@ -8,8 +8,9 @@ The user presses Start in the popup. The extension records the active tab and th
 
 | Part | File | Responsibility |
 |---|---|---|
-| Record tab | `popup/RecordTab.tsx` | Language select, Start / Pause / Resume / Stop & save, timer, messages. Sends `PopupCommand`. |
+| Record tab | `popup/RecordTab.tsx` | Language select, Start / Pause / Resume / Stop & save, timer, messages, context line (flag on). Sends `PopupCommand`. |
 | Status hook | `popup/useRecorderStatus.ts` | Live `RecorderStatus` from `chrome.storage.session`. |
+| Context hook | `popup/useMeetingContext.ts` | Live `meeting_context` from `chrome.storage.session`, flag on only. |
 | Control | `background/recordingControl.ts` | Owns state, badge, offscreen lifecycle, stop and save orchestration. |
 | Recorder | `offscreen/recorder.ts` | `getUserMedia` for tab and mic, mix, `MediaRecorder`, chunk writes, 3 h cap timer. |
 | File | `shared/recordingFile.ts` | `recordings/<startedAt>.webm` in the origin-private file system. |
@@ -145,3 +146,13 @@ flowchart TD
 - A failed Start (`resetWithError`) closes the offscreen document, resets to `idle` and sets an `error` notice. `start` also rethrows, which the SW logs.
 - `offscreen_error` before `offscreen_started` resets like a failed Start. After it, only the notice is set and `offscreen_stopped` follows.
 - If the popup cannot reach the SW, `RecordTab` shows "Could not reach the recorder".
+- **Context line** (`FEATURE_MEETING_CONTEXT` on, phases `recording` and `paused` only; FR-5 in [meeting-context.md](../prds/meeting-context.md)): first in the status region, from `meeting_context`.
+
+  | Platform, `capture` | Text |
+  |---|---|
+  | Meet, `reading` | "Meet: reading participants…" |
+  | Meet, `captured` | "<meeting title or tab title> · N seen" (N = stored participants; "N seen" with no title) |
+  | Meet, `unavailable` | "Meet details unavailable — names won't be captured. Recording is fine." plus " Reload the Meet tab next time." when `reloadHint` |
+  | Other | "<tab title> · names are captured on Google Meet only" (no prefix when the title is null) |
+
+  The visible line is `aria-hidden`; a visually hidden sibling (`.srOnly`) carries state-only text ("Meet details captured" for captured), so screen readers hear state changes, not a rising N. `reloadHint` stays `true` after capture recovers, so it is read only while `unavailable`.

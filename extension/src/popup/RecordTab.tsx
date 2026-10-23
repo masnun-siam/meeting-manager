@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { Language, Notice, PopupCommand, RecorderStatus } from '../shared/messages';
+import type { Language, MeetingContextState, Notice, PopupCommand, RecorderStatus } from '../shared/messages';
 import { elapsedMs, initialRecordingState, type StopReason } from '../shared/recordingState';
 import styles from './RecordTab.module.css';
+import { useMeetingContext } from './useMeetingContext';
 import { useRecorderStatus } from './useRecorderStatus';
 
 const LANGUAGES: { value: Language; label: string }[] = [
@@ -16,6 +17,11 @@ const STOP_MESSAGES: Partial<Record<StopReason, string>> = {
 };
 
 const MIC_WARNING = 'Microphone not included: recording tab audio only.';
+
+const CONTEXT_READING = 'Meet: reading participants…';
+const CONTEXT_UNAVAILABLE = "Meet details unavailable — names won't be captured. Recording is fine.";
+const CONTEXT_RELOAD_HINT = ' Reload the Meet tab next time.';
+const CONTEXT_OTHER = 'names are captured on Google Meet only';
 
 function isLanguage(value: unknown): value is Language {
   return LANGUAGES.some((option) => option.value === value);
@@ -63,6 +69,29 @@ function messageLines(status: RecorderStatus | null, sendError: string | null): 
   return lines;
 }
 
+/** The visible context line, and `announce`: state-only text that changes only when the state does. */
+function contextLine(context: MeetingContextState): { text: string; announce: string } {
+  const title = context.identity.tab_title;
+  if (context.identity.platform !== 'meet') {
+    const text = title ? `${title} · ${CONTEXT_OTHER}` : CONTEXT_OTHER;
+    return { text, announce: text };
+  }
+  switch (context.capture) {
+    case 'reading':
+      return { text: CONTEXT_READING, announce: CONTEXT_READING };
+    case 'captured': {
+      const name = context.meetingTitle ?? title;
+      const seen = `${context.participants.length} seen`;
+      return { text: name ? `${name} · ${seen}` : seen, announce: 'Meet details captured' };
+    }
+    case 'unavailable': {
+      // reloadHint is not cleared when capture later recovers, so it only counts while unavailable.
+      const text = context.reloadHint ? CONTEXT_UNAVAILABLE + CONTEXT_RELOAD_HINT : CONTEXT_UNAVAILABLE;
+      return { text, announce: text };
+    }
+  }
+}
+
 function useStoredLanguage(): [Language, (language: Language) => void] {
   const [language, setLanguage] = useState<Language>('bn');
 
@@ -81,6 +110,7 @@ function useStoredLanguage(): [Language, (language: Language) => void] {
 
 export function RecordTab() {
   const status = useRecorderStatus();
+  const context = useMeetingContext();
   const [language, setLanguage] = useStoredLanguage();
   const [sendError, setSendError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -106,6 +136,8 @@ export function RecordTab() {
   }
 
   const lines = messageLines(status, sendError);
+  const running = phase === 'recording' || phase === 'paused';
+  const line = running && context ? contextLine(context) : null;
 
   return (
     <div className={styles.tab}>
@@ -158,6 +190,12 @@ export function RecordTab() {
       </div>
 
       <div role="status" className={styles.messages}>
+        {line ? (
+          <>
+            <p aria-hidden="true">{line.text}</p>
+            <span className={styles.srOnly}>{line.announce}</span>
+          </>
+        ) : null}
         {lines.map(({ text, problem }) => (
           <p key={text} className={problem ? styles.problem : undefined}>
             {text}
