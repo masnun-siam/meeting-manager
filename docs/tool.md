@@ -1,6 +1,6 @@
 # Rust crate: `meeting`
 
-Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
+Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (main.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, ical.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
 
 One binary crate (`meeting`, edition 2024, no lib). Dependencies: `clap`, `serde`, `serde_json`, `toml`, `anyhow`, `tracing`, `tracing-subscriber`, `ureq` (HTTP), `keyring` (Keychain). External programs: `ffmpeg`, `claude`, `osascript`. See [architecture.md](architecture.md) for how the crate fits with the extension.
 
@@ -44,6 +44,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `install.rs` | `meeting install` | `install` |
 | `doctor.rs` | `meeting doctor` checks, manifest path | `checks`, `Env`, `manifest_path` |
 | `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut) | `Context`, `check` |
+| `ical.rs` | In-house iCalendar reader for the calendar match: unfolding, unescaping, raw times, `VTIMEZONE` offsets, HTML description to text; malformed input is an `Err`, never a panic. No caller yet (`#[allow(dead_code)]` on `mod ical`) | `parse`, `Calendar`, `Event`, `When`, `Zone`, `Event::plain_description` |
 | `native.rs` | Chrome native messaging host | `Host`, `serve` |
 | `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `stub`, `envelope`, `temp`, `VALID` |
 
@@ -70,11 +71,12 @@ flowchart TD
 
 - `main.rs` is the only place that builds dependencies (`Config::load()`, `JobStore::default_dir()`, `secret::deepgram_key`) and passes them in.
 - Stage modules (`extract`, `deepgram`, `transcript`, `summarise`, `summary_md`, `vault`) do not import each other, except `summary_md` using types from `summarise`. `pipeline.rs` is the only caller of all of them.
+- `ical` imports nothing from the crate.
 - `jobs::write_atomic` is the shared atomic-write helper (also used by `meta`, `pipeline`).
 
 ## Conventions
 
-- Errors: `anyhow::Result` everywhere, no custom error types. Context via `.with_context(|| format!("cannot ... {}", path.display()))`. Messages that the user can act on name the fix (`run \`meeting doctor\``, `run \`meeting config set-key\``). `main` logs the error with `{e:#}` and returns it.
+- Errors: `anyhow::Result` everywhere, no custom error types, except `ical::Error` (a fixed message with no input text, so a hostile feed never reaches the log). Context via `.with_context(|| format!("cannot ... {}", path.display()))`. Messages that the user can act on name the fix (`run \`meeting doctor\``, `run \`meeting config set-key\``). `main` logs the error with `{e:#}` and returns it.
 - Dependency injection by struct fields and fn pointers, not traits: `Pipeline.key: fn() -> Result<String>`, `Deepgram { base_url, retry_delays }`, `native::Host { open, key, ... }`, `doctor::Env`. Tests swap the fields.
 - Subprocesses (`ffmpeg`, `claude`, `osascript`, `ps`) use absolute paths from config or constants, because Chrome starts the host with a bare `PATH`.
 - Writes that readers may see use write-to-`.tmp`-then-rename (`write_atomic`, `extract` uses `.part`, `vault::write_note` uses a dotted `.tmp`). `config.rs` `save_to` writes directly.
@@ -91,7 +93,7 @@ flowchart TD
 | Unit tests | `#[cfg(test)] mod tests` at the bottom of each `src/*.rs` |
 | Shared fakes | `crates/meeting/src/test_support.rs` (declared `#[cfg(test)] mod test_support` in `main.rs`) |
 | Binary-level tests | `crates/meeting/tests/logging.rs` (spawns `CARGO_BIN_EXE_meeting` with a temp `HOME`, checks the log file and empty stdout); `crates/meeting/tests/native_host.rs` (native host over stdio) |
-| Fixtures | `crates/meeting/tests/fixtures/short.webm`; `crates/meeting/tests/fixtures/deepgram/{en_two_speakers,bn_two_speakers,one_speaker,empty}.json` |
+| Fixtures | `crates/meeting/tests/fixtures/short.webm`; `crates/meeting/tests/fixtures/deepgram/{en_two_speakers,bn_two_speakers,one_speaker,empty}.json`; `crates/meeting/tests/fixtures/calendar/*.ics` (CRLF, as feeds send them) |
 
 - `test_support::mock(responses)` is a TCP server on `127.0.0.1:0` that answers one scripted `(status, body)` per connection and sends each request head down a channel. Pair it with `Deepgram { base_url, retry_delays: vec![] }`.
 - `test_support::stub(dir, tail)` writes a fake `claude` shell script that records args and stdin to `args.txt` and `stdin.txt`, then runs `tail`. `envelope(VALID)` produces the JSON `claude` returns.
