@@ -1,3 +1,4 @@
+mod calendar_fetch;
 mod config;
 mod context;
 mod deepgram;
