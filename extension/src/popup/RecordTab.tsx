@@ -21,6 +21,7 @@ const MIC_WARNING = 'Microphone not included: recording tab audio only.';
 const CONTEXT_READING = 'Meet: reading participants…';
 const CONTEXT_UNAVAILABLE = "Meet details unavailable — names won't be captured. Recording is fine.";
 const CONTEXT_RELOAD_HINT = ' Reload the Meet tab next time.';
+const CONTEXT_PANEL_HINT = 'open the people panel to capture names';
 const CONTEXT_OTHER = 'names are captured on Google Meet only';
 
 function isLanguage(value: unknown): value is Language {
@@ -82,11 +83,17 @@ function contextLine(context: MeetingContextState): { text: string; announce: st
     case 'captured': {
       const name = context.meetingTitle ?? title;
       const seen = `${context.participants.length} seen`;
-      return { text: name ? `${name} · ${seen}` : seen, announce: 'Meet details captured' };
+      const text = name ? `${name} · ${seen}` : seen;
+      if (context.participants.length === 0) {
+        return { text: `${text} · ${CONTEXT_PANEL_HINT}`, announce: `Meet details captured · ${CONTEXT_PANEL_HINT}` };
+      }
+      return { text, announce: 'Meet details captured' };
     }
     case 'unavailable': {
       // reloadHint is not cleared when capture later recovers, so it only counts while unavailable.
-      const text = context.reloadHint ? CONTEXT_UNAVAILABLE + CONTEXT_RELOAD_HINT : CONTEXT_UNAVAILABLE;
+      const text = context.reloadHint
+        ? CONTEXT_UNAVAILABLE + CONTEXT_RELOAD_HINT
+        : `${CONTEXT_UNAVAILABLE} ${CONTEXT_PANEL_HINT[0].toUpperCase()}${CONTEXT_PANEL_HINT.slice(1)}.`;
       return { text, announce: text };
     }
   }

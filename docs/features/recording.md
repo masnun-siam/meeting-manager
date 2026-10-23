@@ -151,8 +151,8 @@ flowchart TD
   | Platform, `capture` | Text |
   |---|---|
   | Meet, `reading` | "Meet: reading participants…" |
-  | Meet, `captured` | "<meeting title or tab title> · N seen" (N = stored participants; "N seen" with no title) |
-  | Meet, `unavailable` | "Meet details unavailable — names won't be captured. Recording is fine." plus " Reload the Meet tab next time." when `reloadHint` |
+  | Meet, `captured` | "<meeting title or tab title> · N seen" (N = stored participants; "N seen" with no title); with N = 0 adds " · open the people panel to capture names" |
+  | Meet, `unavailable` | "Meet details unavailable — names won't be captured. Recording is fine." plus " Reload the Meet tab next time." when `reloadHint`, otherwise " Open the people panel to capture names." |
   | Other | "<tab title> · names are captured on Google Meet only" (no prefix when the title is null) |
 
-  The visible line is `aria-hidden`; a visually hidden sibling (`.srOnly`) carries state-only text ("Meet details captured" for captured), so screen readers hear state changes, not a rising N. `reloadHint` stays `true` after capture recovers, so it is read only while `unavailable`.
+  The visible line is `aria-hidden`; a visually hidden sibling (`.srOnly`) carries state-only text ("Meet details captured" for captured, "Meet details captured · open the people panel to capture names" while 0 are seen), so screen readers hear state changes, not a rising N. `reloadHint` stays `true` after capture recovers, so it is read only while `unavailable`.
