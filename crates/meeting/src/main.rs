@@ -4,6 +4,9 @@ mod context;
 mod deepgram;
 mod doctor;
 mod extract;
+// ponytail: unused until #99 reads it.
+#[allow(dead_code)]
+mod ical;
 mod import;
 mod install;
 mod jobs;
