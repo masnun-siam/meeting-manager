@@ -11,7 +11,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | Service worker (module) | `manifest.config.ts` `background` | `src/background/serviceWorker.ts` | State owner. Registers all listeners at top level. |
 | Popup | `action.default_popup` | `src/popup/index.html` -> `main.tsx` -> `Popup` | Tabs: Record, Jobs. |
 | Offscreen document | `vite.config.ts` `rollupOptions.input` only; created at runtime by `ensureOffscreen()` | `src/offscreen/offscreen.html` -> `offscreen.ts` | Capture and mixing. No UI. |
-| Meet content script | `manifest.config.ts` `content_scripts`, only with `FEATURE_MEETING_CONTEXT=1` | `src/content/meet.ts` | Reads roster, title and speaking on Meet (stub until #105). |
+| Meet content script | `manifest.config.ts` `content_scripts`, only with `FEATURE_MEETING_CONTEXT=1` | `src/content/meet.ts` | Idle until `context_start`; then reads roster and title on Meet and sends `context_update` batches (speaking: #106). |
 | Mic permission page | `vite.config.ts` `rollupOptions.input` only; opened by `openMicPermissionPage()` | `src/permission/permission.html` -> `main.tsx` -> `MicPermission` | One-time mic grant. |
 
 - Offscreen and permission pages are not in the manifest, so `vite.config.ts` lists them as extra build inputs. A new unreferenced page needs the same.
@@ -46,9 +46,10 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/popup/useRecorderStatus.ts` | Live status hook | `useRecorderStatus` |
 | `src/popup/JobsTab.tsx`, `useJobs.ts` | Jobs UI | see [features/native-messaging.md](features/native-messaging.md) |
 | `src/permission/MicPermission.tsx` | Mic grant page | `MicPermission` |
-| `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock` |
+| `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock`, `MEET_CODE` |
 | `src/shared/flags.ts` | Build-time flag, defined in `vite.config.ts` | `meetingContextEnabled` |
-| `src/content/meet.ts` | Meet content script (flag-on build only) | stub |
+| `src/content/meet.ts` | Meet content script (flag-on build only): 1 s reads, 10 s batches, 60 s give-up, `context_hello` resume | `chrome.runtime.onMessage` listener |
+| `src/content/meetReader.ts` | Pure Meet page reads | `readRoster`, `readTitle` |
 | `src/shared/messages.ts` | All cross-context types | `ContentCommand`, `ContentEvent`, `PopupCommand`, `OffscreenCommand`, `OffscreenEvent`, `RecorderStatus`, `Notice`, `RECORDER_STATUS_KEY` |
 | `src/shared/recordingState.ts` | Pure lifecycle | `transition`, `elapsedMs`, `remainingMs`, `RECORDING_CAP_MS` |
 | `src/shared/recordingFile.ts` | OPFS file per recording | `appendChunk`, `getRecordingFile`, `deleteRecordingFile`, `RECORDINGS_DIR` |
@@ -124,6 +125,8 @@ flowchart LR
 ## Google Meet page reading
 
 Spike result (#104), from one real call with 3 participants (host plus two guests, started from a calendar event) in the top frame. Fixtures are sanitised `outerHTML` in `extension/src/content/fixtures/` (fake names `Sam Host` (self), `Alex Example`, `Riley Sample`, code `abc-defg-hij`). The people panel was open in every capture except `meet-ad-hoc.html` and `meet-lobby.html`.
+
+Roster and title reading is implemented in `src/content/meetReader.ts` (#105): the people panel is the only roster source (no tile fallback, so the lobby and a closed panel read nothing), and a title matching the meeting code is null.
 
 **FR-4 verdict: speaking indicator reliable on this call: #106 goes ahead.** Its selector is an obfuscated class pair, so #106 must treat "no match" as "no speaking data", never as an error.
 
