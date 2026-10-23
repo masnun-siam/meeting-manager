@@ -36,7 +36,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 |---|---|---|
 | `src/background/serviceWorker.ts` | Listener registration only | `chrome.runtime.onMessage`, `tabs.onRemoved`, `runtime.onStartup` / `onInstalled` |
 | `src/background/recordingControl.ts` | Recording state machine owner | `handlePopupCommand`, `handleOffscreenEvent`, `handleTabRemoved`, `handleContentEvent`, `serial`, `readStatus`, `writeStatus`, `ensureOffscreen`, `closeOffscreen` |
-| `src/background/contextSession.ts` | Meeting context session (flag on): talks to the Meet content script, merges its batches | `startContext`, `collectFinalBatch`, `closeSegment`, `openSegment`, `mergeBatch`, `applyBatch`, `mapToRecordingMs`, `readContext` |
+| `src/background/contextSession.ts` | Meeting context session (flag on): talks to the Meet content script, merges its batches | `startContext`, `collectFinalBatch`, `closeSegment`, `openSegment`, `mergeBatch`, `applyBatch`, `settleContext`, `mapToRecordingMs`, `readContext` |
 | `src/background/save.ts` | Download, then hand off to the tool | `saveRecording`, `recordingName`, `nextFreeName`, `takenNames` |
 | `src/background/recover.ts` | Save leftovers on startup | `recoverLeftovers`, `recoveredName` |
 | `src/offscreen/offscreen.ts` | Offscreen message router | `chrome.runtime.onMessage` listener |
@@ -118,7 +118,7 @@ flowchart LR
 - **Stream ID is minted in the SW** (`tabCapture.getMediaStreamId`), then consumed in the offscreen document.
 - **Mic permission cannot be requested from the offscreen document or popup.** A tab page (`permission.html`) does it.
 - **Stop waits at most 2 s for the content script.** `context_start` and `context_stop` race a 2 s timer (`ANSWER_MS`); a rejection or timeout never fails Start or holds up the save. A `tab_closed` stop does not ask at all. `context_start` failing sets `capture: 'unavailable'` with `reloadHint`.
-- **Speaking times are wall-clock until merged.** `applyBatch` maps each change into the segment that contains it (`offsetMs + (t - wallStart)`) and drops changes during a pause; `openSpeaking.at` stays wall-clock. Intervals under 1 s are dropped, touching ones with the same names merged; limits: 200 names, 10 names per interval, 5,000 intervals, each cut listed in `truncated`.
+- **Speaking times are wall-clock until merged.** `applyBatch` maps each change into the segment that contains it (`offsetMs + (t - wallStart)`) and drops changes during a pause; `openSpeaking.at` stays wall-clock. An interval open at a pause or stop is ended at the segment's end only by the next change in another segment or at hand-off (`settleContext`), so a late batch can still end it earlier. Intervals under 1 s are dropped, touching ones with the same names merged; limits: 200 names, 10 names per interval, 5,000 intervals, each cut listed in `truncated`.
 - **Startup recovery** runs on `onStartup` and `onInstalled` only, never on SW wake, so it cannot touch a live recording.
 
 ## Google Meet page reading

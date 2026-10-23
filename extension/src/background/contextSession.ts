@@ -98,10 +98,17 @@ function closeSpeaking(state: MeetingContextState, wallMs: number): void {
   });
 }
 
-/** An interval still open in a closed segment (paused or stopped) ends at that segment's end. */
-function settleOpenSpeaking(state: MeetingContextState): void {
+/**
+ * For the hand-off: an interval still open in a closed segment ends at that segment's end.
+ * Not done at pause or stop, so a late batch with earlier changes can still end it sooner (the next change in
+ * another segment ends it at the pause anyway).
+ */
+export function settleContext(state: MeetingContextState): MeetingContextState {
   const wallEnd = state.openSpeaking && segmentAt(state.segments, state.openSpeaking.at)?.wallEnd;
-  if (typeof wallEnd === 'number') closeSpeaking(state, wallEnd);
+  if (typeof wallEnd !== 'number') return state;
+  const next = structuredClone(state);
+  closeSpeaking(next, wallEnd);
+  return next;
 }
 
 function applySpeaking(state: MeetingContextState, change: { at: number; names: string[] }): void {
@@ -141,7 +148,6 @@ export function applyBatch(state: MeetingContextState, batch: unknown): MeetingC
   if (title) next.meetingTitle = title;
   const named = mergeParticipants(next, batch.participants);
   for (const change of [...(batch.speaking ?? [])].sort((a, b) => a.at - b.at)) applySpeaking(next, change);
-  settleOpenSpeaking(next);
   if (title || named > 0) next.capture = 'captured';
   else if (batch.gaveUp && next.capture === 'reading') next.capture = 'unavailable';
   return next;
@@ -162,14 +168,12 @@ async function updateContext(change: (state: MeetingContextState) => MeetingCont
   }
 }
 
-/** Closes the open segment (pause or stop) and the speaking interval in it; a closed one is left alone. */
+/** Closes the open segment (pause or stop); a closed one is left alone. */
 export function closeSegment(at: number): Promise<void> {
   return updateContext((state) => {
-    const next = structuredClone(state);
-    const last = next.segments.at(-1);
-    if (last && last.wallEnd === null) last.wallEnd = at;
-    settleOpenSpeaking(next);
-    return next;
+    const last = state.segments.at(-1);
+    if (!last || last.wallEnd !== null) return state;
+    return { ...state, segments: [...state.segments.slice(0, -1), { ...last, wallEnd: at }] };
   });
 }
 

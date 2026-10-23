@@ -59,7 +59,7 @@ Rules:
 
 - Start only works from `idle`. It records the active tab of the last focused window.
 - Stop before `offscreen_started` is deferred: status becomes `saving`, and `offscreenStarted` sends `offscreen_stop` once the recorder is up.
-- Segments (flag on): Start opens the first, pause sets its `wallEnd`, resume opens `{ wallStart, wallEnd: null, offsetMs: recordedMs }`, stop closes the open one. They map the content script's wall-clock speaking changes onto the recording clock.
+- Segments (flag on): Start opens the first, pause sets its `wallEnd`, resume opens `{ wallStart, wallEnd: null, offsetMs: recordedMs }`, stop closes the open one (a `cap` or `capture_ended` stop in `offscreenStopped`, which also runs without `requestStop`). They map the content script's wall-clock speaking changes onto the recording clock.
 - Recordings under `MIN_PROCESS_MS` (10 s) are saved but not sent to the tool (`Notice` `too_short`). Recovered recordings are always sent.
 - Folder name: `recordingName(startedAt)` gives `meeting-YYYY-MM-DD_HHmm`; the recording is saved as `Meetings/<name>/recording.webm`. `nextFreeName` adds `-2`, `-3` for folder names Chrome's download history already has (`takenNames`). Folders Chrome did not create are invisible to this check, so `conflictAction: 'uniquify'` may produce `recording (1).webm` in the existing folder.
 - The temp file is deleted only after the download completes. A failed delete is ignored.

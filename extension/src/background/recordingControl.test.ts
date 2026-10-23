@@ -243,6 +243,7 @@ describe('meeting context', () => {
     await startRecording();
     expect(stored[MEETING_CONTEXT_KEY]).toBeUndefined();
     await handleContentEvent(update, recordedTab);
+    expect(await handleContentEvent({ type: 'context_hello' }, recordedTab)).toEqual({ recording: false });
     await stop();
     expect(vi.mocked(saveRecording).mock.lastCall?.[0].context).toBeUndefined();
     expect(tabsSendMessage).not.toHaveBeenCalled();
@@ -346,6 +347,23 @@ describe('meeting context', () => {
       expect.objectContaining({ context: expect.objectContaining({ participants: [{ name: 'Ann', self: true }] }) }),
     );
   });
+
+  it.each(['cap', 'capture_ended'] as const)(
+    'closes the segment and the open interval on a %s stop',
+    async (reason) => {
+      await startRecording();
+      vi.setSystemTime(T0 + 5_000);
+      await handleContentEvent({ type: 'context_update', speaking: [{ at: T0 + 1_000, names: ['Ann'] }] }, recordedTab);
+      vi.setSystemTime(T0 + 10_000);
+      await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+      await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason });
+      expect(saveRecording).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          context: expect.objectContaining({ speaking: [{ from: '00:00:01', to: '00:00:10', names: ['Ann'] }] }),
+        }),
+      );
+    },
+  );
 
   it('does not ask a closed tab for the final batch', async () => {
     await startRecording();

@@ -7,6 +7,7 @@ import {
   collectFinalBatch,
   mapToRecordingMs,
   openSegment,
+  settleContext,
   startContext,
 } from './contextSession';
 
@@ -78,10 +79,18 @@ describe('applyBatch speaking', () => {
     expect(next.speaking).toEqual([interval(10, 60, 'A'), interval(70, 80, 'A')]);
   });
 
-  it('ends an interval still open in a closed segment at its end', () => {
-    const next = applyBatch(context({ segments: paused }), { speaking: [change(50, 'A')] });
+  it('ends an interval still open in a closed segment at its end at hand-off', () => {
+    const next = settleContext(applyBatch(context({ segments: paused }), { speaking: [change(50, 'A')] }));
     expect(next.speaking).toEqual([interval(50, 60, 'A')]);
     expect(next.openSpeaking).toBeNull();
+    expect(settleContext(context())).toEqual(context());
+  });
+
+  it('lets a late batch end an interval before the pause, without overlap', () => {
+    const late = applyBatch(context({ segments: paused, openSpeaking: change(10, 'A') }), {
+      speaking: [change(56, 'B')],
+    });
+    expect(settleContext(late).speaking).toEqual([interval(10, 56, 'A'), interval(56, 60, 'B')]);
   });
 
   it('drops intervals under 1 s', () => {
@@ -194,14 +203,13 @@ describe('storage and the content script', () => {
 
   const state = () => stored[MEETING_CONTEXT_KEY] as MeetingContextState;
 
-  it('closes and opens segments, ending an open interval at the pause', async () => {
+  it('closes and opens segments; an interval open at the pause ends there', async () => {
     stored[MEETING_CONTEXT_KEY] = context({ openSpeaking: change(10, 'A') });
     await closeSegment(T0 + 60_000);
     await closeSegment(T0 + 70_000);
     await openSegment(T0 + 120_000, 60_000);
     expect(state().segments).toEqual(paused);
-    expect(state().speaking).toEqual([interval(10, 60, 'A')]);
-    expect(state().openSpeaking).toBeNull();
+    expect(applyBatch(state(), { speaking: [change(130, 'B')] }).speaking).toEqual([interval(10, 60, 'A')]);
   });
 
   it('sends context_start to a Meet tab and leaves the state alone on success', async () => {
@@ -237,11 +245,8 @@ describe('storage and the content script', () => {
     tabsSendMessage.mockResolvedValue({ participants: [{ name: 'Ann', self: true }], speaking: [change(56, 'Ann')] });
     await collectFinalBatch(TAB);
     expect(tabsSendMessage).toHaveBeenCalledWith(TAB, { type: 'context_stop' });
-    expect(state()).toMatchObject({
-      capture: 'captured',
-      participants: [{ name: 'Ann', self: true }],
-      speaking: [interval(56, 60, 'Ann')],
-    });
+    expect(state()).toMatchObject({ capture: 'captured', participants: [{ name: 'Ann', self: true }] });
+    expect(settleContext(state()).speaking).toEqual([interval(56, 60, 'Ann')]);
   });
 
   it('hands off after 2 s when context_stop is not answered', async () => {

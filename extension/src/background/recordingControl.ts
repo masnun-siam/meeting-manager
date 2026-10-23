@@ -17,7 +17,15 @@ import {
 } from '../shared/messages';
 import { micPermissionState, openMicPermissionPage } from '../shared/micPermission';
 import { initialRecordingState, type RecordingState, type StopReason, transition } from '../shared/recordingState';
-import { closeSegment, collectFinalBatch, mergeBatch, openSegment, readContext, startContext } from './contextSession';
+import {
+  closeSegment,
+  collectFinalBatch,
+  mergeBatch,
+  openSegment,
+  readContext,
+  settleContext,
+  startContext,
+} from './contextSession';
 import { nextFreeName, recordingName, saveRecording, takenNames } from './save';
 
 export const OFFSCREEN_PAGE = 'src/offscreen/offscreen.html';
@@ -120,7 +128,7 @@ async function storeContext(tab: chrome.tabs.Tab, startedAt: number): Promise<vo
 async function contextToSend(): Promise<ReturnType<typeof trimToLimit> | undefined> {
   try {
     const state = await readContext();
-    return state && trimToLimit(contextForHandoff(state));
+    return state && trimToLimit(contextForHandoff(settleContext(state)));
   } catch {
     return undefined;
   }
@@ -197,6 +205,8 @@ async function offscreenStopped(reason: StopReason): Promise<void> {
   let notice: Notice;
   try {
     if (saving.phase !== 'saving') throw new Error('No recording to save');
+    // A cap or capture_ended stop comes from the offscreen document, without requestStop.
+    await closeSegment(Date.now());
     // A closed tab cannot answer, so it is not waited for.
     if (status.tabId !== null && saving.reason !== 'tab_closed') await collectFinalBatch(status.tabId);
     const base = recordingName(saving.startedAt);
