@@ -9,6 +9,8 @@ use std::fmt;
 const MAX_LINE: usize = 1024 * 1024;
 /// `plain_description` keeps at most this many characters.
 const MAX_DESCRIPTION: usize = 20_000;
+/// Real feeds nest 3 deep (`VCALENDAR`, `VEVENT`, `VALARM`); deeper is hostile.
+const MAX_DEPTH: usize = 16;
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Calendar {
@@ -168,6 +170,7 @@ impl Reader {
             {
                 let offset = parse_offset(line.value)?;
                 if let Some((_, zone)) = self.zone.as_mut() {
+                    // ponytail: last block wins when a zone lists several historical rules.
                     if part == "STANDARD" {
                         zone.standard = Some(offset);
                     } else {
@@ -184,6 +187,9 @@ impl Reader {
         let name = name.to_ascii_uppercase();
         if self.stack.is_empty() && name != "VCALENDAR" {
             return Err(NOT_ICALENDAR);
+        }
+        if self.stack.len() >= MAX_DEPTH {
+            return Err(Error("components nested too deep"));
         }
         let in_calendar = self.stack.len() == 1;
         match name.as_str() {
@@ -491,12 +497,12 @@ fn strip_tags(html: &str) -> String {
             "br" => out.push('\n'),
             "p" | "div" | "li" if closing => out.push('\n'),
             "script" | "style" if !closing => {
-                // `to_ascii_lowercase` keeps byte offsets, so `at` is valid in `rest`.
                 let end = format!("</{name}");
-                rest = match rest.to_ascii_lowercase().find(&end) {
-                    Some(at) => rest.get(at..).unwrap_or(""),
-                    None => "",
-                };
+                let at = rest
+                    .as_bytes()
+                    .windows(end.len())
+                    .position(|w| w.eq_ignore_ascii_case(end.as_bytes()));
+                rest = at.and_then(|at| rest.get(at..)).unwrap_or("");
             }
             _ => {}
         }
@@ -511,9 +517,10 @@ fn decode_entities(text: &str) -> String {
     while let Some((before, after)) = rest.split_once('&') {
         out.push_str(before);
         let decoded = after
-            .split_once(';')
-            .filter(|(name, _)| name.len() <= 10)
-            .and_then(|(name, tail)| Some((entity(name)?, tail)));
+            .char_indices()
+            .take(11)
+            .find(|&(_, c)| c == ';')
+            .and_then(|(at, _)| Some((entity(after.get(..at)?)?, after.get(at + 1..)?)));
         match decoded {
             Some((c, tail)) => {
                 out.push(c);
@@ -805,6 +812,15 @@ mod tests {
     }
 
     #[test]
+    fn plain_description_is_linear_on_hostile_html() {
+        let ampersands = format!("<b>{}", "&".repeat(1_000_000));
+        assert_eq!(description(&ampersands), "&".repeat(20_000));
+        let scripts = "<script></script x".repeat(60_000);
+        // The last `</script x` has no `>`, so it stays as text.
+        assert_eq!(description(&scripts), "</script x");
+    }
+
+    #[test]
     fn plain_description_leaves_plain_text_alone() {
         assert_eq!(
             description("a &amp; b\n\n\n\nc < 3"),
@@ -876,6 +892,7 @@ mod tests {
                 "VERSION:2.0\r\nBEGIN:VCALENDAR\r\n".to_owned(),
             ),
             ("binary garbage", garbage.into_owned()),
+            ("nested too deep", calendar(&"BEGIN:X\r\n".repeat(20))),
             ("cut mid-character", cut.into_owned()),
         ];
         for (name, text) in cases {
