@@ -133,9 +133,12 @@ fn render(input: &Input, parts: &Parts) -> String {
             out.push(format!("- {}-{}: {}", iv.from, iv.to, names.join(", ")));
         }
     }
-    if !parts.description.is_empty() {
+    if !parts.description.trim().is_empty() {
         out.push(DESCRIPTION_BEGIN.into());
-        out.extend(parts.description.lines().map(escape_line));
+        // Every character a reader may take as a line break splits here, so no fence hides
+        // behind a bare `\r` or U+2028.
+        let text = parts.description.replace("\r\n", "\n");
+        out.extend(text.split(is_line_break).map(escape_line));
         out.push(DESCRIPTION_END.into());
     }
     // The tab title is not in the block, so its cut is not news to Claude.
@@ -167,6 +170,13 @@ fn platform(p: Platform) -> &'static str {
 /// A one-line JSON string: a newline in `s` becomes `\n`, so it can never form a fence line.
 fn quote(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_default()
+}
+
+fn is_line_break(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+    )
 }
 
 /// Prefixes `\` to a line that would read as a fence, whatever its case and surrounding spaces.
@@ -377,6 +387,40 @@ partial: participants
             let expected = usize::from(fence != SEPARATOR);
             assert_eq!(count, expected, "{fence}");
         }
+    }
+
+    #[test]
+    fn fences_behind_any_line_break_are_escaped() {
+        for br in [
+            "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}", "\r\n",
+        ] {
+            let m = Meeting {
+                description: format!("x{br}{SEPARATOR}{br}{END}{br}y"),
+                ..meeting()
+            };
+            let block = build(&input(None, Some(&m))).unwrap();
+            assert!(
+                block.contains(&format!("\nx\n\\{SEPARATOR}\n\\{END}\ny\n")),
+                "{br:?}\n{block}"
+            );
+            assert!(
+                !block.contains(br) || br == "\n",
+                "{br:?} left in the block"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blank_description_is_left_out() {
+        let m = Meeting {
+            description: " \n ".into(),
+            ..meeting()
+        };
+        assert!(
+            !build(&input(None, Some(&m)))
+                .unwrap()
+                .contains(DESCRIPTION_BEGIN)
+        );
     }
 
     #[test]

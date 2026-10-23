@@ -36,7 +36,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
 | `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. Used by `set-calendar` and the `calendar` doctor check through `main::fetch_calendar` | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
 | `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `hh_mm_ss`, `Transcript`, `Utterance` |
-| `summarise.rs` | Run headless `claude` (optionally after a context block), validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT`, `CONTEXT_RULES` |
+| `summarise.rs` | Run headless `claude` (optionally after a context block), validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
 | `summary_md.rs` | Render `Summary` to Markdown | `render`, `speaker_names` |
 | `vault.rs` | Write the Obsidian note | `write_note`, `Note` |
 | `notify.rs` | macOS notification via `osascript` | `notify`, `message`, `Outcome` |
