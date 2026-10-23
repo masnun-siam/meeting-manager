@@ -68,3 +68,36 @@ pub fn mock(responses: Vec<(u16, &'static str)>) -> (String, mpsc::Receiver<Stri
     });
     (base, rx)
 }
+
+/// Writes each raw HTTP response, one per connection, with `{base}` replaced by this
+/// server's base URL (for `Location:` redirect chains). Sends each request head down the
+/// channel.
+pub fn mock_raw(responses: Vec<String>) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let own = base.clone();
+    std::thread::spawn(move || {
+        for response in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut head = String::new();
+            while reader.read_line(&mut head).unwrap() > 2 {}
+            tx.send(head).unwrap();
+            stream
+                .write_all(response.replace("{base}", &own).as_bytes())
+                .unwrap();
+        }
+    });
+    (base, rx)
+}
+
+/// Accepts connections and never answers them.
+pub fn stall() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let _held: Vec<_> = listener.incoming().collect();
+    });
+    base
+}
