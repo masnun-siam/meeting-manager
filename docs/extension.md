@@ -119,7 +119,7 @@ flowchart LR
 
 ## Google Meet page reading
 
-Spike result (#104), from one real call with 3 participants (host plus two guests, started from a calendar event) in the top frame. Fixtures are sanitised `outerHTML` in `extension/src/content/fixtures/` (fake names `Sam Host` (self), `Alex Example`, `Riley Sample`, code `abc-defg-hij`). The people panel was open in every capture.
+Spike result (#104), from one real call with 3 participants (host plus two guests, started from a calendar event) in the top frame. Fixtures are sanitised `outerHTML` in `extension/src/content/fixtures/` (fake names `Sam Host` (self), `Alex Example`, `Riley Sample`, code `abc-defg-hij`). The people panel was open in every capture except `meet-ad-hoc.html` and `meet-lobby.html`.
 
 **FR-4 verdict: speaking indicator reliable on this call: #106 goes ahead.** Its selector is an obfuscated class pair, so #106 must treat "no match" as "no speaking data", never as an error.
 
@@ -127,7 +127,7 @@ Spike result (#104), from one real call with 3 participants (host plus two guest
 |---|---|---|---|---|
 | Roster | `[role="list"][aria-label="Participants"] > [role="listitem"]`, name in the item's `aria-label`; `data-participant-id` is the stable key | People panel open | Semantic (`role`, `aria-label`, `data-*`) | `meet-full.html`, `meet-no-roster.html` |
 | Self | The listitem whose text holds a `(You)` span; its `aria-label` is the real display name | People panel open | Text `(You)` is localised | `meet-full.html` |
-| Title | `document.title` is `Meet - <event name>`; also a bottom-bar `div` (class `u6vdEc`, obfuscated) | Event-based meeting | `document.title` prefix is the steadier read | `meet-full.html`, `meet-no-title.html` |
+| Title | `document.title` is `Meet - <event name>`; also a bottom-bar `div` (class `u6vdEc`, obfuscated) | Event-based meeting | `document.title` prefix is the steadier read | `meet-full.html`, `meet-ad-hoc.html`, `meet-no-title.html` |
 | Speaking | A tile `[data-tile-media-id]` holds descendants with classes `kssMZb` and `v5h6Xc` only while its person speaks; map the tile's `data-participant-id` to the roster item for the name | Meeting grid | Obfuscated classes, expect breakage on a Meet release | `meet-speaking-a.html`, `meet-speaking-b.html`, `meet-no-speaking.html` |
 
 Findings:
