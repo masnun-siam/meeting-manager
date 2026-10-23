@@ -1003,7 +1003,7 @@ mod tests {
                 vec![(200, EN)],
             );
             env.with_context(&meet());
-            let _calendar = match responses {
+            let calendar = match responses {
                 Some(responses) => Some(serve_calendar(responses)),
                 None => {
                     ADDRESS.set(Some(format!("{}/basic.ics", stall())));
@@ -1021,6 +1021,9 @@ mod tests {
                 note.contains("meeting_title: \"Meet title\""),
                 "{case}: {note}"
             );
+            if let Some(calendar) = calendar {
+                assert!(calendar.try_iter().next().is_some(), "{case}: not fetched");
+            }
         }
     }
 
