@@ -1,6 +1,7 @@
 // Internal message contracts between the popup, the service worker and the offscreen document.
 // This file is the one place for message types; later work extends these unions here.
 
+import type { ContextIdentity } from './native';
 import type { RecordingState, StopReason } from './recordingState';
 
 export type Language = 'bn' | 'en';
@@ -76,3 +77,25 @@ export interface RecorderStatus {
 }
 
 export const RECORDER_STATUS_KEY = 'recorder';
+
+/** `chrome.storage.session` key for the meeting context of the current recording; cleared after hand-off. */
+export const MEETING_CONTEXT_KEY = 'meeting_context';
+
+/** One recorded stretch: wall-clock bounds and where it starts in the recording file. */
+export interface Segment {
+  wallStart: number;
+  wallEnd: number | null;
+  offsetMs: number;
+}
+
+export interface MeetingContextState {
+  identity: ContextIdentity;
+  segments: Segment[];
+  meetingTitle: string | null;
+  participants: { name: string; self: boolean }[];
+  speaking: { fromMs: number; toMs: number; names: string[] }[];
+  openSpeaking: { at: number; names: string[] } | null;
+  truncated: string[];
+  capture: 'reading' | 'captured' | 'unavailable';
+  reloadHint: boolean;
+}

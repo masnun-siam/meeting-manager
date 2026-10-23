@@ -1,7 +1,11 @@
 // Recording control: the service worker's state owner. Every handler reads the status from storage first,
 // so a service worker that slept mid-recording carries on.
 
+import { meetingContextEnabled } from '../shared/flags';
+import { contextForHandoff, identityFromTab, trimToLimit, utcOffsetMin } from '../shared/meetingContext';
 import {
+  MEETING_CONTEXT_KEY,
+  type MeetingContextState,
   type Notice,
   type OffscreenCommand,
   type OffscreenEvent,
@@ -78,9 +82,53 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function clearContext(): Promise<void> {
+  if (!meetingContextEnabled()) return;
+  try {
+    await chrome.storage.session.remove(MEETING_CONTEXT_KEY);
+  } catch {
+    console.error('Could not clear the meeting context');
+  }
+}
+
+/** Stores the captured tab's identity and the first segment. Never fails Start. */
+async function storeContext(tab: chrome.tabs.Tab, startedAt: number): Promise<void> {
+  try {
+    const offset = utcOffsetMin(startedAt);
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    const context: MeetingContextState = {
+      identity: identityFromTab({ url: tab.url, title: tab.title }, startedAt, offset, zone),
+      segments: [{ wallStart: startedAt, wallEnd: null, offsetMs: 0 }],
+      meetingTitle: null,
+      participants: [],
+      speaking: [],
+      openSpeaking: null,
+      truncated: [],
+      capture: 'reading',
+      reloadHint: false,
+    };
+    await chrome.storage.session.set({ [MEETING_CONTEXT_KEY]: context });
+  } catch {
+    console.error('Could not store the meeting context');
+  }
+}
+
+/** The stored context trimmed for the `process` message, or undefined. */
+async function contextToSend(): Promise<ReturnType<typeof trimToLimit> | undefined> {
+  if (!meetingContextEnabled()) return undefined;
+  try {
+    const stored = await chrome.storage.session.get(MEETING_CONTEXT_KEY);
+    const state = stored[MEETING_CONTEXT_KEY] as MeetingContextState | undefined;
+    return state && trimToLimit(contextForHandoff(state));
+  } catch {
+    return undefined;
+  }
+}
+
 /** Back to idle with an error notice, the offscreen document closed and the badge cleared. */
 async function resetWithError(status: RecorderStatus, message: string): Promise<void> {
   await closeOffscreen();
+  await clearContext();
   await commit({
     ...status,
     state: initialRecordingState,
@@ -105,6 +153,7 @@ async function start(language: RecorderStatus['language']): Promise<void> {
     const state = transition(status.state, { type: 'start', at: Date.now() });
     if (state.phase !== 'recording') return;
     await commit({ state, language, micIncluded: null, notice: null, tabId: tab.id });
+    if (meetingContextEnabled()) await storeContext(tab, state.startedAt);
     await sendToOffscreen({ type: 'offscreen_start', streamId, language, startedAt: state.startedAt });
   } catch (error) {
     await resetWithError(status, messageOf(error));
@@ -147,11 +196,13 @@ async function offscreenStopped(reason: StopReason): Promise<void> {
       name: nextFreeName(base, await takenNames(base)),
       language: status.language,
       process: saving.recordedMs >= MIN_PROCESS_MS,
+      context: await contextToSend(),
     });
   } catch (error) {
     notice = { kind: 'error', message: `Could not save the recording (${messageOf(error)}).` };
   }
   const state = transition(saving, { type: 'saved' });
+  await clearContext();
   await closeOffscreen();
   await commit({
     ...status,

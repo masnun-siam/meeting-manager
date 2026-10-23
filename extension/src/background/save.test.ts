@@ -83,6 +83,27 @@ describe('saveRecording', () => {
     });
   });
 
+  it('sends the context with process when given', async () => {
+    finishWith({ state: { current: 'complete' } });
+    vi.mocked(sendNative).mockResolvedValue({ ok: true, job_id: 'j1' });
+    const context = {
+      version: 1 as const,
+      platform: 'other' as const,
+      url: null,
+      meeting_id: null,
+      tab_title: null,
+      meeting_title: null,
+      started_at_ms: 1,
+      utc_offset_min: 0,
+      time_zone: null,
+      participants: [],
+      speaking: [],
+      truncated: [],
+    };
+    await saveRecording({ ...opts, context });
+    expect(sendNative).toHaveBeenCalledWith(expect.objectContaining({ type: 'process', context }));
+  });
+
   it('saves but does not process a short recording', async () => {
     finishWith({ state: { current: 'complete' } });
     expect(await saveRecording({ ...opts, process: false })).toEqual({ kind: 'too_short' });

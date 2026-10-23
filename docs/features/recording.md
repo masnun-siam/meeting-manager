@@ -13,7 +13,7 @@ The user presses Start in the popup. The extension records the active tab and th
 | Control | `background/recordingControl.ts` | Owns state, badge, offscreen lifecycle, stop and save orchestration. |
 | Recorder | `offscreen/recorder.ts` | `getUserMedia` for tab and mic, mix, `MediaRecorder`, chunk writes, 3 h cap timer. |
 | File | `shared/recordingFile.ts` | `recordings/<startedAt>.webm` in the origin-private file system. |
-| Save | `background/save.ts` | Download, delete temp file, native `process` call. |
+| Save | `background/save.ts` | Download, delete temp file, native `process` call. With `FEATURE_MEETING_CONTEXT=1`, Start stores the tab identity in `storage.session` `meeting_context` and the `process` message carries it as `context` (trimmed to 256 KiB); the key is cleared after hand-off. Recovered recordings send none. |
 | Recover | `background/recover.ts` | Re-save leftovers at browser start. |
 | Mic page | `permission/MicPermission.tsx` | Grants mic permission once. |
 
@@ -47,7 +47,7 @@ sequenceDiagram
   SW->>D: download Meetings/name/recording.webm
   D-->>SW: complete, absolute path
   SW->>FS: deleteRecordingFile
-  SW->>T: sendNative process {path, language} (only if >= 10 s)
+  SW->>T: sendNative process {path, language, context?} (only if >= 10 s)
   T-->>SW: reply
   SW->>SW: status = idle + Notice, closeOffscreen
 ```
