@@ -1,0 +1,10 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261023T000000
+UID:idnightsingle@google.com
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Midnight single
+END:VEVENT
+END:VCALENDAR

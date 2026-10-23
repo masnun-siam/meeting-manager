@@ -1,0 +1,20 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261022T100000
+UID:eriesfirstoccurrence@google.com
+RRULE:FREQ=WEEKLY;BYDAY=TH
+DESCRIPTION:Usual agenda
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Series first occurrence
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261022T100000
+UID:verriddenfirstoccurrence@google.com
+RECURRENCE-ID;TZID=Asia/Dhaka:20261022T100000
+DESCRIPTION:Changed agenda
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Overridden first occurrence
+END:VEVENT
+END:VCALENDAR

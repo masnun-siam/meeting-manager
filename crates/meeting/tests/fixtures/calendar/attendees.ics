@@ -1,0 +1,21 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261022T100000
+UID:ttendeefiltering@google.com
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+ORGANIZER;CN="Doe, John":mailto:john@example.com
+ATTENDEE;CUTYPE=INDIVIDUAL;PARTSTAT=ACCEPTED;CN="Doe, John":mailto:john@example.com
+ATTENDEE;CUTYPE=ROOM;PARTSTAT=ACCEPTED;CN=Room 4:mailto:c_1@resource.calendar.google.com
+ATTENDEE;CUTYPE=RESOURCE;PARTSTAT=ACCEPTED;CN=Projector:mailto:c_2@resource.calendar.google.com
+ATTENDEE;PARTSTAT=ACCEPTED;CN=jane@example.com:mailto:jane@example.com
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:nocn@example.com
+ATTENDEE;PARTSTAT=ACCEPTED;CN=:mailto:empty@example.com
+ATTENDEE;PARTSTAT=TENTATIVE;CN=Ali:mailto:ali@example.com
+ATTENDEE;PARTSTAT=DECLINED;CN=Bo:mailto:bo@example.com
+ATTENDEE;CN=Cy:mailto:cy@example.com
+ATTENDEE;PARTSTAT=DELEGATED;CN=Di:mailto:di@example.com
+SUMMARY:Attendee filtering
+END:VEVENT
+END:VCALENDAR

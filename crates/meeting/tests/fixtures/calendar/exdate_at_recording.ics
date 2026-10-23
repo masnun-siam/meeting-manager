@@ -1,0 +1,12 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261001T100000
+UID:erieswithexdate@google.com
+RRULE:FREQ=DAILY
+EXDATE;TZID=Asia/Dhaka:20261022T100000
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Series with exdate
+END:VEVENT
+END:VCALENDAR

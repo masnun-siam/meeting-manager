@@ -1,11 +1,10 @@
+mod calendar;
 mod calendar_fetch;
 mod config;
 mod context;
 mod deepgram;
 mod doctor;
 mod extract;
-// ponytail: set-calendar and doctor read only `parse` and `events` until #99 uses the rest.
-#[allow(dead_code)]
 mod ical;
 mod import;
 mod install;

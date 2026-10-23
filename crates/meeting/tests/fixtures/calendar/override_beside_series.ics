@@ -1,0 +1,18 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261001T100000
+UID:ailyseries@google.com
+RRULE:FREQ=DAILY
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Daily series
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Dhaka:20261022T100000
+UID:ailyoverride@google.com
+RECURRENCE-ID;TZID=Asia/Dhaka:20261022T100000
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SUMMARY:Daily override
+END:VEVENT
+END:VCALENDAR
