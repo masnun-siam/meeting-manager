@@ -4,7 +4,9 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::calendar_fetch::FetchError;
 use crate::config::Config;
+use crate::ical;
 
 pub const HOST_NAME: &str = "com.meeting_manager.host";
 
@@ -21,6 +23,10 @@ pub struct Env<'a> {
     pub key: fn() -> anyhow::Result<String>,
     pub manifest: PathBuf,
     pub exe: PathBuf,
+    /// Whether `FEATURE_MEETING_CONTEXT` was set at build time; off leaves out `calendar`.
+    pub context: bool,
+    pub calendar: fn() -> anyhow::Result<Option<String>>,
+    pub fetch: fn(&str) -> Result<String, FetchError>,
 }
 
 /// Chrome's per-user location for native host manifests on macOS.
@@ -111,7 +117,34 @@ pub fn checks(env: &Env) -> Vec<Check> {
     };
     let mut all = vec![config, key];
     all.extend(rest);
+    if env.context {
+        all.push(calendar(env));
+    }
     all
+}
+
+/// Passes when no address is stored or the stored one fetches and parses. The fix names the
+/// cause, never the address.
+fn calendar(env: &Env) -> Check {
+    const RUN: &str = "run `meeting config set-calendar`";
+    let fix = match (env.calendar)() {
+        Ok(None) => None,
+        Ok(Some(address)) => match (env.fetch)(&address).map(|text| ical::parse(&text)) {
+            Ok(Ok(_)) => None,
+            Ok(Err(_)) | Err(FetchError::NotIcalendar) => {
+                Some(format!("Calendar address is not an iCalendar feed; {RUN}"))
+            }
+            Err(FetchError::Offline) => {
+                Some(format!("Calendar is offline; check the network or {RUN}"))
+            }
+            Err(e @ FetchError::Http(_)) => {
+                Some(format!("Calendar address was rejected ({e}); {RUN}"))
+            }
+            Err(e) => Some(format!("Calendar check failed ({e}); {RUN}")),
+        },
+        Err(_) => Some(format!("Could not read the Keychain; {RUN}")),
+    };
+    check("calendar", fix.is_none(), &fix.unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -171,7 +204,162 @@ mod tests {
             key,
             manifest: manifest.into(),
             exe: exe.into(),
+            context: false,
+            calendar: no_calendar,
+            fetch: no_fetch,
         })
+    }
+
+    const SENTINEL: &str = "SENTINEL-SECRET-42";
+    const ICS: &str = "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n";
+
+    fn no_calendar() -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn stored() -> anyhow::Result<Option<String>> {
+        Ok(Some(format!("https://x/{SENTINEL}/basic.ics")))
+    }
+
+    fn locked() -> anyhow::Result<Option<String>> {
+        anyhow::bail!("cannot read the Keychain: locked")
+    }
+
+    fn no_fetch(_: &str) -> Result<String, FetchError> {
+        panic!("no address is stored")
+    }
+
+    fn feed(address: &str) -> Result<String, FetchError> {
+        assert!(address.contains(SENTINEL));
+        Ok(ICS.into())
+    }
+
+    fn truncated(_: &str) -> Result<String, FetchError> {
+        Ok("BEGIN:VCALENDAR\r\n".into())
+    }
+
+    fn offline(_: &str) -> Result<String, FetchError> {
+        Err(FetchError::Offline)
+    }
+
+    fn rejected(_: &str) -> Result<String, FetchError> {
+        Err(FetchError::Http(403))
+    }
+
+    fn html(_: &str) -> Result<String, FetchError> {
+        Err(FetchError::NotIcalendar)
+    }
+
+    fn tls(_: &str) -> Result<String, FetchError> {
+        Err(FetchError::Tls)
+    }
+
+    /// The checks with the gate on and a working setup except for the calendar.
+    fn with_calendar(
+        config: &Result<Config, String>,
+        calendar: fn() -> anyhow::Result<Option<String>>,
+        fetch: fn(&str) -> Result<String, FetchError>,
+    ) -> Vec<Check> {
+        let nowhere = Path::new("/nowhere");
+        checks(&Env {
+            config,
+            key: key_ok,
+            manifest: nowhere.into(),
+            exe: nowhere.into(),
+            context: true,
+            calendar,
+            fetch,
+        })
+    }
+
+    fn calendar_check(
+        calendar: fn() -> anyhow::Result<Option<String>>,
+        fetch: fn(&str) -> Result<String, FetchError>,
+    ) -> Check {
+        let c = with_calendar(&Err("no config".into()), calendar, fetch)
+            .pop()
+            .unwrap();
+        assert_eq!(c.name, "calendar");
+        assert!(!c.fix.contains(SENTINEL), "{}", c.fix);
+        c
+    }
+
+    #[test]
+    fn calendar_is_last_and_only_with_the_gate_on() {
+        let dir = temp("doctor-calendar");
+        let (config, manifest, exe) = setup(&dir);
+        let off = run(&config, key_ok, &manifest, &exe);
+        let on = checks(&Env {
+            config: &config,
+            key: key_ok,
+            manifest,
+            exe,
+            context: true,
+            calendar: stored,
+            fetch: feed,
+        });
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(off.len(), 7);
+        assert!(off.iter().all(|c| c.name != "calendar"));
+        assert_eq!(on[..7], off[..]);
+        assert_eq!(on.len(), 8);
+        assert_eq!(on[7], check("calendar", true, ""));
+    }
+
+    #[test]
+    fn calendar_passes_unconfigured_or_fetched_and_parsed() {
+        assert!(calendar_check(no_calendar, no_fetch).ok);
+        assert!(calendar_check(stored, feed).ok);
+    }
+
+    #[test]
+    fn calendar_failures_name_the_cause_and_the_command() {
+        let fix = |calendar, fetch| {
+            let c = calendar_check(calendar, fetch);
+            assert!(!c.ok);
+            c.fix
+        };
+        assert_eq!(
+            fix(stored, offline),
+            "Calendar is offline; check the network or run `meeting config set-calendar`"
+        );
+        assert_eq!(
+            fix(stored, rejected),
+            "Calendar address was rejected (http 403); run `meeting config set-calendar`"
+        );
+        for fetch in [html, truncated] {
+            assert_eq!(
+                fix(stored, fetch),
+                "Calendar address is not an iCalendar feed; run `meeting config set-calendar`"
+            );
+        }
+        assert_eq!(
+            fix(stored, tls),
+            "Calendar check failed (tls); run `meeting config set-calendar`"
+        );
+        assert_eq!(
+            fix(locked, no_fetch),
+            "Could not read the Keychain; run `meeting config set-calendar`"
+        );
+    }
+
+    #[test]
+    fn offline_calendar_leaves_the_other_checks_unchanged() {
+        let dir = temp("doctor-calendar-offline");
+        let (config, manifest, exe) = setup(&dir);
+        let off = run(&config, key_ok, &manifest, &exe);
+        let on = checks(&Env {
+            config: &config,
+            key: key_ok,
+            manifest,
+            exe,
+            context: true,
+            calendar: stored,
+            fetch: offline,
+        });
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(on[..7], off[..]);
+        assert!(!on[7].ok && on[7].fix.contains("offline"));
     }
 
     fn failing(checks: &[Check]) -> Vec<(&'static str, String)> {

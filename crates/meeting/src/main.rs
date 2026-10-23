@@ -30,9 +30,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::bail;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
+use crate::calendar_fetch::{FetchError, Policy};
 use crate::config::Config;
 use crate::deepgram::Deepgram;
 use crate::jobs::JobStore;
@@ -86,6 +87,8 @@ enum Command {
 enum ConfigCommand {
     /// Store the Deepgram API key in the Keychain.
     SetKey,
+    /// Store the secret iCal address of your calendar in the Keychain.
+    SetCalendar,
 }
 
 #[derive(ValueEnum, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -105,15 +108,39 @@ pub fn context_enabled() -> bool {
     context_gate(option_env!("FEATURE_MEETING_CONTEXT"))
 }
 
+/// The CLI for this build. Clap cannot remove a derived subcommand, so with the gate off
+/// `set-calendar` is hidden here and refused in `run`.
+fn cli(context: bool) -> clap::Command {
+    let cli = Cli::command();
+    if context {
+        return cli;
+    }
+    cli.mut_subcommand("config", |c| {
+        c.mut_subcommand("set-calendar", |s| s.hide(true))
+    })
+}
+
+fn parse(context: bool, args: Vec<OsString>) -> Result<Cli, clap::Error> {
+    cli(context)
+        .try_get_matches_from(args)
+        .and_then(|m| Cli::from_arg_matches(&m))
+}
+
+/// The calendar fetch under the real policy, as the `fn` pointer `secret` and `doctor` take.
+fn fetch_calendar(address: &str) -> Result<String, FetchError> {
+    calendar_fetch::fetch(address, &Policy::REAL)
+}
+
 fn main() -> anyhow::Result<()> {
     logging::init();
-    let cli = Cli::try_parse_from(chrome_args(std::env::args_os())).unwrap_or_else(|e| {
+    let context = context_enabled();
+    let cli = parse(context, chrome_args(std::env::args_os())).unwrap_or_else(|e| {
         if e.use_stderr() {
             tracing::error!("{}", e.kind());
         }
         e.exit()
     });
-    let result = run(cli.command);
+    let result = run(cli.command, context);
     if let Err(e) = &result {
         tracing::error!("{e:#}");
     }
@@ -133,7 +160,35 @@ fn chrome_args(args: impl Iterator<Item = OsString>) -> Vec<OsString> {
     args
 }
 
-fn run(command: Command) -> anyhow::Result<()> {
+/// What `meeting install` prints last.
+fn install_next(has_key: bool, context: bool) -> String {
+    let mut next = if has_key {
+        "Next: run `meeting doctor`.\n".to_string()
+    } else {
+        "Next: run `meeting config set-key`, then `meeting doctor`.\n".to_string()
+    };
+    if context {
+        next.push_str("Optional: run `meeting config set-calendar` to give summaries your meeting agendas and attendee names.\n");
+    }
+    next
+}
+
+fn run(command: Command, context: bool) -> anyhow::Result<()> {
+    if let Command::Config {
+        command: ConfigCommand::SetCalendar,
+    } = command
+    {
+        if !context {
+            bail!("unrecognized subcommand 'set-calendar'");
+        }
+        tracing::info!("meeting config set-calendar");
+        return secret::set_calendar(
+            &secret::read_hidden("Calendar secret iCal address: ")?,
+            &secret::calendar_entry()?,
+            fetch_calendar,
+            &mut io::stdout(),
+        );
+    }
     if let Command::Config {
         command: ConfigCommand::SetKey,
     } = command
@@ -155,7 +210,9 @@ fn run(command: Command) -> anyhow::Result<()> {
             key: secret::deepgram_key,
             manifest: doctor::manifest_path(&config::home()?),
             exe: std::env::current_exe()?,
-            context: context_enabled(),
+            context,
+            calendar: secret::calendar_address,
+            fetch: fetch_calendar,
         };
         return native::serve(
             &host,
@@ -206,11 +263,7 @@ fn run(command: Command) -> anyhow::Result<()> {
             &std::env::var_os("PATH").unwrap_or_default(),
             &std::env::current_exe()?,
         )?;
-        if secret::deepgram_key().is_err() {
-            println!("Next: run `meeting config set-key`, then `meeting doctor`.");
-        } else {
-            println!("Next: run `meeting doctor`.");
-        }
+        print!("{}", install_next(secret::deepgram_key().is_ok(), context));
         return Ok(());
     }
     if let Command::Doctor = command {
@@ -221,6 +274,9 @@ fn run(command: Command) -> anyhow::Result<()> {
             key: secret::deepgram_key,
             manifest: doctor::manifest_path(&config::home()?),
             exe: std::env::current_exe()?,
+            context,
+            calendar: secret::calendar_address,
+            fetch: fetch_calendar,
         });
         for c in &checks {
             if c.ok {
@@ -242,6 +298,9 @@ fn run(command: Command) -> anyhow::Result<()> {
         Command::Config {
             command: ConfigCommand::SetKey,
         } => "config set-key",
+        Command::Config {
+            command: ConfigCommand::SetCalendar,
+        } => "config set-calendar",
         Command::Doctor => "doctor",
         Command::NativeHost { .. } => "native-host",
     };
@@ -285,7 +344,6 @@ fn process(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
 
     #[test]
     fn the_gate_is_on_only_for_the_value_1() {
@@ -298,6 +356,54 @@ mod tests {
     #[test]
     fn cli_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    fn config_help(context: bool) -> String {
+        cli(context)
+            .find_subcommand_mut("config")
+            .unwrap()
+            .render_long_help()
+            .to_string()
+    }
+
+    #[test]
+    fn set_calendar_is_listed_only_with_the_gate_on() {
+        assert!(config_help(true).contains("set-calendar"));
+        let off = config_help(false);
+        assert!(off.contains("set-key"));
+        assert!(!off.contains("set-calendar"), "{off}");
+        cli(false).debug_assert();
+    }
+
+    #[test]
+    fn set_calendar_is_refused_with_the_gate_off() {
+        let args = ["meeting", "config", "set-calendar"].map(OsString::from);
+        let on = parse(true, args.to_vec()).unwrap();
+        assert!(matches!(
+            on.command,
+            Command::Config {
+                command: ConfigCommand::SetCalendar
+            }
+        ));
+        let off = parse(false, args.to_vec()).unwrap();
+        let e = run(off.command, false).unwrap_err();
+        assert_eq!(e.to_string(), "unrecognized subcommand 'set-calendar'");
+    }
+
+    #[test]
+    fn install_mentions_set_calendar_only_with_the_gate_on() {
+        let today = [
+            "Next: run `meeting doctor`.\n",
+            "Next: run `meeting config set-key`, then `meeting doctor`.\n",
+        ];
+        assert_eq!(install_next(true, false), today[0]);
+        assert_eq!(install_next(false, false), today[1]);
+        for (has_key, base) in [(true, today[0]), (false, today[1])] {
+            let on = install_next(has_key, true);
+            let extra = on.strip_prefix(base).unwrap();
+            assert!(extra.starts_with("Optional: run `meeting config set-calendar`"));
+            assert_eq!(extra.lines().count(), 1);
+        }
     }
 
     #[test]

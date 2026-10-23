@@ -4,9 +4,7 @@
 use std::fmt;
 use std::time::Duration;
 
-// ponytail: unused until #100 adds set-calendar.
 /// Where and how the fetch may go. Tests relax `https_only` for the loopback mock.
-#[allow(dead_code)]
 pub struct Policy {
     pub https_only: bool,
     pub max_redirects: u32,
@@ -14,7 +12,6 @@ pub struct Policy {
     pub max_bytes: u64,
 }
 
-#[allow(dead_code)]
 impl Policy {
     /// PRD FR-8: https only, at most 3 https redirects, 20 s, 50 MiB.
     pub const REAL: Policy = Policy {
@@ -25,7 +22,6 @@ impl Policy {
     };
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchError {
     Offline,
@@ -56,7 +52,6 @@ impl fmt::Display for FetchError {
 impl std::error::Error for FetchError {}
 
 /// GETs `address` and returns the body if it is iCalendar text. Never logs the address.
-#[allow(dead_code)]
 pub fn fetch(address: &str, policy: &Policy) -> Result<String, FetchError> {
     if policy.https_only && !address.starts_with("https://") {
         return Err(FetchError::NotHttps);

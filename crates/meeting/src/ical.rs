@@ -82,8 +82,6 @@ const NOT_ICALENDAR: Error = Error("not an iCalendar file");
 const BAD_DATE: Error = Error("bad date");
 const BAD_RRULE: Error = Error("bad RRULE");
 
-// ponytail: unused until #100 and #103 read a fetched feed.
-#[allow(dead_code)]
 pub fn parse(text: &str) -> Result<Calendar, Error> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut reader = Reader::default();
