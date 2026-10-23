@@ -57,12 +57,12 @@ pub fn note_people(
 ) -> (Option<String>, Vec<String>) {
     let title = meeting
         .and_then(|m| m.title.clone())
-        .filter(|t| !t.trim().is_empty())
+        .filter(|t| !clean(t).trim().is_empty())
         .or_else(|| context.and_then(|c| c.meeting_title.clone()));
     let invited: Vec<String> = meeting
         .into_iter()
         .flat_map(|m| &m.attendees)
-        .filter(|a| a.response != Response::Declined)
+        .filter(|a| a.response != Response::Declined && !clean(&a.name).is_empty())
         .map(|a| a.name.clone())
         .collect();
     let attendees = if invited.is_empty() {
@@ -761,6 +761,12 @@ mod tests {
             note_people(Some(&ctx), Some(&untitled)),
             (Some("Meet title".into()), roster.clone()),
             "all declined falls back to the roster"
+        );
+        let unreadable = meeting(Some("\u{7}"), &[("\n", Response::Accepted)]);
+        assert_eq!(
+            note_people(Some(&ctx), Some(&unreadable)),
+            (Some("Meet title".into()), roster.clone()),
+            "values empty after cleaning fall back like missing ones"
         );
         let rooms_only = meeting(None, &[]);
         assert_eq!(
