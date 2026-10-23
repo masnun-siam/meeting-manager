@@ -4,6 +4,8 @@
 import { meetingContextEnabled } from '../shared/flags';
 import { contextForHandoff, identityFromTab, trimToLimit, utcOffsetMin } from '../shared/meetingContext';
 import {
+  type ContentEvent,
+  type ContextHelloReply,
   MEETING_CONTEXT_KEY,
   type MeetingContextState,
   type Notice,
@@ -15,6 +17,15 @@ import {
 } from '../shared/messages';
 import { micPermissionState, openMicPermissionPage } from '../shared/micPermission';
 import { initialRecordingState, type RecordingState, type StopReason, transition } from '../shared/recordingState';
+import {
+  closeSegment,
+  collectFinalBatch,
+  mergeBatch,
+  openSegment,
+  readContext,
+  settleContext,
+  startContext,
+} from './contextSession';
 import { nextFreeName, recordingName, saveRecording, takenNames } from './save';
 
 export const OFFSCREEN_PAGE = 'src/offscreen/offscreen.html';
@@ -115,11 +126,9 @@ async function storeContext(tab: chrome.tabs.Tab, startedAt: number): Promise<vo
 
 /** The stored context trimmed for the `process` message, or undefined. */
 async function contextToSend(): Promise<ReturnType<typeof trimToLimit> | undefined> {
-  if (!meetingContextEnabled()) return undefined;
   try {
-    const stored = await chrome.storage.session.get(MEETING_CONTEXT_KEY);
-    const state = stored[MEETING_CONTEXT_KEY] as MeetingContextState | undefined;
-    return state && trimToLimit(contextForHandoff(state));
+    const state = await readContext();
+    return state && trimToLimit(contextForHandoff(settleContext(state)));
   } catch {
     return undefined;
   }
@@ -155,6 +164,7 @@ async function start(language: RecorderStatus['language']): Promise<void> {
     await commit({ state, language, micIncluded: null, notice: null, tabId: tab.id });
     if (meetingContextEnabled()) await storeContext(tab, state.startedAt);
     await sendToOffscreen({ type: 'offscreen_start', streamId, language, startedAt: state.startedAt });
+    await startContext(tab.id, state.startedAt);
   } catch (error) {
     await resetWithError(status, messageOf(error));
     throw error;
@@ -163,17 +173,22 @@ async function start(language: RecorderStatus['language']): Promise<void> {
 
 async function pauseOrResume(type: 'pause' | 'resume'): Promise<void> {
   const status = await readStatus();
-  const state = transition(status.state, { type, at: Date.now() });
+  const at = Date.now();
+  const state = transition(status.state, { type, at });
   if (state === status.state) return;
   await commit({ ...status, state });
   await sendToOffscreen({ type: type === 'pause' ? 'offscreen_pause' : 'offscreen_resume' });
+  if (state.phase === 'paused') await closeSegment(at);
+  else if (state.phase === 'recording') await openSegment(at, state.recordedMs);
 }
 
 /** Moves to `saving`. Before `offscreen_started` the offscreen document would ignore the stop, so it waits. */
 async function requestStop(status: RecorderStatus, reason: StopReason): Promise<void> {
-  const state = transition(status.state, { type: 'stop', at: Date.now(), reason });
+  const at = Date.now();
+  const state = transition(status.state, { type: 'stop', at, reason });
   if (state === status.state) return;
   await commit({ ...status, state });
+  await closeSegment(at);
   if (status.micIncluded !== null) await sendToOffscreen({ type: 'offscreen_stop' });
 }
 
@@ -190,6 +205,10 @@ async function offscreenStopped(reason: StopReason): Promise<void> {
   let notice: Notice;
   try {
     if (saving.phase !== 'saving') throw new Error('No recording to save');
+    // A cap or capture_ended stop comes from the offscreen document, without requestStop.
+    await closeSegment(Date.now());
+    // A closed tab cannot answer, so it is not waited for.
+    if (status.tabId !== null && saving.reason !== 'tab_closed') await collectFinalBatch(status.tabId);
     const base = recordingName(saving.startedAt);
     notice = await saveRecording({
       startedAt: saving.startedAt,
@@ -255,5 +274,24 @@ export function handleTabRemoved(tabId: number): Promise<void> {
     const status = await readStatus();
     if (status.tabId !== tabId) return;
     await requestStop(status, 'tab_closed');
+  });
+}
+
+/** Content-script events count only from this extension's recorded tab while it records; the rest is ignored. */
+export function handleContentEvent(
+  event: ContentEvent,
+  sender: chrome.runtime.MessageSender,
+): Promise<ContextHelloReply | undefined> {
+  return serial(async () => {
+    const status = await readStatus();
+    const { state } = status;
+    const running = state.phase === 'recording' || state.phase === 'paused';
+    const fromRecordedTab =
+      meetingContextEnabled() && sender.id === chrome.runtime.id && sender.tab?.id === status.tabId && running;
+    if (event.type === 'context_hello') {
+      return fromRecordedTab && running ? { recording: true, startedAt: state.startedAt } : { recording: false };
+    }
+    if (fromRecordedTab) await mergeBatch(event);
+    return undefined;
   });
 }

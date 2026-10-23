@@ -35,7 +35,8 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | Path | Role | Key symbols |
 |---|---|---|
 | `src/background/serviceWorker.ts` | Listener registration only | `chrome.runtime.onMessage`, `tabs.onRemoved`, `runtime.onStartup` / `onInstalled` |
-| `src/background/recordingControl.ts` | Recording state machine owner | `handlePopupCommand`, `handleOffscreenEvent`, `handleTabRemoved`, `serial`, `readStatus`, `writeStatus`, `ensureOffscreen`, `closeOffscreen` |
+| `src/background/recordingControl.ts` | Recording state machine owner | `handlePopupCommand`, `handleOffscreenEvent`, `handleTabRemoved`, `handleContentEvent`, `serial`, `readStatus`, `writeStatus`, `ensureOffscreen`, `closeOffscreen` |
+| `src/background/contextSession.ts` | Meeting context session (flag on): talks to the Meet content script, merges its batches | `startContext`, `collectFinalBatch`, `closeSegment`, `openSegment`, `mergeBatch`, `applyBatch`, `settleContext`, `mapToRecordingMs`, `readContext` |
 | `src/background/save.ts` | Download, then hand off to the tool | `saveRecording`, `recordingName`, `nextFreeName`, `takenNames` |
 | `src/background/recover.ts` | Save leftovers on startup | `recoverLeftovers`, `recoveredName` |
 | `src/offscreen/offscreen.ts` | Offscreen message router | `chrome.runtime.onMessage` listener |
@@ -77,11 +78,12 @@ flowchart LR
 | Popup -> SW | `PopupCommand` | `start`, `pause`, `resume`, `stop` |
 | SW -> offscreen | `OffscreenCommand` | `offscreen_start`, `offscreen_pause`, `offscreen_resume`, `offscreen_stop`, `offscreen_file_url` |
 | Offscreen -> SW | `OffscreenEvent` | `offscreen_started`, `offscreen_stopped`, `offscreen_error` |
-| SW -> Meet content script | `ContentCommand` | `context_start`, `context_stop` |
-| Meet content script -> SW | `ContentEvent` | `context_update`, `context_hello` |
+| SW -> Meet content script (`tabs.sendMessage`) | `ContentCommand` | `context_start` (after the Start commit, Meet tabs only; answered `{ ok: true }`), `context_stop` (at Stop, before the download; answered with the final batch) |
+| Meet content script -> SW | `ContentEvent` | `context_update` (a batch), `context_hello` (on load; answered `ContextHelloReply`) |
 
-- The SW routes by `type` using the `POPUP_COMMANDS` and `OFFSCREEN_EVENTS` sets and ignores the rest.
-- Fire-and-forget, except `offscreen_file_url`: the offscreen document replies via `sendResponse` with `{ url }` or `{ error }`.
+- The SW routes by `type` using the `POPUP_COMMANDS`, `OFFSCREEN_EVENTS` and `CONTENT_EVENTS` sets and ignores the rest.
+- Fire-and-forget, except `offscreen_file_url` (the offscreen document replies via `sendResponse` with `{ url }` or `{ error }`) and `context_hello` (the SW replies `{ recording: true, startedAt }` to the recorded tab, else `{ recording: false }`).
+- Content events count only with the flag on, from this extension (`sender.id`), from the recorded tab (`sender.tab.id === status.tabId`) and while `recording` or `paused`; anything else is ignored.
 - The popup never reads SW memory. It reads `RecorderStatus` from storage.
 - `tab_closed` is not an offscreen event. The SW sees `tabs.onRemoved`.
 
@@ -90,7 +92,7 @@ flowchart LR
 | Store | Key | Holds | Written by |
 |---|---|---|---|
 | `chrome.storage.session` | `RECORDER_STATUS_KEY` (`'recorder'`) | `RecorderStatus` (state, language, micIncluded, notice, tabId) | SW only |
-| `chrome.storage.session` | `MEETING_CONTEXT_KEY` (`'meeting_context'`), flag on only | `MeetingContextState`: tab identity and recording segments; written at Start, sent with `process`, cleared after hand-off | SW only |
+| `chrome.storage.session` | `MEETING_CONTEXT_KEY` (`'meeting_context'`), flag on only | `MeetingContextState`: tab identity, recording segments, title, participants, speaking intervals (recording-clock ms), `truncated`, FR-5 `capture` and `reloadHint`; written at Start, merged per batch, sent with `process`, cleared after hand-off | SW only |
 | `chrome.storage.local` | `language` | Last chosen `'bn'` or `'en'` | `RecordTab`; read by `recover.ts` |
 | Origin-private file system | `recordings/<startedAt>.webm` | Chunks of an in-progress or unsaved recording | Offscreen (`appendChunk`); SW deletes |
 
@@ -116,6 +118,8 @@ flowchart LR
 - **Blob URL lifetime.** It lives as long as the offscreen document; the SW closes the document after the download.
 - **Stream ID is minted in the SW** (`tabCapture.getMediaStreamId`), then consumed in the offscreen document.
 - **Mic permission cannot be requested from the offscreen document or popup.** A tab page (`permission.html`) does it.
+- **Stop waits at most 2 s for the content script.** `context_start` and `context_stop` race a 2 s timer (`ANSWER_MS`); a rejection or timeout never fails Start or holds up the save. A `tab_closed` stop does not ask at all. `context_start` failing sets `capture: 'unavailable'` with `reloadHint`.
+- **Speaking times are wall-clock until merged.** `applyBatch` maps each change into the segment that contains it (`offsetMs + (t - wallStart)`) and drops changes during a pause; `openSpeaking.at` stays wall-clock. An interval open at a pause or stop is ended at the segment's end only by the next change in another segment or at hand-off (`settleContext`), so a late batch can still end it earlier. Intervals under 1 s are dropped, touching ones with the same names merged; limits: 200 names, 10 names per interval, 5,000 intervals, each cut listed in `truncated`.
 - **Startup recovery** runs on `onStartup` and `onInstalled` only, never on SW wake, so it cannot touch a live recording.
 
 ## Google Meet page reading
