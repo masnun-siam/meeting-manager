@@ -116,3 +116,28 @@ flowchart LR
 - **Stream ID is minted in the SW** (`tabCapture.getMediaStreamId`), then consumed in the offscreen document.
 - **Mic permission cannot be requested from the offscreen document or popup.** A tab page (`permission.html`) does it.
 - **Startup recovery** runs on `onStartup` and `onInstalled` only, never on SW wake, so it cannot touch a live recording.
+
+## Google Meet page reading
+
+Spike result (#104), from one real call with 3 participants (host plus two guests, started from a calendar event) in the top frame. Fixtures are sanitised `outerHTML` in `extension/src/content/fixtures/` (fake names `Sam Host` (self), `Alex Example`, `Riley Sample`, code `abc-defg-hij`). The people panel was open in every capture except `meet-ad-hoc.html` and `meet-lobby.html`.
+
+**FR-4 verdict: speaking indicator reliable on this call: #106 goes ahead.** Its selector is an obfuscated class pair, so #106 must treat "no match" as "no speaking data", never as an error.
+
+| Part | Where | Precondition | Stability | Fixture |
+|---|---|---|---|---|
+| Roster | `[role="list"][aria-label="Participants"] > [role="listitem"]`, name in the item's `aria-label`; `data-participant-id` is the stable key | People panel open | Semantic (`role`, `aria-label`, `data-*`) | `meet-full.html`, `meet-no-roster.html` |
+| Self | The listitem whose text holds a `(You)` span; its `aria-label` is the real display name | People panel open | Text `(You)` is localised | `meet-full.html` |
+| Title | `document.title` is `Meet - <event name>`; also a bottom-bar `div` (class `u6vdEc`, obfuscated) | Event-based meeting | `document.title` prefix is the steadier read | `meet-full.html`, `meet-ad-hoc.html`, `meet-no-title.html` |
+| Speaking | A tile `[data-tile-media-id]` holds descendants with classes `kssMZb` and `v5h6Xc` only while its person speaks; map the tile's `data-participant-id` to the roster item for the name | Meeting grid | Obfuscated classes, expect breakage on a Meet release | `meet-speaking-a.html`, `meet-speaking-b.html`, `meet-no-speaking.html` |
+
+Findings:
+
+- **Panel closed:** not captured. Each grid tile also carries the name in a `span.notranslate`, but whether the grid alone lists everyone (pagination) is untested; #105 should keep the panel as the source and fall back to tiles.
+- **Left participants:** the roster only shows who is present now, so the content script builds the union itself.
+- **Own name:** readable. Meet shows the real name plus `(You)`, so `self` can be set from the `(You)` item.
+- **Ad-hoc meeting, no title:** Meet shows the meeting code as the title (`Meet - abc-defg-hij` in `document.title` and in the bottom-bar title `div`). #105 must treat a title that matches `^[a-z]{3}-[a-z]{4}-[a-z]{3}$` as no title (null). `meet-ad-hoc.html` is the real capture (panel closed, only your own tile); `meet-no-title.html` is the title removed by hand.
+- **Lobby (waiting to be admitted):** no roster (no `Participants` list, no panel), one tile for yourself, title is the meeting code, and the page says "Please wait until a meeting host brings you into the call". The content script must read nothing here. `meet-lobby.html`.
+- **Mic state is not speech:** the item's mic wrapper classes (`FTMc0c`, `biFrsd`) and the mute button `aria-label` ("Mute <name>'s microphone" versus "You can't unmute someone else") follow mic on/off only. A silent unmuted participant has neither speaking class (`sxlEM` alone also appears when unmuted).
+- **Two speakers:** `meet-two-speakers.html` was captured with two guests unmuted, but only one tile carried the speaking classes, so at most one speaker is flagged at a time (or only one was talking); two simultaneous speakers cannot be told apart. #106 must tolerate one flagged tile at a time.
+- **Not tested:** shared-room tile, presentation tile, join/leave, compact layout, tile pagination, panel-closed call with several people.
+- **Fixture notes:** `meet-full.html` and the derived fixtures have the speaking classes stripped (the host's own tile carried them in the source capture). Scripts, styles, URLs, `js*` attributes and svg contents were removed. The lobby guest is named `Guest Example`.
