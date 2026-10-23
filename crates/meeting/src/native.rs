@@ -1094,6 +1094,9 @@ mod tests {
                 recording: &old,
                 transcript: &transcript,
                 body: "body\n",
+                meeting_title: Some("Weekly sync"),
+                attendees: &["Rahim".into()],
+                calendar: Some(vault::CalendarOutcome::NoMatch),
             },
         )
         .unwrap();
@@ -1126,7 +1129,9 @@ mod tests {
             "transcript: {:?}\n",
             new.with_file_name("transcript.md").to_string_lossy()
         )));
-        assert!(text.ends_with("---\n\nbody\n"));
+        assert!(text.ends_with(
+            "\nmeeting_title: \"Weekly sync\"\nattendees: [\"Rahim\"]\ncalendar: \"no_match\"\n---\n\nbody\n"
+        ));
         assert_eq!(remaining, ["c"]);
     }
 
@@ -1157,6 +1162,9 @@ mod tests {
                 recording: &old,
                 transcript: &old.with_file_name("transcript.md"),
                 body: "body\n",
+                meeting_title: None,
+                attendees: &[],
+                calendar: None,
             },
         )
         .unwrap();

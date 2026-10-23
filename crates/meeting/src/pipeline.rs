@@ -316,6 +316,9 @@ impl Pipeline {
                 recording: &p.recording,
                 transcript: &p.transcript,
                 body: &body,
+                meeting_title: None,
+                attendees: &[],
+                calendar: None,
             },
         )?;
         meta.title = Some(summary.title.clone());
