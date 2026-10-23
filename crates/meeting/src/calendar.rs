@@ -8,8 +8,6 @@ use crate::ical::{Calendar, Event, When};
 /// 23–25 hours away and never is.
 const WINDOW_SECS: i64 = 12 * 3600;
 
-// ponytail: unused until #103 wires the match.
-#[allow(dead_code)]
 pub struct Recording {
     pub meeting_id: String,
     pub started_at_ms: i64,
@@ -18,7 +16,6 @@ pub struct Recording {
     pub time_zone: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 pub struct Meeting {
     pub title: Option<String>,
@@ -27,14 +24,12 @@ pub struct Meeting {
     pub attendees: Vec<MeetingAttendee>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 pub struct MeetingAttendee {
     pub name: String,
     pub response: Response,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Response {
     Accepted,
@@ -43,7 +38,6 @@ pub enum Response {
     NeedsAction,
 }
 
-#[allow(dead_code)]
 impl Response {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -66,7 +60,6 @@ impl Response {
 }
 
 /// The event `recording` belongs to, or `None`.
-#[allow(dead_code)]
 pub fn pick(calendar: &Calendar, recording: &Recording) -> Option<Meeting> {
     let clock = Clock {
         calendar,

@@ -26,7 +26,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | Module | Responsibility | Key symbols |
 |---|---|---|
 | `main.rs` | CLI parsing (gate-dependent via `cli`), wiring, exit code | `Cli`, `Command`, `Language`, `cli`, `run`, `fetch_calendar` |
-| `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change | `Pipeline`, `Pipeline::run`, `Ending`, `State` |
+| `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change. Before summarising, with `context` on, loads `context.json`, looks the meeting up in the calendar and builds the context block (`context_extra`, `look_up`); calendar errors never fail the job | `Pipeline` (fields `key`, `context`, `calendar`, `calendar_policy`), `Pipeline::run`, `Ending`, `State` |
 | `plan.rs` | Pure function: which stages to skip, from file mtimes | `plan`, `Plan`, `Files` |
 | `jobs.rs` | Job file store, `Stage` enum, atomic write, UTC time and ids | `Job`, `JobStore`, `Stage`, `write_atomic`, `now_utc`, `new_job_id` |
 | `meta.rs` | `meta.json`: language, speakers, run history; `recorded_at` from folder name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
@@ -34,7 +34,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
 | `import.rs` | `meeting import`: validate, name and copy a source into a new meeting folder | `import` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
-| `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. Used by `set-calendar` and the `calendar` doctor check through `main::fetch_calendar` | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
+| `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. Used by `set-calendar` and the `calendar` doctor check through `main::fetch_calendar`, and by `pipeline` with `Pipeline.calendar_policy` | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
 | `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `hh_mm_ss`, `Transcript`, `Utterance` |
 | `summarise.rs` | Run headless `claude` (optionally after a context block), validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
 | `summary_md.rs` | Render `Summary` to Markdown | `render`, `speaker_names` |
@@ -45,8 +45,8 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `secret.rs` | Keychain access for the Deepgram key and the calendar address; `meeting config set-calendar` logic | `deepgram_key`, `set_key`, `calendar_address`, `set_calendar`, `read_hidden` |
 | `install.rs` | `meeting install` | `install` |
 | `doctor.rs` | `meeting doctor` checks (incl. the gated `calendar` check), manifest path | `checks`, `Env`, `manifest_path` |
-| `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut) | `Context`, `check` |
-| `context_block.rs` | Pure builder of the fenced, escaped, 64 KiB-capped meeting-context block for Claude; no caller until #103 | `build`, `Input`, `SEPARATOR` |
+| `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut); `load` reads and checks the file, logging only the rule | `Context`, `check`, `load` |
+| `context_block.rs` | Pure builder of the fenced, escaped, 64 KiB-capped meeting-context block for Claude; called by `pipeline` | `build`, `Input`, `SEPARATOR` |
 | `ical.rs` | In-house iCalendar reader for the calendar match: unfolding, unescaping, raw times, `VTIMEZONE` offsets, HTML description to text; malformed input is an `Err`, never a panic. `secret` and `doctor` call `parse`; `calendar` reads the events | `parse`, `Calendar`, `Event`, `When`, `Zone`, `Event::plain_description` |
 | `native.rs` | Chrome native messaging host | `Host`, `serve` |
 | `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `mock_raw`, `stall`, `stub`, `envelope`, `temp`, `VALID` |
@@ -61,6 +61,7 @@ Arrows are `crate::` imports in non-test code.
 flowchart TD
     main --> pipeline & native & install & doctor & notify & logging & secret & deepgram & jobs & config & calendar_fetch
     pipeline --> plan & extract & deepgram & transcript & summarise & summary_md & vault & meta & jobs & lock & config
+    pipeline --> context & calendar_fetch & ical & calendar & context_block
     native --> jobs & lock & doctor & config & vault & meta & context & calendar_fetch
     secret --> calendar_fetch & ical
     context --> summarise
@@ -72,20 +73,21 @@ flowchart TD
     meta --> jobs
     jobs --> config
     logging --> config
+    vault --> calendar & context
     doctor --> config & calendar_fetch & ical
 ```
 
-- `main.rs` is the only place that builds dependencies (`Config::load()`, `JobStore::default_dir()`, `secret::deepgram_key`) and passes them in.
+- `main.rs` is the only place that builds dependencies (`Config::load()`, `JobStore::default_dir()`, `secret::deepgram_key`, `secret::calendar_address`, `Policy::REAL`, `context_enabled()`) and passes them in.
 - `calendar_fetch` imports no `crate::` module.
 - Stage modules (`extract`, `deepgram`, `transcript`, `summarise`, `summary_md`, `vault`) do not import each other, except `summary_md` using types from `summarise`. `pipeline.rs` is the only caller of all of them.
-- `ical` imports nothing from the crate; `calendar` imports only `ical`, and only `context_block` uses its types (no caller of `pick` yet).
+- `ical` imports nothing from the crate; `calendar` imports only `ical`; `pipeline` calls `pick`, and `context_block` and `vault` read its types.
 - `summarise` imports only `context_block::SEPARATOR`; `context_block` reads types from `context` and `calendar` and the clock format from `transcript`.
 - `jobs::write_atomic` is the shared atomic-write helper (also used by `meta`, `pipeline`).
 
 ## Conventions
 
 - Errors: `anyhow::Result` everywhere, no custom error types, except `calendar_fetch::FetchError` and `ical::Error` (fixed kinds with no address or input text, so neither reaches the log). Context via `.with_context(|| format!("cannot ... {}", path.display()))`. Messages that the user can act on name the fix (`run \`meeting doctor\``, `run \`meeting config set-key\``). `main` logs the error with `{e:#}` and returns it.
-- Dependency injection by struct fields and fn pointers, not traits: `Pipeline.key: fn() -> Result<String>`, `Deepgram { base_url, retry_delays }`, `native::Host { open, key, ... }`, `doctor::Env`. Tests swap the fields.
+- Dependency injection by struct fields and fn pointers, not traits: `Pipeline.key: fn() -> Result<String>`, `Pipeline.calendar: fn() -> Result<Option<String>>`, `Pipeline.calendar_policy`, `Deepgram { base_url, retry_delays }`, `native::Host { open, key, ... }`, `doctor::Env`. Tests swap the fields.
 - Subprocesses (`ffmpeg`, `claude`, `osascript`, `ps`) use absolute paths from config or constants, because Chrome starts the host with a bare `PATH`.
 - Writes that readers may see use write-to-`.tmp`-then-rename (`write_atomic`, `extract` uses `.part`, `vault::write_note` uses a dotted `.tmp`). `config.rs` `save_to` writes directly.
 - Feature flag: `FEATURE_MEETING_CONTEXT` is read once at build time in `main.rs` (`context_enabled`, on only for `1`) and passed to code as a plain `bool`.

@@ -17,8 +17,6 @@ const DESCRIPTION_END: &str = "DESCRIPTION>>>";
 const FENCES: [&str; 5] = [BEGIN, END, SEPARATOR, DESCRIPTION_BEGIN, DESCRIPTION_END];
 const MAX_BYTES: usize = 64 * 1024;
 
-// ponytail: unused until #103 builds the block.
-#[allow(dead_code)]
 pub struct Input<'a> {
     pub context: Option<&'a Context>,
     pub meeting: Option<&'a Meeting>,
@@ -35,7 +33,6 @@ struct Parts<'a> {
 }
 
 /// The block, or `None` when there is nothing beyond the recording's identity to send.
-#[allow(dead_code)]
 pub fn build(input: &Input) -> Option<String> {
     let meet = input.context.is_some_and(|c| {
         c.meeting_title.is_some() || !c.participants.is_empty() || !c.speaking.is_empty()

@@ -2,6 +2,10 @@
 //! table of `docs/prds/meeting-context.md`. A reject rule drops the whole context, a cut rule
 //! trims the field and lists it in `truncated`. Rule names are the only thing ever logged.
 
+use std::fs;
+use std::io::ErrorKind;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -63,6 +67,21 @@ pub struct Context {
     pub speaking: Vec<Interval>,
     #[serde(default)]
     pub truncated: Vec<String>,
+}
+
+/// The checked `context.json` at `path`; `None` when it is missing or fails a rule (logged by
+/// rule name only).
+pub fn load(path: &Path) -> Option<Context> {
+    let checked = match fs::read(path) {
+        Err(e) if e.kind() == ErrorKind::NotFound => return None,
+        Err(_) => Err("unreadable"),
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
+            .map_err(|_| "not JSON")
+            .and_then(|raw| check(&raw)),
+    };
+    checked
+        .inspect_err(|rule| tracing::warn!("context.json ignored: {rule}"))
+        .ok()
 }
 
 /// Validates `raw`; `Err` is a fixed rule name, safe to log.
@@ -386,5 +405,18 @@ mod tests {
     fn unknown_truncated_names_are_dropped() {
         let c = check(&with("truncated", json!(["speaking", "bogus"]))).unwrap();
         assert_eq!(c.truncated, ["speaking"]);
+    }
+
+    #[test]
+    fn load_returns_only_a_checked_context() {
+        let dir = crate::test_support::temp("context-load");
+        let path = dir.join("context.json");
+        assert_eq!(load(&path), None);
+        fs::write(&path, "{").unwrap();
+        assert_eq!(load(&path), None);
+        fs::write(&path, with("version", json!(2)).to_string()).unwrap();
+        assert_eq!(load(&path), None);
+        fs::write(&path, base().to_string()).unwrap();
+        assert_eq!(load(&path), check(&base()).ok());
     }
 }

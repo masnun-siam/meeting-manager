@@ -45,7 +45,7 @@ flowchart LR
 | `chrome.storage.session` / `.local`, OPFS `recordings/` | Extension | [extension.md](extension.md#state-storage) |
 | Recording and side files in the recording's folder (`meta.json`, `transcript.md`, `summary.md`, …) | Tool | [features/processing.md](features/processing.md#files) |
 | Job files under `~/Library/Application Support/meeting-manager/jobs/` | Tool | [features/processing.md](features/processing.md#job-lifecycle) |
-| `~/.config/meeting-manager/config.toml`, Keychain item, Chrome host manifest | Tool | [features/setup.md](features/setup.md) |
+| `~/.config/meeting-manager/config.toml`, Keychain items (Deepgram key; calendar address, flag on), Chrome host manifest | Tool | [features/setup.md](features/setup.md) |
 | Vault note | Tool | [features/processing.md](features/processing.md#files) |
 | Log `~/Library/Logs/meeting-manager/meeting.log` | Tool | [tool.md](tool.md#gotchas) |
 
@@ -63,6 +63,9 @@ sequenceDiagram
   H->>P: spawn with job id
   H-->>E: {ok, job_id}
   P->>P: extract → transcribe → summarise → write note
+  opt flag on, context.json with a meeting ID, calendar address stored
+    P->>P: fetch the calendar (every run), match the event, add it to the block
+  end
   P-->>U: macOS notification
   E->>H: list_jobs (Jobs tab, every 3 s)
 ```
@@ -73,4 +76,4 @@ Details per stage: [features/recording.md](features/recording.md) → [features/
 
 - **Pinned extension ID.** The `key` in `extension/manifest.config.ts` fixes the ID that `EXTENSION_ID` in `crates/meeting/src/install.rs` trusts. Changing one breaks the host handshake.
 - **Shared wire types.** `extension/src/shared/native.ts` mirrors the Rust request and job types in `native.rs` and `jobs.rs` by hand; change both sides together.
-- **No secrets in files or logs.** The Deepgram key lives only in the Keychain; transcript text is never logged.
+- **No secrets in files or logs.** The Deepgram key and the calendar address live only in the Keychain; transcript text, the address and calendar or meeting values are never logged.
