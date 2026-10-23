@@ -121,6 +121,9 @@ describe('Meet content script', () => {
       participants: [{ name: 'Sam', self: true }],
     });
     expect(info).toHaveBeenCalledTimes(1);
+    vi.mocked(readRoster).mockClear();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(readRoster).toHaveBeenCalledTimes(5);
     info.mockRestore();
   });
 
