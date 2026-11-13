@@ -27,7 +27,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 |---|---|---|
 | `lib.rs` | Library root: every module below as `pub mod`, `Language` | `Language` |
 | `main.rs` | CLI parsing (gate-dependent via `cli`), wiring, exit code; imports the library as `meeting::` | `Cli`, `Command`, `cli`, `run`, `fetch_calendar`, `context_enabled`, `desktop_enabled` |
-| `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change. Before summarising, with `context` on, loads `context.json`, looks the meeting up in the calendar and builds the context block (`context_extra`, `look_up`); calendar errors never fail the job | `Pipeline` (fields `key`, `context`, `calendar`, `calendar_policy`), `Pipeline::run`, `Ending`, `State` |
+| `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change. Before summarising, with `context` on, loads `context.json`, looks the meeting up in the calendar and builds the context block (`context_extra`, `look_up`); calendar errors never fail the job | `Pipeline` (fields `key`, `context`, `desktop`, `calendar`, `calendar_policy`), `Pipeline::run`, `Ending`, `State` |
 | `plan.rs` | Pure function: which stages to skip, from file mtimes | `plan`, `Plan`, `Files` |
 | `jobs.rs` | Job file store, `Stage` enum, atomic write, UTC time and ids | `Job`, `JobStore`, `Stage`, `write_atomic`, `now_utc`, `new_job_id` |
 | `meta.rs` | `meta.json`: language, speakers, run history; `recorded_at` from folder name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
