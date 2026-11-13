@@ -25,7 +25,8 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | `calendar/` | `Calendar` (EventKit, [features/desktop-calendar.md](features/desktop-calendar.md)); `calendar_status`, `calendar_events`, `calendar_event`, `calendars`, `set_hidden_calendars`; hook `on_launch`; `Calendar::event_for_context` for `context.json` |
 | `notes/mod.rs` | `Notes { open, spawn }` (fn pointers; real: `native::open_with_system`, `spawn::process_detached`); `notes_list`, `note_get`, `note_update`, `note_rerun`, `note_open`, each a thin wrapper over a `pub fn` taking `&Env` |
 | `notes/markdown.rs` | `render_html` (summary markdown to safe HTML) and `shown_transcript` (speaker labels to current names) |
-| `admin/mod.rs` | `Admin`; `rescan`, `rescan_status`, `health`, `note_archive`, `note_trash`, `settings_info`; hook `on_launch` |
+| `admin/mod.rs` | `Admin { progress, trash, doctor, doctor_timeout }`; `rescan`, `rescan_status`, `health`, `note_archive`, `note_trash`, `settings_info`; hook `on_launch` (first backfill) |
+| `admin/backfill.rs` | Folder scan (`candidates`), `read_folder` (folder files to a `RunResult`), `run` (merge, then remove gone rows, then `backfill_done`), `open_or_rebuild` (move a broken store aside) |
 | `tray.rs` | Hook `setup` (the menu-bar item) |
 | `capture/` | Audio capture: the boundary in `mod.rs` and the Core Audio implementation (below) |
 
@@ -89,6 +90,27 @@ Each command opens the store through `Env::store()`; an open or query failure is
 | `note_open` | `folder`: the recording's parent. `obsidian`: the stored `vault_note_path` if it is a file, else `vault::find_existing` in the vault folder (the found path is saved). No target is `missing_file`; a failed `open` is `open_failed` |
 
 `render_html` runs `pulldown-cmark` (feature `html`, `Options::empty()`) with raw HTML turned into text (D25) and drops the tag of any link or image whose destination is not `http://`, `https://` or `mailto:` (case-insensitive) or an email autolink, keeping its text.
+
+## Admin commands (`admin/`)
+
+No command takes a path from the UI. `health`, `note_archive` and `note_trash` are `async` and run on `spawn_blocking`, so a slow doctor or move never freezes the window. Logs carry counts and error kinds only, never a title, transcript or name.
+
+| Command | Behaviour |
+|---|---|
+| `rescan` | `not_configured` when `config.toml` can't be read; otherwise `{started: true}` at once, also when a run is already going (no second run). The run has its own thread and store connection: it opens the store, and a corrupt or newer one (`store::OpenError` only) is renamed (`-wal`, `-shm`, then the database, so a failed move leaves it broken for the next rescan) to `notes.sqlite.broken-<YYYYMMDDTHHMMSSZ>[-wal\|-shm]` and recreated (D33). A moved-aside file is never replaced or deleted; any other open error ends the run with nothing moved |
+| `rescan_status` | `{running, done, total}` from atomics; all `0` before the first run |
+| `health` | `<meeting_path> doctor` (argument list, null stdin and stderr, killed after 10 s, also when it closed stdout but keeps running), its `✓ <name>` / `✗ <name>: <fix>` lines parsed (D38). `meeting_path` unset or failing `spawn::check_tool` gives one failing `meeting_path` check without spawning; a timeout, spawn failure or output with no check line gives one failing `doctor` check |
+| `settings_info` | `recordings_dir`, `vault_dir`, `vault_folder` from `config.toml` and `store: {ok}` or `{ok: false, message}` (the open error). Never moves the store |
+| `note_archive` / `note_trash` | Row id to `recording_path`, then `folders::archive` / `folders::trash` with the store; a `Refusal` passes through as `{code, message}` (D41). `unknown_note`, `store_unavailable`, and `not_configured` when the config can't be read |
+
+**Backfill** (`on_launch` when the store opens and has no `backfill_done`, and every `rescan`): every `recording.<ext>` (first in `RECORDING_EXTENSIONS` order) in a folder directly inside the recordings directory or `Archive/`, checked by `config::check_recording`, so flat files, `Archive/` itself and hidden folders are skipped. A folder whose lock is held is left to the pipeline. Each row goes through `Store::merge_run`, so edits are kept:
+
+- `done` when `summary.md` exists: title from `meta.json`, else the summary's `# ` line; `body_md` without that line; speakers from `meta.json`.
+- `no_speech` when `transcript.md` has the line `No speech detected` and no utterance line.
+- otherwise `failed`: the newest `meta.json` run error, else the newest job's, split at `"<stage>: "`; with neither, a fixed "rerun the summary" message.
+- Every status: `language`, `duration_s` (rounded) and `recorded_at` from `meta.json` (`recorded_at_for` without it), `transcript` = `transcript::utterance_lines`, `source` and `event` from `context.json` by `pipeline::source_of` / `pipeline::event_link` (D40).
+
+A file that can't be read counts as missing. After the folders, rows whose recording is no longer a file are removed, unless the recordings directory itself can't be read (an unmounted volume would make every recording look gone). `backfill_done` is set only when no row failed to store.
 
 ## UI (`desktop/src`)
 
