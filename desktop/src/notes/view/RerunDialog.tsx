@@ -6,16 +6,20 @@ export function RerunDialog(props: { onChoose: (replaceEdits: boolean) => void; 
   const first = useRef<HTMLButtonElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
 
+  const cancel = useRef(props.onCancel);
+  cancel.current = props.onCancel;
+
   useEffect(() => {
     first.current?.focus();
+    // Escape closes it wherever focus is, also after a click on the backdrop.
+    const onEscape = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') cancel.current();
+    };
+    document.addEventListener('keydown', onEscape);
+    return () => document.removeEventListener('keydown', onEscape);
   }, []);
 
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      props.onCancel();
-      return;
-    }
     if (e.key !== 'Tab') return;
     // Keep focus inside the dialog while it is open.
     const buttons = [...(dialog.current?.querySelectorAll('button') ?? [])];

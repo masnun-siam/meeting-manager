@@ -11,6 +11,7 @@ import { type Autosave, type SaveState, useAutosave } from './useAutosave';
 import { useNote } from './useNote';
 
 export const UNTITLED = 'Untitled meeting';
+export const UNSAVED = 'Some changes are not saved. Press Back again to leave without them.';
 const SAVE_TEXT: Record<SaveState, string | null> = {
   idle: null,
   saving: 'Saving…',
@@ -39,8 +40,15 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
     else if (state.kind === 'error') back.current?.focus();
   }, [state.kind]);
 
-  const leave = () => {
-    void autosave.flushAll();
+  const warned = useRef(false);
+  const leave = async () => {
+    await autosave.flushAll();
+    // A refused or failed save keeps its text here: leaving would drop it without a word.
+    if (autosave.unsaved() && !warned.current) {
+      warned.current = true;
+      setMessage(UNSAVED);
+      return;
+    }
     onBack();
   };
 

@@ -26,6 +26,8 @@ export type UseNote = {
  */
 export function useNote(id: number, skipPoll: () => boolean): UseNote {
   const [state, setState] = useState<NoteState>({ kind: 'loading' });
+  // Bumped by each rerun, so a second rerun restarts the 10 s window.
+  const [reruns, setReruns] = useState(0);
   const [following, setFollowing] = useState(false);
   const requests = useRef(0);
   const applied = useRef(0);
@@ -63,13 +65,14 @@ export function useNote(id: number, skipPoll: () => boolean): UseNote {
     };
   }, [reload]);
 
-  const markRerun = useCallback(() => setFollowing(true), []);
+  const markRerun = useCallback(() => setReruns((n) => n + 1), []);
 
   useEffect(() => {
-    if (!following) return;
+    if (reruns === 0) return;
+    setFollowing(true);
     const timer = setTimeout(() => setFollowing(false), RERUN_FOLLOW_MS);
     return () => clearTimeout(timer);
-  }, [following]);
+  }, [reruns]);
 
   const processing = state.kind === 'ready' && state.note.status === 'processing';
   const polling = processing || following;

@@ -27,6 +27,8 @@ export function Actions(props: Props) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const rerunButton = useRef<HTMLButtonElement>(null);
+  // Not `busy`: disabling Rerun would drop the focus the dialog hands back to it.
+  const rerunning = useRef(false);
 
   useEffect(() => {
     if (!armed) return;
@@ -57,10 +59,13 @@ export function Actions(props: Props) {
   };
 
   const askRerun = async () => {
+    if (rerunning.current || asking) return;
+    rerunning.current = true;
     say(null);
     await props.flushAll();
     if (hasEdits(props.latest())) setAsking(true);
     else await rerun(false);
+    rerunning.current = false;
   };
 
   const closeDialog = () => {

@@ -20,6 +20,8 @@ export type Autosave = {
   flushAll: () => Promise<void>;
   /** Whether the focused field holds text not yet stored (the poll then skips a tick). */
   focusedDirty: () => boolean;
+  /** Whether any field holds text that is not stored (after a refused or failed save). */
+  unsaved: () => boolean;
   /** The stored note as of the last reply, ahead of the next render. */
   latest: () => Note | null;
   /** Re-sends a save with no field, which rewrites the vault note of a `done` note. */
@@ -81,7 +83,7 @@ export function useAutosave(opts: {
       note.current = result.reply.note;
       if (key !== null && drafts.current.get(key) === value) drafts.current.delete(key);
       callbacks.current.apply(result.reply.note);
-      setVaultError(result.reply.vault === 'failed' ? (result.reply.vault_error ?? '') : null);
+      setVaultError(result.reply.vault === 'failed' ? (result.reply.vault_error ?? 'unknown error') : null);
       setProblem(null);
       setSaveState('saved');
       return;
@@ -207,6 +209,20 @@ export function useAutosave(opts: {
   }, [flushAll]);
 
   const latest = useCallback(() => note.current, []);
+  const unsaved = useCallback(() => drafts.current.size > 0, []);
 
-  return { value, change, focus, blur, flushAll, focusedDirty, latest, retryVault, saveState, vaultError, problem };
+  return {
+    value,
+    change,
+    focus,
+    blur,
+    flushAll,
+    focusedDirty,
+    unsaved,
+    latest,
+    retryVault,
+    saveState,
+    vaultError,
+    problem,
+  };
 }

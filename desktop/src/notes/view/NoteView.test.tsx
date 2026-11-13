@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Note } from '../../api';
 import * as api from '../../api';
 import { ARCHIVED, CONFIRM_MS } from './Actions';
-import { RECORDING_MISSING, TOOL_MISSING } from './format';
-import { NoteView } from './NoteView';
-import { testNote } from './testNote';
+import { MY_NOTES_LIMIT, RECORDING_MISSING, TOO_LARGE, TOOL_MISSING } from './format';
+import { NoteView, UNSAVED } from './NoteView';
+import { deferred, testNote } from './testNote';
 import { POLL_MS, RERUN_FOLLOW_MS } from './useNote';
 
 vi.mock('../../api', async () => (await import('../../api.mock')).mockApi());
@@ -156,6 +156,23 @@ describe('NoteView display', () => {
     for (const [path, text] of Object.entries(sources)) {
       if (!path.endsWith('.test.tsx')) expect(text, path).not.toMatch(/innerHTML\s*=|eval\(|console\./);
     }
+  });
+
+  it('does not follow a link in the summary', async () => {
+    const { user } = setup(testNote({ body_html: '<p><a href="https://example.com/deck">deck</a></p>' }));
+    await ready();
+
+    const link = screen.getByRole('link', { name: 'deck' });
+    let followed = true;
+    link.addEventListener('click', (e) => {
+      followed = !e.defaultPrevented;
+    });
+    // The listener on the summary runs after the link's own, so check once the event is done.
+    document.addEventListener('click', (e) => {
+      followed = !e.defaultPrevented;
+    });
+    await user.click(link);
+    expect(followed).toBe(false);
   });
 
   it('lists each speaker with label, shown name and evidence as text', async () => {
@@ -334,6 +351,33 @@ describe('NoteView editing', () => {
     expect(screen.getByRole('alert')).toBeEmptyDOMElement();
   });
 
+  it('shows the too-large message for a too_large reply', async () => {
+    noteUpdate.mockResolvedValueOnce({ ok: false, code: 'too_large', message: 'my_notes is too large' });
+    const { user } = setup();
+    await ready();
+
+    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.tab();
+    expect(await screen.findByText(TOO_LARGE)).toBeInTheDocument();
+  });
+
+  it('refuses "My notes" over 1 MB locally and warns before Back drops it', async () => {
+    const { user, onBack } = setup();
+    await ready();
+
+    const notes = screen.getByRole('textbox', { name: 'My notes' });
+    await user.click(notes);
+    await user.paste('x'.repeat(MY_NOTES_LIMIT + 1));
+    await user.click(button('Back'));
+    expect(noteUpdate).not.toHaveBeenCalled();
+    expect(screen.getByText(TOO_LARGE)).toBeInTheDocument();
+    expect(await screen.findByText(UNSAVED)).toBeInTheDocument();
+    expect(onBack).not.toHaveBeenCalled();
+
+    await user.click(button('Back'));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
   it('shows not_editable and reloads the note', async () => {
     noteUpdate.mockResolvedValueOnce({ ok: false, code: 'not_editable', message: 'This note is processing' });
     const { user } = setup();
@@ -429,6 +473,29 @@ describe('NoteView actions', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(button('Rerun summary')).toHaveFocus();
     expect(noteRerun).not.toHaveBeenCalled();
+  });
+
+  it('Escape closes the dialog when focus left it', async () => {
+    const { user } = setup(testNote({ title_edited: true }));
+    await ready();
+
+    await user.click(button('Rerun summary'));
+    await screen.findByRole('dialog');
+    (document.activeElement as HTMLElement).blur();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('sends one rerun while the first is still in flight', async () => {
+    const reply = deferred<Awaited<ReturnType<typeof api.noteRerun>>>();
+    noteRerun.mockReturnValue(reply.promise);
+    const { user } = setup();
+    await ready();
+
+    await user.dblClick(button('Rerun summary'));
+    await act(async () => reply.resolve({ ok: true }));
+    await screen.findByText('Summary rerun started');
+    expect(noteRerun).toHaveBeenCalledOnce();
   });
 
   it('asks about an edit still being typed when Rerun is pressed', async () => {
@@ -572,6 +639,20 @@ describe('NoteView polling', () => {
     expect(polls).toBe(Math.floor(RERUN_FOLLOW_MS / POLL_MS));
     await tick(POLL_MS * 3);
     expect(noteGet.mock.calls.length - after).toBe(polls);
+  });
+
+  it('restarts the 10 s window on a second rerun', async () => {
+    const { user } = setup();
+    await ready();
+
+    await user.click(button('Rerun summary'));
+    await screen.findByText('Summary rerun started');
+    await tick(POLL_MS * 2);
+    await user.click(button('Rerun summary'));
+    await waitFor(() => expect(noteRerun).toHaveBeenCalledTimes(2));
+    const after = noteGet.mock.calls.length;
+    await tick(RERUN_FOLLOW_MS - 1000);
+    expect(noteGet.mock.calls.length - after).toBeGreaterThanOrEqual(2);
   });
 
   it('does not poll while the window is hidden', async () => {
