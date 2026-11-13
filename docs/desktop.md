@@ -18,7 +18,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | File | Holds |
 |---|---|
 | `main.rs` | Calls `meeting_desktop::run()`. The binary is `meeting-desktop`; the CLI owns the name `meeting` |
-| `lib.rs` | `run()`, the flag, `configure` (setup and command registration), `launch` (state, window, hooks), the `App` state `{env, recorder, calendar, notes, admin}`. The issues that fill a module do not edit it |
+| `lib.rs` | `run()`, the flag, `configure` (setup and command registration), `launch` (state, window, hooks), the `App` state `{env, recorder, calendar, notes, admin}`. `launch_in` takes the `Env` constructor, so its tests start the app in a temp home and an invoked command never touches the real store, vault or recordings. The issues that fill a module do not edit it |
 | `env.rs` | `Env { home, store_path, jobs }`; `config()` reloads `config.toml` on every call and returns the error as a string; `store()` opens the notes store and keeps `anyhow::Error`, so `store::OpenError` can be downcast. `Env::at(home)` is the constructor tests use |
 | `reply.rs` | `ok(fields)`, `err(code, message)`, `not_implemented(command)`: the reply shape of every command |
 | `recorder/mod.rs` | `Recorder`; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry`; hooks `on_launch`, `on_sleep`, `on_exit_requested` (`false` keeps the app running) |
@@ -84,11 +84,11 @@ Each command opens the store through `Env::store()`; an open or query failure is
 |---|---|
 | `notes_list` | `Store::list(query)` order kept. `processing` rows get `stage` from the newest job file of the recording (one job-directory scan, only when a row is processing); `failed` rows get `failed_stage` and `error`. `folder_name` is the meeting folder; `recording_missing` is `!recording_path.is_file()` |
 | `note_get` | The store row as serialised, plus `body_html`, `recording_missing`, and `transcript` with each `[hh:mm:ss] <label>: ` replaced by `store::shown_name` (exact label then `: `, so `Speaker 1` never matches `Speaker 10`) |
-| `note_update` | Applies `title`, `body_md`, `my_notes`, `speaker` in that order through `Store::edit`, stopping at the first refusal (`UnknownSpeaker` is `not_editable`). A `done` row's vault note is then always rewritten (`vault::rewrite_from_row`, path saved), so the UI's Retry resends only `id`; a failure is `vault: "failed"` with the root cause as `vault_error` (the note's file name holds the title, so it is left out). Other statuses take only "My notes", store only (D39) |
+| `note_update` | Applies `title`, `body_md`, `my_notes`, `speaker` in that order through `Store::edit`, stopping at the first refusal (`UnknownSpeaker` is `not_editable`). A `done` row's vault note is then always rewritten (`vault::rewrite_from_row`, path saved), so the UI's Retry resends only `id`; a failure is `vault: "failed"` with the root cause as `vault_error`, a file system error as `cannot write the vault note: <io error>` (the note's file name holds the title, so it is left out). Other statuses take only "My notes", store only (D39) |
 | `note_rerun` | Refuses in order: `unknown_note`, `recording_missing`, `already_processing` (lock held), `tool_missing` (`meeting_path` unset, failing `spawn::check_tool`, or a failed spawn). Then `clear_edits` when `replace_edits`, then spawns `meeting process <recording> [--language]` detached |
 | `note_open` | `folder`: the recording's parent. `obsidian`: the stored `vault_note_path` if it is a file, else `vault::find_existing` in the vault folder (the found path is saved). No target is `missing_file`; a failed `open` is `open_failed` |
 
-`render_html` runs `pulldown-cmark` (feature `html`, `Options::empty()`) with raw HTML turned into text (D25) and drops the tag of any link or image whose destination is not `http://`, `https://` or `mailto:` (case-insensitive), keeping its text.
+`render_html` runs `pulldown-cmark` (feature `html`, `Options::empty()`) with raw HTML turned into text (D25) and drops the tag of any link or image whose destination is not `http://`, `https://` or `mailto:` (case-insensitive) or an email autolink, keeping its text.
 
 ## UI (`desktop/src`)
 

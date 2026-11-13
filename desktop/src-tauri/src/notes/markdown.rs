@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 
 use meeting::store::{self, SpeakerRow};
-use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html};
+use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd, html};
 
 /// Renders `md` to HTML. Raw HTML is shown as text (D25), and a link or image whose destination
 /// is not `http`, `https` or `mailto` loses its tag, keeping only its text.
@@ -13,8 +13,20 @@ pub fn render_html(md: &str) -> String {
     let mut dropped: Vec<bool> = Vec::new();
     let events = Parser::new_ext(md, Options::empty()).filter_map(|event| match event {
         Event::Html(raw) | Event::InlineHtml(raw) => Some(Event::Text(raw)),
-        Event::Start(Tag::Link { ref dest_url, .. } | Tag::Image { ref dest_url, .. }) => {
-            let safe = is_safe_url(dest_url);
+        Event::Start(
+            Tag::Link {
+                link_type,
+                ref dest_url,
+                ..
+            }
+            | Tag::Image {
+                link_type,
+                ref dest_url,
+                ..
+            },
+        ) => {
+            // An email autolink's destination is the bare address; the writer adds `mailto:`.
+            let safe = link_type == LinkType::Email || is_safe_url(dest_url);
             dropped.push(!safe);
             safe.then_some(event)
         }
@@ -146,6 +158,14 @@ mod tests {
         assert_eq!(
             render_html("![pic](http://example.com/a.png)"),
             "<p><img src=\"http://example.com/a.png\" alt=\"pic\" /></p>\n"
+        );
+    }
+
+    #[test]
+    fn an_email_autolink_is_kept() {
+        assert_eq!(
+            render_html("<a@example.com>"),
+            "<p><a href=\"mailto:a@example.com\">a@example.com</a></p>\n"
         );
     }
 

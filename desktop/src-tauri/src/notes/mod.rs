@@ -330,9 +330,15 @@ fn rewrite_vault(env: &Env, store: &Store, row: &Row) -> anyhow::Result<()> {
     store.set_vault_note_path(row.id, &path)
 }
 
-/// Why the vault note was not written, without the note's file name: that holds the title.
+/// Why the vault note was not written, without the note's file name: that holds the title. A
+/// file system error is the root cause of a context naming that file, so only the step is said.
 fn vault_reason(e: &anyhow::Error) -> String {
-    e.root_cause().to_string()
+    let root = e.root_cause();
+    if root.downcast_ref::<io::Error>().is_some() {
+        format!("cannot write the vault note: {root}")
+    } else {
+        root.to_string()
+    }
 }
 
 /// The stored vault note if it is still there, else the note whose `recording` frontmatter is
@@ -924,6 +930,10 @@ mod tests {
         fs::set_permissions(f.vault_folder(), fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(reply["vault"], "failed");
         let reason = reply["vault_error"].as_str().unwrap();
+        assert!(
+            reason.starts_with("cannot write the vault note: Permission denied"),
+            "{reason}"
+        );
         assert!(!reason.contains("Secret plans"), "{reason}");
         assert!(!reason.contains("Standup"), "{reason}");
     }
