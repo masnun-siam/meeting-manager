@@ -8,7 +8,8 @@ use std::fmt;
 use std::fs;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use rusqlite::types::Type;
@@ -503,11 +504,12 @@ impl Store {
                  WHERE recording_path = ?3",
                 params![utf8(to)?, now_utc(), utf8(from)?],
             )
-            .with_context(|| {
-                format!(
+            .map_err(|e| match sqlite_kind(&e) {
+                "constraint" => anyhow::Error::new(e).context(format!(
                     "cannot move the note to {}: a note already holds that path",
                     to.display()
-                )
+                )),
+                _ => anyhow::Error::new(e).context("cannot write the notes database"),
             })?;
         Ok(())
     }
@@ -577,6 +579,20 @@ impl Store {
 
 fn prepare(conn: &Connection, steps: &[&str]) -> anyhow::Result<()> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
+    // SQLite does not call the busy handler for the switch to WAL, so several processes opening
+    // a new file at once would fail at once; every step is safe to repeat, so wait here instead.
+    let deadline = Instant::now() + BUSY_TIMEOUT;
+    loop {
+        match set_up(conn, steps) {
+            Err(e) if error_kind(&e) == "busy" && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            done => return done,
+        }
+    }
+}
+
+fn set_up(conn: &Connection, steps: &[&str]) -> anyhow::Result<()> {
     // Checked before switching to WAL, so a file from a newer build is not modified.
     version(conn, steps)?;
     conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0))?;
@@ -831,7 +847,7 @@ fn with_edited_names(
     speakers: &[SpeakerRow],
     result: &[(String, Option<String>, String)],
 ) -> String {
-    let mut text = text.to_owned();
+    let mut swaps = Vec::new();
     for speaker in speakers.iter().filter(|s| s.name_edited) {
         let Some(edited) = &speaker.name else {
             continue;
@@ -840,9 +856,13 @@ fn with_edited_names(
             .iter()
             .find(|(label, ..)| *label == speaker.label)
             .and_then(|(_, name, _)| name.as_deref());
-        text = replace_whole_words(&text, &name_forms(inferred, &speaker.label), edited);
+        swaps.extend(swaps_to(name_forms(inferred, &speaker.label), edited));
     }
-    text
+    replace_whole_words(text, &swaps)
+}
+
+fn swaps_to(forms: Vec<String>, name: &str) -> impl Iterator<Item = (String, &str)> {
+    forms.into_iter().map(move |form| (form, name))
 }
 
 /// Every way a speaker can appear in a title or body: `Name (inferred)`, `Name`, the label.
@@ -856,26 +876,26 @@ fn name_forms(name: Option<&str>, label: &str) -> Vec<String> {
     forms
 }
 
-/// Replaces each whole-word occurrence of any needle with `with`, in one pass (the longest
-/// needle first), so text just written is never matched again. A word ends where the next
-/// character is not alphanumeric: `Speaker 1` is not found in `Speaker 10`.
-fn replace_whole_words(text: &str, needles: &[String], with: &str) -> String {
-    let mut needles: Vec<&str> = needles
+/// Replaces each whole-word occurrence of a needle with its replacement, in one pass (the
+/// longest needle first), so text just written is never matched again. A word ends where the
+/// next character is not alphanumeric: `Speaker 1` is not found in `Speaker 10`.
+fn replace_whole_words(text: &str, swaps: &[(String, &str)]) -> String {
+    let mut swaps: Vec<(&str, &str)> = swaps
         .iter()
-        .map(String::as_str)
-        .filter(|n| !n.is_empty())
+        .map(|(needle, with)| (needle.as_str(), *with))
+        .filter(|(needle, _)| !needle.is_empty())
         .collect();
-    needles.sort_by_key(|n| Reverse(n.len()));
+    swaps.sort_by_key(|(needle, _)| Reverse(needle.len()));
     let in_word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
     let mut out = String::with_capacity(text.len());
     let mut previous = None;
     let mut rest = text;
     while let Some(c) = rest.chars().next() {
-        let hit = needles.iter().find(|n| {
-            rest.starts_with(**n) && !in_word(previous) && !in_word(rest[n.len()..].chars().next())
+        let hit = swaps.iter().find(|(n, _)| {
+            rest.starts_with(n) && !in_word(previous) && !in_word(rest[n.len()..].chars().next())
         });
         let taken = match hit {
-            Some(needle) => {
+            Some((needle, with)) => {
                 out.push_str(with);
                 previous = needle.chars().next_back();
                 needle.len()
@@ -932,15 +952,9 @@ fn rename(row: &mut Row, label: &str, name: String) -> Result<(), EditError> {
     if name.trim().is_empty() {
         return Err(EditError::NotEditable);
     }
-    let previous = name_forms(speaker.name.as_deref(), label);
-    row.title = row
-        .title
-        .take()
-        .map(|t| replace_whole_words(&t, &previous, &name));
-    row.body_md = row
-        .body_md
-        .take()
-        .map(|b| replace_whole_words(&b, &previous, &name));
+    let swaps: Vec<_> = swaps_to(name_forms(speaker.name.as_deref(), label), &name).collect();
+    row.title = row.title.take().map(|t| replace_whole_words(&t, &swaps));
+    row.body_md = row.body_md.take().map(|b| replace_whole_words(&b, &swaps));
     speaker.name = Some(name);
     speaker.name_edited = true;
     Ok(())
@@ -1838,16 +1852,174 @@ mod tests {
         ]
         .map(|(text, want)| (text, vec!["Rahim".to_owned(), "রহিম".to_owned()], want));
         for (text, needles, want) in cases {
-            assert_eq!(replace_whole_words(text, &needles, "X"), want);
+            let swaps: Vec<_> = swaps_to(needles, "X").collect();
+            assert_eq!(replace_whole_words(text, &swaps), want);
         }
-        let empty = [String::new()];
-        assert_eq!(replace_whole_words("a b", &empty, "X"), "a b");
+        assert_eq!(replace_whole_words("a b", &[(String::new(), "X")]), "a b");
         // One pass: the replacement is not matched again by a shorter needle.
-        let forms = name_forms(Some("Rahim"), "Speaker 1");
+        let forms: Vec<_> =
+            swaps_to(name_forms(Some("Rahim"), "Speaker 1"), "Rahim Uddin").collect();
         assert_eq!(
-            replace_whole_words("Rahim (inferred), Rahim", &forms, "Rahim Uddin"),
+            replace_whole_words("Rahim (inferred), Rahim", &forms),
             "Rahim Uddin, Rahim Uddin"
         );
+    }
+
+    #[test]
+    fn merge_renames_all_speakers_in_one_pass() {
+        let (dir, store) = store("store-merge-one-pass");
+        let result = RunResult {
+            speakers: vec![speaker("Speaker 1", None), speaker("Speaker 2", None)],
+            ..done("T", "B")
+        };
+        let id = store.merge_run(Path::new(REC), &result).unwrap().id;
+        // One speaker is named like the other's label: neither rename may swallow the other.
+        rename_to(&store, id, "Speaker 1", "Speaker 2");
+        rename_to(&store, id, "Speaker 2", "Karim");
+        let rerun = RunResult {
+            title: Some("Speaker 1 met Speaker 2".into()),
+            ..result
+        };
+        let row = store.merge_run(Path::new(REC), &rerun).unwrap();
+        assert_eq!(row.title.as_deref(), Some("Speaker 2 met Karim"));
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn many_opens_of_a_new_file_at_once_all_succeed() {
+        let dir = temp("store-open-at-once");
+        for round in 0..5 {
+            let path = dir.join(format!("{round}/notes.sqlite"));
+            let start = std::sync::Arc::new(std::sync::Barrier::new(16));
+            let opens: Vec<_> = (0..16)
+                .map(|_| {
+                    let (path, start) = (path.clone(), start.clone());
+                    thread::spawn(move || {
+                        start.wait();
+                        Store::open(&path).map(drop).map_err(|e| format!("{e:#}"))
+                    })
+                })
+                .collect();
+            for open in opens {
+                assert_eq!(open.join().unwrap(), Ok(()));
+            }
+            let store = Store::open(&path).unwrap();
+            let version: u32 = store
+                .conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, 1);
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // SQLite refuses the switch to WAL at once, without the busy timeout, while another
+    // connection holds a lock on the file.
+    #[test]
+    fn open_waits_for_a_lock_held_before_the_file_is_in_wal_mode() {
+        let dir = temp("store-open-waits");
+        let path = dir.join("notes.sqlite");
+        let first = Connection::open(&path).unwrap();
+        first.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let second = {
+            let path = path.clone();
+            thread::spawn(move || Store::open(&path).map(drop).map_err(|e| format!("{e:#}")))
+        };
+        thread::sleep(Duration::from_millis(300));
+        first.execute_batch("COMMIT").unwrap();
+        assert_eq!(second.join().unwrap(), Ok(()));
+        drop(first);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // With a deferred transaction the waiting side reads the old version first and fails once
+    // the other side commits, instead of finding the work done.
+    #[test]
+    fn a_migration_waits_for_another_and_does_not_repeat_its_steps() {
+        let dir = temp("store-migrate-waits");
+        let path = dir.join("notes.sqlite");
+        let first = Connection::open(&path).unwrap();
+        first
+            .query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0))
+            .unwrap();
+        first.execute_batch("BEGIN IMMEDIATE").unwrap();
+        first.execute_batch(SCHEMA_V1).unwrap();
+        first.execute_batch("PRAGMA user_version = 1").unwrap();
+        let second = {
+            let path = path.clone();
+            thread::spawn(move || {
+                let conn = Connection::open(&path).unwrap();
+                conn.busy_timeout(BUSY_TIMEOUT).unwrap();
+                migrate(&conn, MIGRATIONS).map_err(|e| format!("{e:#}"))
+            })
+        };
+        thread::sleep(Duration::from_millis(300));
+        first.execute_batch("COMMIT").unwrap();
+        assert_eq!(second.join().unwrap(), Ok(()));
+        drop(first);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // With a deferred transaction the merge reads the unedited row while the edit is still
+    // uncommitted, and then overwrites the edit or fails.
+    #[test]
+    fn a_merge_waits_for_an_edit_in_flight_and_keeps_it() {
+        let (dir, store) = store("store-merge-waits");
+        let id = store.merge_run(Path::new(REC), &done("T", "B")).unwrap().id;
+        store.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE meetings SET title = 'Mine', title_edited = 1 WHERE id = ?1",
+                [id],
+            )
+            .unwrap();
+        let merge = {
+            let path = dir.join("notes.sqlite");
+            thread::spawn(move || {
+                let other = Store::open(&path).map_err(|e| format!("{e:#}"))?;
+                let row = other.merge_run(Path::new(REC), &done("T2", "B2"));
+                row.map(|r| (r.title, r.body_md))
+                    .map_err(|e| format!("{e:#}"))
+            })
+        };
+        thread::sleep(Duration::from_millis(300));
+        store.conn.execute_batch("COMMIT").unwrap();
+        assert_eq!(
+            merge.join().unwrap(),
+            Ok((Some("Mine".into()), Some("B2".into())))
+        );
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_edit_waits_for_a_merge_in_flight_and_lands_on_top() {
+        let (dir, store) = store("store-edit-waits");
+        let id = store.merge_run(Path::new(REC), &done("T", "B")).unwrap().id;
+        store.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        store
+            .conn
+            .execute("UPDATE meetings SET body_md = 'B2' WHERE id = ?1", [id])
+            .unwrap();
+        let edit = {
+            let path = dir.join("notes.sqlite");
+            thread::spawn(move || {
+                let other = Store::open(&path).map_err(|e| format!("{e:#}"))?;
+                let row = other.edit(id, Edit::Title("Mine".into()));
+                row.map(|r| (r.title, r.body_md))
+                    .map_err(|e| format!("{e:#}"))
+            })
+        };
+        thread::sleep(Duration::from_millis(300));
+        store.conn.execute_batch("COMMIT").unwrap();
+        assert_eq!(
+            edit.join().unwrap(),
+            Ok((Some("Mine".into()), Some("B2".into())))
+        );
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
