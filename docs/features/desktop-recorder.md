@@ -1,8 +1,8 @@
 # Desktop recorder
 
-Covers: desktop/src-tauri/src/recorder/
+Covers: desktop/src-tauri/src/recorder/, desktop/src-tauri/src/tray.rs
 
-The desktop app's recording session: start, pause, resume, stop, the automatic stops, the WAV written while recording, and the hand-off to `meeting process`. Behaviour: [../prds/desktop-app.md](../prds/desktop-app.md) FR-1 to FR-6 (D13, D14, D33, D36). Audio comes from the capture boundary ([../desktop.md](../desktop.md#capture-boundary-capturemodrs)). Sleep and quit hooks, the menu-bar item, crash recovery and `recorder_retry` are #149.
+The desktop app's recording session: start, pause, resume, stop, the automatic stops (including sleep and quit), the WAV written while recording, the hand-off to `meeting process`, crash recovery, `recorder_retry` and the menu-bar item. Behaviour: [../prds/desktop-app.md](../prds/desktop-app.md) FR-1 to FR-7 (D13, D14, D15, D32, D33, D36). Audio comes from the capture boundary ([../desktop.md](../desktop.md#capture-boundary-capturemodrs)).
 
 ## Files
 
@@ -14,8 +14,11 @@ The desktop app's recording session: start, pause, resume, stop, the automatic s
 | `convert.rs` | `to_m4a`: ffmpeg by absolute path, `.part` then rename |
 | `handoff.rs` | `write_context` / `ensure_context` (`context.json`), `finish_recording` (convert, delete WAV, spawn) |
 | `notice.rs` | `Notice {kind, message, folder}` and the fixed messages |
+| `recover.rs` | `recover_all` (launch), `retry` (`recorder_retry`), `recover_one` shared by both |
+| `sleep.rs` | `register` (`NSWorkspaceWillSleepNotification` observer), `confirm_quit_alert` (`NSAlert`) |
+| `../tray.rs` | The menu-bar item: pure `menu_state(&Status, start_error)`, `setup`, the menu handler, the 1 s title timer |
 
-Tests inject everything through `Recorder::with(&env, Deps { capture, clock, local_minute, open_wav, spawn, check_tool, cap_s, flush_every })`: `open_wav` lets a test hand the writer a sink that fills up like a full disk; a fake capture stores its callbacks in a `thread_local!` so the test pushes samples itself; conversion uses the real ffmpeg on `PATH`.
+Tests inject everything through `Recorder::with(&env, Deps { capture, clock, local_minute, open_wav, spawn, check_tool, cap_s, flush_every, confirm_quit })`: `open_wav` lets a test hand the writer a sink that fills up like a full disk; a fake capture stores its callbacks in a `thread_local!` so the test pushes samples itself; conversion uses the real ffmpeg on `PATH`.
 
 ## Lifecycle
 
@@ -26,8 +29,9 @@ stateDiagram-v2
   Idle --> Idle: Start refused (no folder left)
   Recording --> Paused: Pause
   Paused --> Recording: Resume
-  Recording --> Saving: Stop / cap / capture failed / disk full
-  Paused --> Saving: Stop / capture failed
+  Recording --> Saving: Stop / cap / capture failed / disk full / sleep / quit (confirmed)
+  Paused --> Saving: Stop / capture failed / sleep / quit (confirmed)
+  Idle --> Saving: recorder_retry
   Saving --> Idle: notice set
 ```
 
@@ -91,5 +95,47 @@ All run on a blocking thread (permission prompts, joins and ffmpeg block). Repli
 | `recorder_start {language, event_occurrence_id\|null}` | `{folder}` | see Start |
 | `recorder_pause` / `recorder_resume` | `{state}` | `not_recording` |
 | `recorder_stop` | `{state: "saving"}` at once | `not_recording` |
+| `recorder_retry {folder}` | `{state: "saving"}` at once | `not_found`, `already_recording` |
 
-`on_change(f)` runs `f` after every state or notice change (for the menu-bar item, #149). `begin_saving()` holds `saving` for #149's retry.
+`on_change(f)` runs `f` after every state or notice change (the menu-bar item uses it). `begin_saving()` holds `saving` while a retry converts.
+
+## Sleep and quit
+
+| Event | What happens | Where |
+|---|---|---|
+| `NSWorkspaceWillSleepNotification` (observer registered once at launch, `on_sleep`) | Recording or paused: `stop(Sleep)`. The handler returns once the stream has ended and the WAV header is patched; conversion and spawn run on the saving thread, after wake if need be. Notice "Stopped because the Mac went to sleep. Saved, sent for processing." Idle or saving: nothing | `sleep::will_sleep` |
+| `ExitRequested` (Cmd-Q, the menu's Quit via `app.exit(0)`; closing the window only hides it, D15) | `Recorder::quit()`: idle → quit; saving → wait until idle, then quit; recording/paused → `confirm_quit()`: Cancel keeps recording (exit prevented), confirm → `stop(Quit)`, join the saving thread, then quit. A spawned job has its own process group and outlives the app. If conversion fails the WAV stays and the next launch recovers it | `on_exit_requested`, `quit` |
+| The confirmation | `NSAlert` "Quit Meeting?" / "The recording will be stopped and saved." / "Stop recording and quit", "Cancel". The app is activated first. Off the main thread it is not shown and the answer is Cancel | `sleep::confirm_quit_alert` |
+
+Recovery and retry conversions are not waited for: quitting mid-way kills ffmpeg, and the next launch deletes the stale `recording.m4a.part` and recovers the kept WAV. `quit` blocks the main thread while saving, so the menu-bar item never waits on the main thread: every update is queued with `run_on_main_thread`.
+
+## Crash recovery and retry
+
+On launch `on_launch` runs `recover_all` on its own thread (the window is usable at once):
+
+| Rule | Detail |
+|---|---|
+| Candidates | Direct subfolders of `recordings_dir` holding `recording.partial.wav`, sorted by name (oldest first). `Archive/` and symlinked folders are not looked at |
+| Leftover | No other `recording.*` in the folder; a stale `recording.m4a.part` is deleted first and does not count |
+| Skipped | The folder of the session that is recording or saving; checked under the `converting` lock, which recovery and retry each hold for one folder |
+| Repair | `wav::repair` sets the sizes from the file length (whole samples). A file under 44 bytes or not our canonical header is kept untouched and counts as a failure. Zero frames: the WAV is deleted, and the folder if that leaves it empty; no notice |
+| `context.json` | Kept if present (written at Start, with the event). Missing: written without an event, `started_at_ms` from the WAV's creation time (else modified time) |
+| Hand-off | `finish_recording` as a stop does, in the last language (store `language`, default `bn`): m4a, WAV deleted, spawned when ≥ 10 s |
+| Notice | One per run, none when nothing was recovered or failed: `{kind: "recovered", message: "Recovered N recording(s)"}`; with failures `{kind: "error", message: "Recovered N recording(s). Could not convert M: <first error>", folder: <first failed folder>}`. Dropped if a recording was started while recovery ran (that recording's notice wins). Recovery never changes the state |
+
+`recorder_retry {folder}` (D33): the folder is canonicalised and must be a direct subfolder of the canonical `recordings_dir` (not `Archive`) holding the WAV, else `not_found` (also for `..`, symlinks out, paths elsewhere, a missing config). Not idle → `already_recording`. Otherwise it answers `saving` at once, and a thread runs the same `recover_one` and sets the notice it returns (`saved`, `too_short`, `setup`, or `error` with the folder again). Works after a disk-full stop and after an ffmpeg failure. Logs carry counts and kinds only.
+
+## Menu-bar item (`tray.rs`)
+
+Built in `tray::setup` on the main thread (skipped with a warning otherwise, so the mock-runtime tests run without it): `TrayIconBuilder::with_id("main")`, left click opens the menu.
+
+| State | Icon | Title | Start | Pause/Resume | Stop |
+|---|---|---|---|---|---|
+| idle | `tray-idle.png` (template) | none | enabled | "Pause", disabled | disabled |
+| recording | `tray-recording.png` (red, not a template) | `H:MM:SS` of `elapsed_s`, refreshed each second | disabled | "Pause" | enabled |
+| paused | `tray-paused.png` (template) | frozen `H:MM:SS` | disabled | "Resume" | enabled |
+| saving | idle icon | none | disabled | disabled | disabled |
+
+- First line, disabled, only when there is something to say: the last Start error from the menu (the FR-2 permission texts word for word, `not_configured`, `capture_failed`…), else an `error` or `setup` notice. A Start error clears once a recording runs.
+- Start recording: ad hoc, in the last language, on a thread. Open Meeting: shows and focuses the `main` window. Quit: `app.exit(0)`, so the quit logic above decides.
+- Every recorder change re-renders through `on_change`; a timer thread refreshes only the title while recording.

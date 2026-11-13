@@ -1,7 +1,7 @@
 //! The Meeting desktop app's Rust side: one window, the commands the UI calls and the launch
 //! hooks. Built without `FEATURE_DESKTOP_APP=1` it opens a window that says so and nothing else.
 
-use tauri::{AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 pub mod admin;
 pub mod calendar;
@@ -128,13 +128,18 @@ fn launch_in<R: Runtime>(
     Ok(())
 }
 
-/// A second launch lands here, in the first instance: bring its window forward.
-fn focus_main<R: Runtime>(app: &AppHandle<R>) {
+/// A second launch, or the menu-bar item's Open Meeting: bring the window forward.
+pub(crate) fn focus_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(Mode::On.window_label()) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// D15: closing the main window hides it; the app and its menu-bar item keep running until Quit.
+fn hides_on_close(mode: Mode, label: &str) -> bool {
+    mode == Mode::On && label == Mode::On.window_label()
 }
 
 pub fn run() {
@@ -149,13 +154,26 @@ pub fn run() {
         }));
     }
     match configure(builder, mode).build(tauri::generate_context!()) {
-        Ok(app) => app.run(move |app, event| {
-            if let RunEvent::ExitRequested { api, .. } = event {
+        Ok(app) => app.run(move |app, event| match event {
+            RunEvent::ExitRequested { api, .. } => {
                 // Built off, no hook runs: quitting is never held back.
                 if mode == Mode::On && !recorder::on_exit_requested(app) {
                     api.prevent_exit();
                 }
             }
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::CloseRequested { api, .. },
+                ..
+            } if hides_on_close(mode, &label) => {
+                api.prevent_close();
+                if let Some(window) = app.get_webview_window(&label) {
+                    let _ = window.hide();
+                }
+            }
+            // The Dock icon brings a hidden window back.
+            RunEvent::Reopen { .. } if mode == Mode::On => focus_main(app),
+            _ => {}
         }),
         Err(e) => {
             tracing::error!("the app could not start: {e}");
@@ -300,6 +318,14 @@ mod tests {
     }
 
     #[test]
+    fn only_the_main_window_hides_on_close() {
+        assert!(hides_on_close(Mode::On, "main"));
+        assert!(!hides_on_close(Mode::On, "other"));
+        assert!(!hides_on_close(Mode::Off, "off"));
+        assert!(!hides_on_close(Mode::Off, "main"));
+    }
+
+    #[test]
     fn off_opens_one_window_and_registers_nothing() {
         let app = started(Mode::Off);
         assert_eq!(labels(&app), ["off"]);
@@ -333,11 +359,24 @@ mod tests {
     }
 
     #[test]
-    fn a_stub_answers_not_implemented() {
+    fn retry_refuses_a_folder_that_is_not_a_leftover() {
         let app = started(Mode::On);
-        let reply = invoke(&app, "main", "recorder_retry").unwrap();
+        let webview = app.get_webview_window("main").unwrap();
+        let request = InvokeRequest {
+            cmd: "recorder_retry".into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(serde_json::json!({"folder": "/etc"})),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        };
+        let reply: Value = get_ipc_response(&webview, request)
+            .unwrap()
+            .deserialize()
+            .unwrap();
         assert_eq!(reply["ok"], false);
-        assert_eq!(reply["code"], "not_implemented");
+        assert_eq!(reply["code"], "not_found");
     }
 
     #[test]

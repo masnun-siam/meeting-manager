@@ -1,12 +1,15 @@
 //! Recording (PRD desktop-app FR-1 to FR-6): start, pause, resume, stop and the automatic stops
 //! (3 hours of recorded time, capture failure, full disk), the WAV written while recording, and
 //! the hand-off to `meeting process`. One lock guards the state, held only for short transitions:
-//! the Rust analogue of the extension's `serial()`. Sleep, quit, crash recovery and retry: #149.
+//! the Rust analogue of the extension's `serial()`. Sleep and quit stops: `sleep.rs`; crash
+//! recovery and `recorder_retry`: `recover.rs`.
 
 pub mod convert;
 pub mod folder;
 pub mod handoff;
 pub mod notice;
+mod recover;
+mod sleep;
 pub mod wav;
 
 use std::fmt::Display;
@@ -85,6 +88,8 @@ pub struct Deps {
     pub check_tool: CheckToolFn,
     pub cap_s: u64,
     pub flush_every: Duration,
+    /// Asks whether to stop the recording and quit (`sleep::confirm_quit_alert`).
+    pub confirm_quit: fn() -> bool,
 }
 
 /// Why a recording stopped; the notice's message starts with it.
@@ -197,6 +202,8 @@ struct Inner {
     state: Mutex<State>,
     notice: Mutex<Option<Notice>>,
     on_change: Mutex<Option<OnChange>>,
+    /// Held while recovery or a retry converts a folder, so two never work on the same one.
+    converting: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -233,6 +240,7 @@ impl Recorder {
                 check_tool: meeting::spawn::check_tool,
                 cap_s: CAP_S,
                 flush_every: FLUSH_EVERY,
+                confirm_quit: sleep::confirm_quit_alert,
             },
         )
     }
@@ -246,6 +254,7 @@ impl Recorder {
                 state: Mutex::new(State::Idle),
                 notice: Mutex::new(None),
                 on_change: Mutex::new(None),
+                converting: Mutex::new(()),
             }),
         }
     }
@@ -597,6 +606,45 @@ impl Recorder {
         self.changed();
     }
 
+    /// The recorded seconds while recording (not paused): what the menu-bar timer shows. Never
+    /// reads the store, unlike `status`.
+    pub fn recording_elapsed_s(&self) -> Option<u64> {
+        match &*self.state() {
+            State::Active(s) if !s.shared.paused.load(Ordering::Relaxed) => {
+                Some(s.shared.frames.load(Ordering::Relaxed) / u64::from(SAMPLE_RATE))
+            }
+            _ => None,
+        }
+    }
+
+    fn is_saving(&self) -> bool {
+        matches!(*self.state(), State::Saving { .. })
+    }
+
+    fn wait_saved(&self) {
+        while self.is_saving() {
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Whether the app may quit now (FR-5). Idle: yes. Saving: once the save is done. Recording
+    /// or paused: only if the user confirms, and then after the recording is saved and handed
+    /// off. Blocks while saving; the spawned job runs on in its own process group.
+    pub(crate) fn quit(&self) -> bool {
+        let recording = matches!(*self.state(), State::Active(_));
+        if recording {
+            if !(self.inner.deps.confirm_quit)() {
+                return false;
+            }
+            // `None`: an automatic stop got there first while the alert was up.
+            if let Some(saving) = self.stop(Reason::Quit) {
+                let _ = saving.join();
+            }
+        }
+        self.wait_saved();
+        true
+    }
+
     /// `idle` → `saving` until the guard drops; `None` when not idle.
     pub fn begin_saving(&self) -> Option<SavingGuard> {
         {
@@ -730,15 +778,25 @@ async fn blocking<R: Runtime>(
     ran.unwrap_or_else(|_| reply::err("failed", "a recorder command failed unexpectedly"))
 }
 
-/// Called once at startup.
-pub fn on_launch<R: Runtime>(_app: &AppHandle<R>) {}
+/// Called once at startup: recovers what a crash left, off the main thread (launch stays fast).
+pub fn on_launch<R: Runtime>(app: &AppHandle<R>) {
+    let recorder = app.state::<App>().recorder.clone();
+    let spawned = thread::Builder::new()
+        .name("recorder-recover".into())
+        .spawn(move || recorder.recover_all());
+    if spawned.is_err() {
+        tracing::warn!("recorder: recovery not started");
+    }
+}
 
 /// Called once at startup; registers for the Mac going to sleep.
-pub fn on_sleep<R: Runtime>(_app: &AppHandle<R>) {}
+pub fn on_sleep<R: Runtime>(app: &AppHandle<R>) {
+    sleep::register(app.state::<App>().recorder.clone());
+}
 
 /// Called when the app is asked to quit. `false` keeps it running.
-pub fn on_exit_requested<R: Runtime>(_app: &AppHandle<R>) -> bool {
-    true
+pub fn on_exit_requested<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.state::<App>().recorder.quit()
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -800,12 +858,16 @@ pub async fn recorder_stop<R: Runtime>(app: AppHandle<R>) -> Value {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn recorder_retry() -> Value {
-    reply::not_implemented("recorder_retry")
+pub async fn recorder_retry<R: Runtime>(app: AppHandle<R>, folder: String) -> Value {
+    blocking(app, move |app| match app.recorder.retry(&folder) {
+        Ok(_saving) => reply::ok(json!({"state": "saving"})),
+        Err(r) => refused(r),
+    })
+    .await
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::{Cell, RefCell};
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::AtomicUsize;
@@ -821,7 +883,7 @@ mod tests {
     use crate::recorder::notice::Kind;
     use crate::recorder::wav::tests::temp;
 
-    const SECOND: usize = 48_000;
+    pub(crate) const SECOND: usize = 48_000;
     const STAMP: &str = "2026-11-13_0600";
 
     type Start = fn(Samples, Events) -> anyhow::Result<Stream>;
@@ -873,12 +935,12 @@ mod tests {
         }
     }
 
-    fn ok_capture() -> Capture {
+    pub(crate) fn ok_capture() -> Capture {
         capture(granted, granted, fake_start)
     }
 
     /// Feeds `frames` of samples to the running fake capture, in 100 ms chunks.
-    fn push(frames: usize) {
+    pub(crate) fn push(frames: usize) {
         let chunk = vec![1_000i16; 4_800];
         CALLBACKS.with(|c| {
             let mut c = c.borrow_mut();
@@ -900,7 +962,7 @@ mod tests {
         Ok(STAMP.into())
     }
 
-    fn write_config(env: &Env, ffmpeg: PathBuf) {
+    pub(crate) fn write_config(env: &Env, ffmpeg: PathBuf) {
         Config {
             recordings_dir: env.home.join("Recordings"),
             vault_dir: env.home.join("Vault"),
@@ -914,9 +976,9 @@ mod tests {
         .unwrap();
     }
 
-    struct Rig {
-        recorder: Recorder,
-        home: PathBuf,
+    pub(crate) struct Rig {
+        pub(crate) recorder: Recorder,
+        pub(crate) home: PathBuf,
     }
 
     impl Drop for Rig {
@@ -926,7 +988,7 @@ mod tests {
     }
 
     impl Rig {
-        fn env(&self) -> Env {
+        pub(crate) fn env(&self) -> Env {
             Env::at(self.home.clone())
         }
 
@@ -941,11 +1003,11 @@ mod tests {
             fs::read_dir(self.home.join("Recordings")).map_or(0, |d| d.count())
         }
 
-        fn start(&self) -> Result<PathBuf, Refused> {
+        pub(crate) fn start(&self) -> Result<PathBuf, Refused> {
             self.recorder.start(Language::En, || Ok(None))
         }
 
-        fn stop(&self, reason: Reason) -> Status {
+        pub(crate) fn stop(&self, reason: Reason) -> Status {
             self.recorder
                 .stop(reason)
                 .expect("a recording was running")
@@ -954,12 +1016,12 @@ mod tests {
             self.recorder.status()
         }
 
-        fn state(&self) -> &'static str {
+        pub(crate) fn state(&self) -> &'static str {
             self.recorder.status().state
         }
 
         /// Waits for an automatic stop to finish saving.
-        fn wait_idle(&self) -> Status {
+        pub(crate) fn wait_idle(&self) -> Status {
             let deadline = Instant::now() + Duration::from_secs(60);
             loop {
                 let status = self.recorder.status();
@@ -972,12 +1034,17 @@ mod tests {
         }
     }
 
-    fn rig(name: &str, capture: Capture) -> Rig {
+    pub(crate) fn rig(name: &str, capture: Capture) -> Rig {
         rig_with(name, capture, 3 * 3600)
     }
 
     fn rig_with(name: &str, capture: Capture, cap_s: u64) -> Rig {
-        rig_full(name, capture, cap_s, wav::open)
+        rig_full(name, capture, cap_s, wav::open, || true)
+    }
+
+    /// A rig whose quit confirmation answers with `confirm_quit`.
+    pub(crate) fn rig_quit(name: &str, confirm_quit: fn() -> bool) -> Rig {
+        rig_full(name, ok_capture(), 3 * 3600, wav::open, confirm_quit)
     }
 
     fn rig_full(
@@ -985,6 +1052,7 @@ mod tests {
         capture: Capture,
         cap_s: u64,
         open_wav: fn(&std::path::Path) -> anyhow::Result<Box<dyn wav::Sink>>,
+        confirm_quit: fn() -> bool,
     ) -> Rig {
         let home = temp(&format!("recorder-{name}"));
         let env = Env::at(home.clone());
@@ -1000,6 +1068,7 @@ mod tests {
                 check_tool: meeting::spawn::check_tool,
                 cap_s,
                 flush_every: Duration::from_millis(20),
+                confirm_quit,
             },
         );
         Rig { recorder, home }
@@ -1370,7 +1439,13 @@ mod tests {
 
     #[test]
     fn a_full_disk_in_the_writer_stops_on_its_own_and_keeps_the_wav() {
-        let rig = rig_full("writer-full", ok_capture(), 3 * 3600, open_small_disk);
+        let rig = rig_full(
+            "writer-full",
+            ok_capture(),
+            3 * 3600,
+            open_small_disk,
+            || true,
+        );
         let folder = rig.start().unwrap();
         push(5 * SECOND);
         let status = rig.wait_idle();
@@ -1474,6 +1549,81 @@ mod tests {
         // Saving, then idle with the notice.
         rig.stop(Reason::User);
         assert_eq!(count.load(Ordering::SeqCst), 5);
+    }
+
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+
+    fn cancel() -> bool {
+        ASKED.fetch_add(1, Ordering::SeqCst);
+        false
+    }
+
+    fn confirm() -> bool {
+        ASKED.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+
+    fn never_asked() -> bool {
+        panic!("idle and saving quit without asking")
+    }
+
+    #[test]
+    fn quitting_when_idle_or_saving_does_not_ask() {
+        let rig = rig_quit("quit-idle", never_asked);
+        assert!(rig.recorder.quit());
+
+        let slow = rig.home.join("ffmpeg");
+        fs::write(&slow, "#!/bin/sh\nsleep 1\nexit 1\n").unwrap();
+        fs::set_permissions(&slow, fs::Permissions::from_mode(0o755)).unwrap();
+        write_config(&rig.env(), slow);
+        rig.start().unwrap();
+        push(SECOND);
+        let saving = rig.recorder.stop(Reason::User).unwrap();
+        assert_eq!(rig.state(), "saving");
+        assert!(rig.recorder.quit());
+        // `quit` waited for the save, so the notice is already there.
+        assert_eq!(rig.state(), "idle");
+        assert!(rig.recorder.status().notice.is_some());
+        saving.join().unwrap();
+    }
+
+    #[test]
+    fn cancelling_the_quit_keeps_recording() {
+        let rig = rig_quit("quit-cancel", cancel);
+        rig.start().unwrap();
+        let asked = ASKED.load(Ordering::SeqCst);
+        assert!(!rig.recorder.quit());
+        assert!(ASKED.load(Ordering::SeqCst) > asked);
+        assert_eq!(rig.state(), "recording");
+        rig.recorder.pause().unwrap();
+        assert!(!rig.recorder.quit());
+        assert_eq!(rig.state(), "paused");
+        rig.stop(Reason::User);
+    }
+
+    #[test]
+    fn confirming_the_quit_saves_and_hands_off_first() {
+        let rig = rig_quit("quit-confirm", confirm);
+        let folder = rig.start().unwrap();
+        push(12 * SECOND);
+        assert!(rig.recorder.quit());
+        let status = rig.recorder.status();
+        assert_eq!(status.state, "idle");
+        assert_eq!(status.notice.unwrap().kind, Kind::Saved);
+        assert!(folder.join(M4A).is_file());
+        assert_eq!(spawns_under(&folder).len(), 1);
+    }
+
+    #[test]
+    fn the_timer_reads_only_while_recording() {
+        let rig = rig("timer", ok_capture());
+        assert_eq!(rig.recorder.recording_elapsed_s(), None);
+        rig.start().unwrap();
+        push(3 * SECOND);
+        assert_eq!(rig.recorder.recording_elapsed_s(), Some(3));
+        rig.recorder.pause().unwrap();
+        assert_eq!(rig.recorder.recording_elapsed_s(), None);
+        rig.stop(Reason::User);
     }
 
     #[test]
