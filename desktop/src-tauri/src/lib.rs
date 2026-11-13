@@ -1,7 +1,7 @@
 //! The Meeting desktop app's Rust side: one window, the commands the UI calls and the launch
 //! hooks. Built without `FEATURE_DESKTOP_APP=1` it opens a window that says so and nothing else.
 
-use tauri::{AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 pub mod admin;
 pub mod calendar;
@@ -137,6 +137,11 @@ pub(crate) fn focus_main<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// D15: closing the main window hides it; the app and its menu-bar item keep running until Quit.
+fn hides_on_close(mode: Mode, label: &str) -> bool {
+    mode == Mode::On && label == Mode::On.window_label()
+}
+
 pub fn run() {
     meeting::logging::init();
     let mode = mode(desktop_enabled());
@@ -149,13 +154,26 @@ pub fn run() {
         }));
     }
     match configure(builder, mode).build(tauri::generate_context!()) {
-        Ok(app) => app.run(move |app, event| {
-            if let RunEvent::ExitRequested { api, .. } = event {
+        Ok(app) => app.run(move |app, event| match event {
+            RunEvent::ExitRequested { api, .. } => {
                 // Built off, no hook runs: quitting is never held back.
                 if mode == Mode::On && !recorder::on_exit_requested(app) {
                     api.prevent_exit();
                 }
             }
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::CloseRequested { api, .. },
+                ..
+            } if hides_on_close(mode, &label) => {
+                api.prevent_close();
+                if let Some(window) = app.get_webview_window(&label) {
+                    let _ = window.hide();
+                }
+            }
+            // The Dock icon brings a hidden window back.
+            RunEvent::Reopen { .. } if mode == Mode::On => focus_main(app),
+            _ => {}
         }),
         Err(e) => {
             tracing::error!("the app could not start: {e}");
@@ -297,6 +315,14 @@ mod tests {
             (Mode::On.window_label(), Mode::On.window_page()),
             ("main", "index.html")
         );
+    }
+
+    #[test]
+    fn only_the_main_window_hides_on_close() {
+        assert!(hides_on_close(Mode::On, "main"));
+        assert!(!hides_on_close(Mode::On, "other"));
+        assert!(!hides_on_close(Mode::Off, "off"));
+        assert!(!hides_on_close(Mode::Off, "main"));
     }
 
     #[test]
