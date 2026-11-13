@@ -228,9 +228,9 @@ No change to the native-messaging protocol or the extension.
 | `recorder_start` | `{language, event_occurrence_id\|null}` | `{folder}` | `permission_mic`, `permission_audio`, `already_recording`, `not_configured`, `event_too_far`, `unknown_event`, `calendar_denied`, `capture_failed` (D33) |
 | `recorder_pause` / `recorder_resume` / `recorder_stop` | — | `{state}` | `not_recording` |
 | `calendar_status` | — | `{access: granted\|denied\|not_asked}` | — |
-| `calendar_events` | — | `{days: [{date, events: [{occurrence_id, series_id, title, start, end, calendar, has_notes}]}]}` | `calendar_denied` |
-| `calendar_event` | `{occurrence_id}` | `{event: {...as context's calendar_event, calendar}, earlier: [{id, title, recorded_at}]}` | `calendar_denied`, `unknown_event` |
-| `calendars` / `set_hidden_calendars` | — / `{ids}` | `{calendars: [{id, title, account, hidden}]}` | — |
+| `calendar_events` | — | `{days: [{date, events: [{occurrence_id, series_id, title, start, end, calendar, has_notes}]}]}` | `calendar_denied`, `calendar_failed` (D42) |
+| `calendar_event` | `{occurrence_id}` | `{event: {...as context's calendar_event, calendar}, earlier: [{id, title, recorded_at}]}` | `calendar_denied`, `unknown_event`, `calendar_failed` (D42) |
+| `calendars` / `set_hidden_calendars` | — / `{ids}` | `{calendars: [{id, title, account, hidden}]}` | — / `store_unavailable` (D42) |
 | `notes_list` | `{query\|null}` | `{notes: [{id, title, folder_name, recorded_at, duration_s, language, source, status, stage\|null, error\|null, recording_missing}]}` | `store_unavailable` |
 | `note_get` | `{id}` | `{note: {...row, body_html, recording_missing}}` | `unknown_note`, `store_unavailable` |
 | `note_update` | `{id, title?, body_md?, my_notes?, speaker?: {label, name}}` | `{note, vault: ok\|failed, vault_error\|null}` | `unknown_note`, `not_editable`, `too_large`, `store_unavailable` (D41) |
@@ -374,6 +374,7 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 - 2026-11-13 **D39 "My notes" edited on a `processing`, `failed` or `no_speech` note is saved to the store only;** the vault is written only for `done` notes, and the next successful run writes `## My notes` (FR-19 keeps it). Decided by: Siam during issue refinement, "Store only until done (Recommended)".
 - 2026-11-13 **D40 Backfill reads a valid `calendar_event` from `context.json`** (same checks as the pipeline) to fill the row's `event`, so a rebuilt store keeps "Earlier notes". Decided by: Siam during issue refinement, "Yes, read it (Recommended)".
 - 2026-11-13 **D41 More error codes:** `store_unavailable` on `note_update`, `note_rerun`, `note_open`, `note_archive`, `note_trash`; `unknown_note` on `note_archive`, `note_trash`; `archive_failed`, `trash_failed` passed through from the host's rules; `open_failed` when `/usr/bin/open` fails. Decided by: Siam during issue refinement, "Add them (Recommended)".
+- 2026-11-14 **D42 Calendar error codes:** `calendar_failed` on `calendar_events` and `calendar_event` when Calendar cannot be read (the EventKit worker stopped or the command failed; message "Calendar could not be read; quit and reopen Meeting"), and `store_unavailable` on `set_hidden_calendars` when the store cannot be written, so a hidden-calendar choice never silently fails to stick. `calendars` keeps no error code (`[]` without access). Decided by: Siam during implementation of #142, "Add two codes (Recommended)".
 
 ## Open questions
 
@@ -385,6 +386,7 @@ None.
 - 2026-11-13: D30 (doctor `meeting_path` check fails when absent with the flag on; FR-22 text updated) and D31 (`calendar_event.calendar`; Data updated) added during issue refinement. Affect #138, #139, #141, #142.
 - 2026-11-13: D32–D35 added during issue refinement (two crates; API additions in the table; Bengali tokenizer; rename survives reruns). Affect #136, #137, #139, #141, #142, #143, #144, #145, #146, #147, #148.
 - 2026-11-13: D36–D41 added during issue refinement (audio permission detection, Open in Obsidian, health via `meeting doctor`, My notes on unfinished notes, backfill event link, error codes in the table). Affect #140, #141, #143, #144, #145, #147.
+- 2026-11-14: D42 added during implementation of #142 (`calendar_failed` on `calendar_events`/`calendar_event`, `store_unavailable` on `set_hidden_calendars`). Affects #142, #145, #148.
 
 ## Related
 
