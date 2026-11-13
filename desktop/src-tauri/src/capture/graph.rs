@@ -99,18 +99,13 @@ impl Graph {
             );
         }
 
-        let context = Box::into_raw(Box::new(Context {
-            mic_buffers: parts.mic_layout.len(),
-            buffers: expected.len(),
-            mic: Downmix::with_capacity(SCRATCH_FRAMES),
-            tap: Downmix::with_capacity(SCRATCH_FRAMES),
-            mixed: Vec::with_capacity(SCRATCH_FRAMES),
-            resampler: Resampler::new(rate, f64::from(SAMPLE_RATE)),
-            resampled: Vec::with_capacity(SCRATCH_FRAMES * 2),
-            out: Vec::with_capacity(SCRATCH_FRAMES * 2),
+        let context = Box::into_raw(Box::new(Context::new(
+            parts.mic_layout.len(),
+            expected.len(),
+            rate,
             samples,
             broken,
-        }));
+        )));
         parts.context = context;
 
         let mut proc_id: IoProcId = None;
@@ -324,10 +319,41 @@ struct Context {
 }
 
 impl Context {
-    /// Real-time: no locks that block, no logging, no allocation within the reserved capacity.
+    /// Reserves every scratch buffer up front; the resampled side grows with the upsampling ratio.
+    fn new(
+        mic_buffers: usize,
+        buffers: usize,
+        rate: f64,
+        samples: Arc<Mutex<Samples>>,
+        broken: Arc<AtomicBool>,
+    ) -> Context {
+        let ratio = (f64::from(SAMPLE_RATE) / rate).max(1.0);
+        let resampled = (SCRATCH_FRAMES as f64 * ratio).ceil() as usize + 1;
+        Context {
+            mic_buffers,
+            buffers,
+            mic: Downmix::with_capacity(SCRATCH_FRAMES),
+            tap: Downmix::with_capacity(SCRATCH_FRAMES),
+            mixed: Vec::with_capacity(SCRATCH_FRAMES),
+            resampler: Resampler::new(rate, f64::from(SAMPLE_RATE)),
+            resampled: Vec::with_capacity(resampled),
+            out: Vec::with_capacity(resampled.max(SCRATCH_FRAMES)),
+            samples,
+            broken,
+        }
+    }
+
+    /// Real-time: no locks that block, no logging, no allocation.
     fn deliver(&mut self, buffers: &[devices::AudioBuffer]) {
         if buffers.len() != self.buffers {
             self.broken.store(true, Ordering::Relaxed);
+            return;
+        }
+        // A cycle larger than the reserved scratch would allocate here; drop it instead.
+        if buffers
+            .iter()
+            .any(|b| b.bytes as usize / 4 / (b.channels.max(1) as usize) > SCRATCH_FRAMES)
+        {
             return;
         }
         self.mic.clear();
@@ -356,7 +382,9 @@ impl Context {
         };
         to_i16(pcm, &mut self.out);
         // A rebuild never holds this lock while an IOProc runs; if it is ever held, the buffer is
-        // dropped rather than blocking the real-time thread.
+        // dropped rather than blocking the real-time thread. A panic in `samples` poisons it, so
+        // every later `try_lock` fails; `io_proc` sets `broken` then, and the health check ends
+        // capture.
         if let Ok(mut samples) = self.samples.try_lock() {
             samples(&self.out);
         }
@@ -395,6 +423,92 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+
+    struct Fake {
+        context: Context,
+        got: Arc<Mutex<Vec<i16>>>,
+        broken: Arc<AtomicBool>,
+    }
+
+    /// A context for one mono microphone buffer and one mono tap buffer at `rate`.
+    fn fake(rate: f64) -> Fake {
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let samples: Samples = Box::new({
+            let got = got.clone();
+            move |s: &[i16]| got.lock().unwrap().extend_from_slice(s)
+        });
+        let broken = Arc::new(AtomicBool::new(false));
+        Fake {
+            context: Context::new(1, 2, rate, Arc::new(Mutex::new(samples)), broken.clone()),
+            got,
+            broken,
+        }
+    }
+
+    fn buffer(data: &mut [f32]) -> devices::AudioBuffer {
+        devices::AudioBuffer {
+            channels: 1,
+            bytes: (data.len() * 4) as u32,
+            data: data.as_mut_ptr().cast(),
+        }
+    }
+
+    #[test]
+    fn the_first_buffers_are_the_microphone_and_the_last_the_tap() {
+        let mut f = fake(48_000.0);
+        let mut mic = [0.25f32, 0.25, 0.25];
+        let mut tap = [0.5f32, -0.25];
+        f.context.deliver(&[buffer(&mut mic), buffer(&mut tap)]);
+        assert_eq!(*f.got.lock().unwrap(), [24575, 0, 8192]);
+        assert!(!f.broken.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn an_unexpected_buffer_count_flags_the_graph_and_delivers_nothing() {
+        let mut f = fake(48_000.0);
+        let mut mic = [0.5f32; 4];
+        f.context.deliver(&[buffer(&mut mic)]);
+        assert!(f.got.lock().unwrap().is_empty());
+        assert!(f.broken.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_buffer_without_data_counts_as_silence() {
+        let mut f = fake(48_000.0);
+        let mut tap = [0.5f32; 2];
+        let empty = devices::AudioBuffer {
+            channels: 1,
+            bytes: 8,
+            data: ptr::null_mut(),
+        };
+        f.context.deliver(&[empty, buffer(&mut tap)]);
+        assert_eq!(*f.got.lock().unwrap(), [16384, 16384]);
+    }
+
+    #[test]
+    fn a_cycle_larger_than_the_scratch_is_dropped_without_allocating() {
+        let mut f = fake(48_000.0);
+        let capacity = f.context.out.capacity();
+        let mut mic = vec![0.1f32; SCRATCH_FRAMES + 1];
+        let mut tap = [0.1f32; 4];
+        f.context.deliver(&[buffer(&mut mic), buffer(&mut tap)]);
+        assert!(f.got.lock().unwrap().is_empty());
+        assert_eq!(f.context.out.capacity(), capacity);
+        assert!(!f.broken.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn upsampling_a_full_cycle_stays_within_the_reserved_capacity() {
+        let mut f = fake(16_000.0);
+        let (resampled, out) = (f.context.resampled.capacity(), f.context.out.capacity());
+        let mut mic = vec![0.1f32; SCRATCH_FRAMES];
+        let mut tap = vec![0.1f32; SCRATCH_FRAMES];
+        f.context.deliver(&[buffer(&mut mic), buffer(&mut tap)]);
+        let delivered = f.got.lock().unwrap().len();
+        assert!(delivered.abs_diff(SCRATCH_FRAMES * 3) <= 3, "{delivered}");
+        assert_eq!(f.context.resampled.capacity(), resampled);
+        assert_eq!(f.context.out.capacity(), out);
+    }
 
     /// Needs a microphone and both permissions for the test binary's host app:
     /// `cargo test -p meeting-desktop capture -- --ignored`.

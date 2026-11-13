@@ -272,7 +272,7 @@ pub struct Listeners {
     added: Vec<AudioObjectPropertySelector>,
 }
 
-// SAFETY: the raw pointer is a Box owned by this value; the Sender it points to is Send + Sync.
+// SAFETY: the raw pointer is a leaked Box (see `Drop`); the Sender it points to is Send + Sync.
 unsafe impl Send for Listeners {}
 
 /// Sends `Msg::Changed` whenever the default input or output device changes.
@@ -283,8 +283,8 @@ pub fn listen(tx: Sender<Msg>) -> anyhow::Result<Listeners> {
     };
     for selector in WATCHED {
         let address = address(selector, kAudioObjectPropertyScopeGlobal);
-        // SAFETY: `on_change` matches the listener signature; `tx` lives until the listener is
-        // removed in `Drop`.
+        // SAFETY: `on_change` matches the listener signature; `tx` is never freed (see
+        // `Drop`).
         let code = unsafe {
             AudioObjectAddPropertyListener(
                 SYSTEM,
@@ -306,7 +306,7 @@ unsafe extern "C-unwind" fn on_change(
     _addresses: NonNull<AudioObjectPropertyAddress>,
     data: *mut c_void,
 ) -> i32 {
-    // SAFETY: `data` is the `Sender` registered in `listen`, alive until the listener is removed.
+    // SAFETY: `data` is the `Sender` registered in `listen`, never freed.
     let tx = unsafe { &*data.cast::<Sender<Msg>>() };
     // The worker may have exited; a closed channel only means nobody listens any more.
     let _ = tx.send(Msg::Changed);
@@ -327,13 +327,12 @@ impl Drop for Listeners {
                 )
             };
             if let Err(e) = status("remove device listener", code) {
-                tracing::warn!("{e}; keeping its sender alive");
-                // A listener still registered may run later; leaking the sender keeps it valid.
-                return;
+                tracing::warn!("{e}");
             }
         }
-        // SAFETY: created by `Box::into_raw` in `listen`; every listener using it is removed, and
-        // Core Audio does not call a listener after its removal returns.
-        drop(unsafe { Box::from_raw(self.tx) });
+        // The boxed `Sender` is leaked on purpose (one per recording): Core Audio does not
+        // document that removing a listener waits for a call already running on its thread, so
+        // freeing it here could let that call read freed memory. Its receiver is gone by now, so
+        // a late call only fails to send.
     }
 }
