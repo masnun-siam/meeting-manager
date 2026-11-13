@@ -362,7 +362,7 @@ fn vault_note(env: &Env, store: &Store, row: &Row) -> Option<PathBuf> {
     Some(found)
 }
 
-fn meeting_path(env: &Env) -> Result<PathBuf, String> {
+pub(crate) fn meeting_path(env: &Env) -> Result<PathBuf, String> {
     let exe = env
         .config()?
         .meeting_path
