@@ -49,12 +49,13 @@ export type CalendarEventDetail = {
   organizer: string | null;
   calendar: string | null;
   attendees: { name: string; response: AttendeeResponse }[];
-  description: string;
+  description: string | null;
 };
 export type EarlierNote = { id: number; title: string | null; recorded_at: string };
 export type CalendarInfo = { id: string; title: string; account: string; hidden: boolean };
-export type CalendarEventsError = 'calendar_denied';
-export type CalendarEventError = 'calendar_denied' | 'unknown_event';
+export type CalendarEventsError = 'calendar_denied' | 'calendar_failed';
+export type CalendarEventError = 'calendar_denied' | 'unknown_event' | 'calendar_failed';
+export type SetHiddenCalendarsError = 'store_unavailable';
 
 export type NoteSource = 'browser' | 'desktop' | 'import';
 export type NoteStatus = 'processing' | 'done' | 'no_speech' | 'failed';
@@ -173,7 +174,7 @@ export const calendarEvent = (req: { occurrence_id: string }) =>
   call<{ event: CalendarEventDetail; earlier: EarlierNote[] }, CalendarEventError>('calendar_event', req);
 export const calendars = () => call<{ calendars: CalendarInfo[] }>('calendars');
 export const setHiddenCalendars = (req: { ids: string[] }) =>
-  call<{ calendars: CalendarInfo[] }>('set_hidden_calendars', req);
+  call<{ calendars: CalendarInfo[] }, SetHiddenCalendarsError>('set_hidden_calendars', req);
 
 export const notesList = (req: { query: string | null }) =>
   call<{ notes: NotesListRow[] }, NotesListError>('notes_list', req);
