@@ -107,7 +107,7 @@ The single owner, on their own Mac (macOS 14.4 or later, for Core Audio process 
 
 ### Install and rollout
 
-- **FR-22 Install records the tool path.** `meeting install` stores its own absolute, canonical path as `meeting_path` in `config.toml`, and `meeting doctor` gains a check that `meeting_path` exists and is executable (pass when the app isn't in use and the key is absent, with a fix "run `meeting install`"). Existing configs without the key keep working for the extension.
+- **FR-22 Install records the tool path.** `meeting install` stores its own absolute, canonical path as `meeting_path` in `config.toml`, and `meeting doctor` gains a check that `meeting_path` exists and is executable (fails when the key is absent or not executable, with the fix "run `meeting install`"; D30). Existing configs without the key keep working for the extension.
   - Acceptance: after `meeting install`, `config.toml` has `meeting_path` pointing at the installed binary. Deleting the key makes the app's Stop show FR-6's message and `doctor` show the fix.
 - **FR-23 Feature flag.** Everything above sits behind the build-time flag `FEATURE_DESKTOP_APP`, default off, added to `FLAGS.md`. The code is always compiled, linted and tested; the flag decides reachability. Tool built off: no store is opened or written, `meeting_path` is not written and its doctor check is absent; behaviour is byte-identical to today. App built off: it opens one window saying "Built without FEATURE_DESKTOP_APP" and does nothing else. FR-12's use of the event for Claude also needs `FEATURE_MEETING_CONTEXT` on.
   - Acceptance: with the flag unset, `meeting process` writes no store file and `config.toml` gains no key; the existing Rust and extension tests pass unchanged. With the flag on in both builds, FR-1 to FR-22 hold.
@@ -204,12 +204,12 @@ Only with `FEATURE_DESKTOP_APP` on in the tool build:
 All local; classification **confidential** for the store, recordings, transcripts and event data (meeting content and attendee names), **internal** for settings.
 
 - **Store:** SQLite file `~/Library/Application Support/meeting-manager/notes.sqlite`, mode 0600, WAL, busy timeout 5 s, schema version in `PRAGMA user_version`, migrations run by whichever process opens it first (the same library code in the tool and the app). FR-13 to FR-21.
-  - `meetings`: `id` integer primary key; `recording_path` text unique (absolute, current location); `source` text (`browser` when the recording is `.webm`, `desktop` when `context.json` has `platform: "desktop"`, else `import`); `recorded_at` text (local `YYYY-MM-DDTHH:MM`, from the folder name as today); `duration_s` integer null; `language` text (`bn`|`en`) null; `status` text (`processing`|`done`|`no_speech`|`failed`); `failed_stage` text null; `error` text null; `title` text null; `title_edited` bool; `body_md` text null (the summary body as written to the vault); `body_edited` bool; `speakers` JSON text (`[{label, name|null, evidence, name_edited}]`); `my_notes` text default `''`; `transcript` text null (the `transcript.md` lines, for search and display); `event` JSON text null (`{occurrence_id, series_id, title, start, end, calendar}`); `vault_note_path` text null; `created_at`, `updated_at` UTC `YYYY-MM-DDTHH:MM:SSZ`.
+  - `meetings`: `id` integer primary key; `recording_path` text unique (absolute, current location); `source` text (`browser` when the recording is `.webm`, `desktop` when `context.json` has `platform: "desktop"`, else `import`); `recorded_at` text (local `YYYY-MM-DDTHH:MM`, from the folder name as today); `duration_s` integer null; `language` text (`bn`|`en`) null; `status` text (`processing`|`done`|`no_speech`|`failed`); `failed_stage` text null; `error` text null; `title` text null; `title_edited` bool; `body_md` text null (the summary body as written to the vault, without its leading `# <title>` line; D28); `body_edited` bool; `speakers` JSON text (`[{label, name|null, evidence, name_edited}]`); `my_notes` text default `''`; `transcript` text null (the `transcript.md` lines, for search and display); `event` JSON text null (`{occurrence_id, series_id, title, start, end, calendar}`); `vault_note_path` text null; `created_at`, `updated_at` UTC `YYYY-MM-DDTHH:MM:SSZ`.
   - Index on `event` series id (generated column `series_id`) and on `recorded_at`.
-  - `meetings_fts`: FTS5 over `title`, `body_md`, `my_notes`, speaker names and `transcript`, kept in step by triggers; tokenizer `unicode61` with `remove_diacritics 0` so Bengali text is kept whole-word.
+  - `meetings_fts`: FTS5 over `title`, `body_md`, `my_notes`, speaker names and `transcript`, kept in step by triggers; tokenizer `unicode61` with `remove_diacritics 0` and `categories 'L* N* Co Mn Mc'` so Bengali text is kept whole-word (D34).
   - `settings`: `key` text primary key, `value` text: `language`, `hidden_calendars` (JSON list of calendar identifiers), `backfill_done`.
   - Backup: none beyond the user's own Time Machine; the files in meeting folders remain the source a rescan rebuilds from (edits and "My notes" exist only in the store and the vault note).
-- **`context.json` (meeting-context's file, extended):** `platform` gains `desktop`. Desktop recordings set `url`, `meeting_id`, `tab_title` null and `participants`, `speaking` empty. New optional `calendar_event`: `{occurrence_id ≤ 255, series_id ≤ 255, title ≤ 300, start, end (ISO 8601 with offset), organizer ≤ 100 | null, attendees: [{name ≤ 100, response: accepted|declined|tentative|needs_action}] ≤ 200, description ≤ 20,000}`. The tool's limits table adds these as reject rules for identifiers and type errors and cut rules for lengths and counts (`calendar_event` listed in `truncated` when cut). Written atomically by the app before it spawns the job.
+- **`context.json` (meeting-context's file, extended):** `platform` gains `desktop`. Desktop recordings set `url`, `meeting_id`, `tab_title` null and `participants`, `speaking` empty. New optional `calendar_event`: `{occurrence_id ≤ 255, series_id ≤ 255, title ≤ 300, start, end (ISO 8601 with offset), organizer ≤ 100 | null, calendar ≤ 100 | null (D31), attendees: [{name ≤ 100, response: accepted|declined|tentative|needs_action}] ≤ 200, description ≤ 20,000}`. The tool's limits table adds these as reject rules for identifiers and type errors and cut rules for lengths and counts (`calendar_event` listed in `truncated` when cut). Written atomically by the app before it spawns the job.
 - **Meeting folder:** adds `recording.partial.wav` (mono, 48 kHz, 16-bit PCM; about 1 GB per 3 hours) while recording; deleted after a good conversion to `recording.m4a` (AAC, mono, 64 kbps; about 85 MB per 3 hours).
 - **Config:** `config.toml` gains `meeting_path` (absolute path; no secret).
 - **No migration** of existing files; backfill fills the store (FR-14).
@@ -225,20 +225,22 @@ No change to the native-messaging protocol or the extension.
 | Command | Request | Response | Error codes |
 |---|---|---|---|
 | `recorder_status` | — | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null}` | — |
-| `recorder_start` | `{language, event_occurrence_id\|null}` | `{folder}` | `permission_mic`, `permission_audio`, `already_recording`, `not_configured`, `event_too_far` |
+| `recorder_start` | `{language, event_occurrence_id\|null}` | `{folder}` | `permission_mic`, `permission_audio`, `already_recording`, `not_configured`, `event_too_far`, `unknown_event`, `calendar_denied`, `capture_failed` (D33) |
 | `recorder_pause` / `recorder_resume` / `recorder_stop` | — | `{state}` | `not_recording` |
 | `calendar_status` | — | `{access: granted\|denied\|not_asked}` | — |
 | `calendar_events` | — | `{days: [{date, events: [{occurrence_id, series_id, title, start, end, calendar, has_notes}]}]}` | `calendar_denied` |
 | `calendar_event` | `{occurrence_id}` | `{event: {...as context's calendar_event, calendar}, earlier: [{id, title, recorded_at}]}` | `calendar_denied`, `unknown_event` |
 | `calendars` / `set_hidden_calendars` | — / `{ids}` | `{calendars: [{id, title, account, hidden}]}` | — |
-| `notes_list` | `{query\|null}` | `{notes: [{id, title, folder_name, recorded_at, duration_s, language, source, status, stage\|null, error\|null}]}` | `store_unavailable` |
+| `notes_list` | `{query\|null}` | `{notes: [{id, title, folder_name, recorded_at, duration_s, language, source, status, stage\|null, error\|null, recording_missing}]}` | `store_unavailable` |
 | `note_get` | `{id}` | `{note: {...row, body_html, recording_missing}}` | `unknown_note`, `store_unavailable` |
-| `note_update` | `{id, title?, body_md?, my_notes?, speaker?: {label, name}}` | `{note, vault: ok\|failed, vault_error\|null}` | `unknown_note`, `not_editable`, `too_large` |
-| `note_rerun` | `{id, replace_edits: bool}` | `{ok}` | `unknown_note`, `already_processing`, `tool_missing`, `recording_missing` |
-| `note_archive` / `note_trash` | `{id}` | `{ok}` | `already_processing`, `invalid_path` (same rules as the host) |
-| `note_open` | `{id, what: obsidian\|folder}` | `{ok}` | `missing_file` |
-| `rescan` | — | `{started: true}`; progress through `rescan_status` → `{running, done, total}` | `store_unavailable` |
+| `note_update` | `{id, title?, body_md?, my_notes?, speaker?: {label, name}}` | `{note, vault: ok\|failed, vault_error\|null}` | `unknown_note`, `not_editable`, `too_large`, `store_unavailable` (D41) |
+| `note_rerun` | `{id, replace_edits: bool}` | `{ok}` | `unknown_note`, `already_processing`, `tool_missing`, `recording_missing`, `store_unavailable` (D41) |
+| `note_archive` / `note_trash` | `{id}` | `{ok}` | `already_processing`, `invalid_path`, `archive_failed` / `trash_failed` (same rules as the host), `unknown_note`, `store_unavailable` (D41) |
+| `note_open` | `{id, what: obsidian\|folder}` | `{ok}` | `missing_file`, `open_failed`, `store_unavailable` (D41) |
+| `rescan` | — | `{started: true}`; progress through `rescan_status` → `{running, done, total}`; a broken store is moved aside and rebuilt (D33) | `not_configured` (no readable `config.toml`) |
 | `health` | — | `{checks: [{name, ok, fix}]}` (as `meeting doctor`) | — |
+| `settings_info` (D33) | — | `{recordings_dir, vault_dir, vault_folder, store: {ok: true} \| {ok: false, message}}` | `not_configured` |
+| `recorder_retry` (D33) | `{folder}` | `{state}` | `not_found`, `already_recording` |
 
 ### Backend
 
@@ -358,6 +360,20 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 - 2026-11-13 **D25 Markdown is rendered on the Rust side with `pulldown-cmark`, raw HTML disabled.** Nothing from a transcript or summary can inject script; edit mode is a plain markdown textarea. Adds `pulldown-cmark` to D22's set. Decided by: Siam, "Render in Rust, add pulldown-cmark (Recommended)".
 - 2026-11-13 **D26 "My notes" is written into the vault note as a `## My notes` section when not empty.** Obsidian search finds it too. Decided by: Siam, "Yes, as a '## My notes' section (Recommended)".
 - 2026-11-13 **D27 Smaller rules set while writing, proposed by Claude for the owner's review in this PRD's review:** macOS 14.4 minimum (Core Audio process taps); sleep, quit (after confirm) and capture failure stop and save; AAC mono 64 kbps for `recording.m4a`; store file mode 0600 and FileVault as encryption at rest, like the existing files; "My notes" capped at 1 MB; at most 20 earlier notes; a corrupt store is moved aside and rebuilt by Rescan; Rescan drops rows whose recording no longer exists; single app instance; the app polls the store and job files every 3 s while visible; occurrence and series identifiers from EventKit's event identifier and external identifier. Team proposal, no source. Confirmed by: Siam on approval, "approve it".
+- 2026-11-13 **D28 `body_md` holds the summary body without its leading `# <title>` line.** The vault note is rendered as `# <title>`, a blank line, `body_md`, then `## My notes` when not empty, so a title edit also changes the heading; `summary.md` stays Claude's full output. Decided by: Siam during issue refinement, "body_md excludes the H1 (Recommended)".
+- 2026-11-13 **D29 An app edit's vault rewrite copies the `meeting_title`, `attendees` and `calendar` frontmatter lines from the current note.** The store does not hold them; only `speakers` and the body are replaced. When no note exists for the recording they are omitted. Decided by: Siam during issue refinement, "Copy from existing note (Recommended)".
+- 2026-11-13 **D30 With `FEATURE_DESKTOP_APP` on, the `meeting_path` doctor check fails when the key is absent or not executable,** with the fix "run `meeting install`". The tool cannot tell whether the app is in use; with the flag off the check does not exist. Replaces FR-22's "pass when the app isn't in use and the key is absent". Decided by: Siam during issue refinement, "Fail with the fix (Recommended)".
+- 2026-11-13 **D31 `calendar_event` in `context.json` gains an optional `calendar` (calendar name, ≤ 100, cut rule).** The pipeline copies it into the store's `event` JSON; it is never sent to Claude or written to the vault. Decided by: Siam during issue refinement, "Add `calendar` to calendar_event (Recommended)".
+- 2026-11-13 **D32 Two more crates approved: `tauri-plugin-single-instance` (Rust side only, never exposed to the webview) and `objc2-app-kit` (NSWorkspace sleep notification, NSAlert quit confirmation).** Extends D22. Decided by: Siam during issue refinement, "Approve both (Recommended)".
+- 2026-11-13 **D33 Tauri contract additions:** `settings_info` → `{recordings_dir, vault_dir, vault_folder, store: {ok: true} | {ok: false, message}}`; `notes_list` rows gain `recording_missing`; `recorder_status.notice` is `{kind, message, folder|null}` or null; `recorder_retry {folder}` retries a failed conversion (FR-7), error codes `not_found`, `already_recording`; `recorder_start` adds error codes `unknown_event`, `calendar_denied`, `capture_failed`; `rescan` works when the store is broken (moves it aside and rebuilds) and never returns `store_unavailable`. Decided by: Siam during issue refinement, "Add all six (Recommended)".
+- 2026-11-13 **D34 FTS5 tokenizer `unicode61 remove_diacritics 0 categories 'L* N* Co Mn Mc'`.** The default categories split Bengali words at vowel signs (Mn/Mc), which breaks FR-16's Bengali and prefix search. Decided by: Siam during issue refinement, "Add categories (Recommended)".
+- 2026-11-13 **D35 A rerun re-applies edited speaker names to the new unedited title and body** with FR-18's whole-word rule, so a rename survives reruns without freezing the body. Decided by: Siam during issue refinement, "Re-apply edited names (Recommended)".
+- 2026-11-13 **D36 System Audio Recording denial is detected by tap creation failure.** Start creates the process tap (macOS prompts on first use); a failed tap or aggregate-device creation returns `permission_audio`. macOS has no public status API on 14.4; a tap that delivers silence instead of failing is not detected (checked in the manual test). Decided by: Siam during issue refinement, "Tap creation failure (Recommended)".
+- 2026-11-13 **D37 Open in Obsidian runs `/usr/bin/open <vault note path>`,** as the extension's Open summary does (the default app for `.md`). Decided by: Siam during issue refinement, "/usr/bin/open <file>".
+- 2026-11-13 **D38 The app's `health` runs `<meeting_path> doctor` (argument list, no shell, 10 s timeout) and parses its ✓/✗ lines,** so only the tool reads the Keychain; with `meeting_path` missing the app reports that check failing itself. Decided by: Siam during issue refinement, "Run `meeting doctor` (Recommended)".
+- 2026-11-13 **D39 "My notes" edited on a `processing`, `failed` or `no_speech` note is saved to the store only;** the vault is written only for `done` notes, and the next successful run writes `## My notes` (FR-19 keeps it). Decided by: Siam during issue refinement, "Store only until done (Recommended)".
+- 2026-11-13 **D40 Backfill reads a valid `calendar_event` from `context.json`** (same checks as the pipeline) to fill the row's `event`, so a rebuilt store keeps "Earlier notes". Decided by: Siam during issue refinement, "Yes, read it (Recommended)".
+- 2026-11-13 **D41 More error codes:** `store_unavailable` on `note_update`, `note_rerun`, `note_open`, `note_archive`, `note_trash`; `unknown_note` on `note_archive`, `note_trash`; `archive_failed`, `trash_failed` passed through from the host's rules; `open_failed` when `/usr/bin/open` fails. Decided by: Siam during issue refinement, "Add them (Recommended)".
 
 ## Open questions
 
@@ -365,7 +381,10 @@ None.
 
 ## Change log
 
-- None yet.
+- 2026-11-13: D28 and D29 added during issue refinement of #134 (store body without its H1; app vault rewrite keeps context frontmatter). Affects #137, #139, #143, #144.
+- 2026-11-13: D30 (doctor `meeting_path` check fails when absent with the flag on; FR-22 text updated) and D31 (`calendar_event.calendar`; Data updated) added during issue refinement. Affect #138, #139, #141, #142.
+- 2026-11-13: D32–D35 added during issue refinement (two crates; API additions in the table; Bengali tokenizer; rename survives reruns). Affect #136, #137, #139, #141, #142, #143, #144, #145, #146, #147, #148.
+- 2026-11-13: D36–D41 added during issue refinement (audio permission detection, Open in Obsidian, health via `meeting doctor`, My notes on unfinished notes, backfill event link, error codes in the table). Affect #140, #141, #143, #144, #145, #147.
 
 ## Related
 
