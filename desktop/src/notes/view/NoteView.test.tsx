@@ -108,7 +108,7 @@ describe('NoteView display', () => {
     const facts = within(container.querySelector('dl') as HTMLElement);
     expect(facts.getByText('Bengali')).toBeInTheDocument();
     expect(facts.getByText('Browser')).toBeInTheDocument();
-    expect(facts.getByText('31 min')).toBeInTheDocument();
+    expect(facts.getByText('30:30')).toBeInTheDocument();
     expect(facts.getAllByText(/2026/, { selector: 'dd' })).toHaveLength(2);
     expect(facts.getByText(/Design review/)).toBeInTheDocument();
     expect(container.textContent).not.toContain('@');

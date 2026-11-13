@@ -1,15 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  calendarName,
-  duration,
-  hasEdits,
-  localDateTime,
-  problemText,
-  shownName,
-  TOO_LARGE,
-  TOOL_MISSING,
-  tooLarge,
-} from './format';
+import { calendarName, hasEdits, problemText, shownName, TOO_LARGE, TOOL_MISSING, tooLarge } from './format';
 import { testNote } from './testNote';
 
 describe('shownName (store::shown_name)', () => {
@@ -24,22 +14,6 @@ describe('shownName (store::shown_name)', () => {
 });
 
 describe('format', () => {
-  it('reads a store time as local time', () => {
-    const date = localDateTime('2026-11-12T10:05');
-    expect([date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes()]).toEqual([
-      2026, 10, 12, 10, 5,
-    ]);
-  });
-
-  it.each([
-    [45, '45 s'],
-    [60, '1 min'],
-    [1830, '31 min'],
-    [3900, '1 h 5 min'],
-  ])('duration %d is %s', (seconds, want) => {
-    expect(duration(seconds)).toBe(want);
-  });
-
   it('never shows a calendar named by an email address', () => {
     expect(calendarName('Work')).toBe('Work');
     expect(calendarName('me@example.com')).toBeNull();

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Note } from '../../api';
+import { formatDuration, formatRecorded, languageLabel, sourceLabel } from '../list/format';
 import { Actions } from './Actions';
-import { calendarName, duration, eventStart, languageName, recordedAt, sourceName } from './format';
+import { calendarName, eventStart } from './format';
 import { MyNotes } from './MyNotes';
 import styles from './NoteView.module.css';
 import { SpeakersPanel } from './SpeakersPanel';
@@ -100,16 +101,17 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
 }
 
 function Facts({ note }: { note: Note }) {
-  const language = languageName(note.language);
+  const language = languageLabel(note.language);
+  const length = formatDuration(note.duration_s);
   const calendar = note.event ? calendarName(note.event.calendar) : null;
   return (
     <dl className={styles.facts}>
       <dt>Recorded</dt>
-      <dd>{recordedAt(note.recorded_at)}</dd>
-      {note.duration_s !== null ? (
+      <dd>{formatRecorded(note.recorded_at)}</dd>
+      {length !== null ? (
         <>
           <dt>Duration</dt>
-          <dd>{duration(note.duration_s)}</dd>
+          <dd>{length}</dd>
         </>
       ) : null}
       {language ? (
@@ -119,7 +121,7 @@ function Facts({ note }: { note: Note }) {
         </>
       ) : null}
       <dt>Source</dt>
-      <dd>{sourceName(note.source)}</dd>
+      <dd>{sourceLabel(note.source)}</dd>
       {note.event ? (
         <>
           <dt>Event</dt>

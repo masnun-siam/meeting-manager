@@ -1,4 +1,4 @@
-import type { Language, Note, NoteSource, Speaker } from '../../api';
+import type { Note, Speaker } from '../../api';
 
 // PRD desktop-app FR-6, FR-18 and the edge cases. Wording the PRD leaves open is ours.
 export const TOOL_MISSING = 'Processing tool not found — run `meeting install`';
@@ -7,34 +7,8 @@ export const MY_NOTES_LIMIT = 1_048_576;
 export const RECORDING_MISSING = 'Recording missing';
 export const NOT_WHILE_PROCESSING = 'Not available while the note is processing';
 
-const LANGUAGES: Record<Language, string> = { bn: 'Bengali', en: 'English' };
-const SOURCES: Record<NoteSource, string> = { browser: 'Browser', import: 'Import', desktop: 'Desktop' };
-
-export const languageName = (language: Language | null) => (language ? LANGUAGES[language] : null);
-export const sourceName = (source: NoteSource) => SOURCES[source];
-
-/** A store `YYYY-MM-DDTHH:MM` local time as a local Date (no time zone is attached to it). */
-export function localDateTime(value: string): Date {
-  const [date, time = '00:00'] = value.split('T');
-  const [y, m, d] = date.split('-').map(Number);
-  const [h, min] = time.split(':').map(Number);
-  return new Date(y, m - 1, d, h, min);
-}
-
-export function recordedAt(value: string): string {
-  return localDateTime(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-}
-
 export function eventStart(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-export function duration(seconds: number): string {
-  const total = Math.round(seconds);
-  if (total < 60) return `${total} s`;
-  const h = Math.floor(total / 3600);
-  const min = Math.round((total % 3600) / 60);
-  return h > 0 ? `${h} h ${min} min` : `${min} min`;
 }
 
 /** A calendar name is shown only when it is not an email address (the Rust side's rule). */
