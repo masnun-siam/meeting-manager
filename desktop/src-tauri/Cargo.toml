@@ -16,7 +16,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 tracing = "0.1"
-tauri = { version = "2.11", features = ["tray-icon"] }
+tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 # The macOS bindings the recorder, calendar and tray issues use. Each starts with no framework
@@ -40,7 +40,17 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSUUID",
     "NSValue",
 ] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSAlert",
+    "NSApplication",
+    "NSButton",
+    "NSControl",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSView",
+    "NSWorkspace",
+] }
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-foundation"] }
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
 objc2-event-kit = { version = "0.3", default-features = false, features = [

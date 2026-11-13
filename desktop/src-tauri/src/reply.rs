@@ -20,14 +20,6 @@ pub fn err(code: &str, message: impl Display) -> Value {
     json!({"ok": false, "code": code, "message": message.to_string()})
 }
 
-/// What every command answers until the issue that owns it fills it in.
-pub fn not_implemented(command: &str) -> Value {
-    err(
-        "not_implemented",
-        format!("{command} is not implemented yet"),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,17 +49,5 @@ mod tests {
             json!({"ok": false, "code": "c", "message": "m"})
         );
         assert_eq!(err("c", 7)["message"], "7");
-    }
-
-    #[test]
-    fn not_implemented_names_the_command() {
-        assert_eq!(
-            not_implemented("recorder_status"),
-            json!({
-                "ok": false,
-                "code": "not_implemented",
-                "message": "recorder_status is not implemented yet",
-            })
-        );
     }
 }

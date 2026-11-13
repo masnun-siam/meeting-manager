@@ -128,8 +128,8 @@ fn launch_in<R: Runtime>(
     Ok(())
 }
 
-/// A second launch lands here, in the first instance: bring its window forward.
-fn focus_main<R: Runtime>(app: &AppHandle<R>) {
+/// A second launch, or the menu-bar item's Open Meeting: bring the window forward.
+pub(crate) fn focus_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(Mode::On.window_label()) {
         let _ = window.show();
         let _ = window.unminimize();
@@ -333,11 +333,24 @@ mod tests {
     }
 
     #[test]
-    fn a_stub_answers_not_implemented() {
+    fn retry_refuses_a_folder_that_is_not_a_leftover() {
         let app = started(Mode::On);
-        let reply = invoke(&app, "main", "recorder_retry").unwrap();
+        let webview = app.get_webview_window("main").unwrap();
+        let request = InvokeRequest {
+            cmd: "recorder_retry".into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(serde_json::json!({"folder": "/etc"})),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        };
+        let reply: Value = get_ipc_response(&webview, request)
+            .unwrap()
+            .deserialize()
+            .unwrap();
         assert_eq!(reply["ok"], false);
-        assert_eq!(reply["code"], "not_implemented");
+        assert_eq!(reply["code"], "not_found");
     }
 
     #[test]
