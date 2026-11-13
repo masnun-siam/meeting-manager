@@ -30,7 +30,8 @@ pub struct MeetingAttendee {
     pub response: Response,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum Response {
     Accepted,
     Declined,
@@ -210,6 +211,21 @@ mod tests {
     /// 2026-10-01 00:00:00 UTC.
     const OCT_1: i64 = 1_790_812_800;
     const DHAKA: i32 = 6 * 60;
+
+    #[test]
+    fn a_response_serialises_as_its_name() {
+        for response in [
+            Response::Accepted,
+            Response::Declined,
+            Response::Tentative,
+            Response::NeedsAction,
+        ] {
+            let json = serde_json::to_value(response).unwrap();
+            assert_eq!(json, response.as_str());
+            assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
+        }
+        assert!(serde_json::from_str::<Response>("\"delegated\"").is_err());
+    }
 
     /// A Dhaka recording of `id` at October `day`, `hour`:`minute` local time.
     fn dhaka(id: &str, day: i64, hour: i64, minute: i64) -> Recording {

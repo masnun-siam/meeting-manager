@@ -1,6 +1,6 @@
 # Processing: recording to transcript and note
 
-Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/plan.rs, crates/meeting/src/extract.rs, crates/meeting/src/deepgram.rs, crates/meeting/src/transcript.rs, crates/meeting/src/summarise.rs, crates/meeting/src/context.rs, crates/meeting/src/context_block.rs, crates/meeting/src/summary_md.rs, crates/meeting/src/vault.rs, crates/meeting/src/meta.rs, crates/meeting/src/jobs.rs, crates/meeting/src/lock.rs, crates/meeting/src/notify.rs
+Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/store.rs (as the pipeline uses it), crates/meeting/src/plan.rs, crates/meeting/src/extract.rs, crates/meeting/src/deepgram.rs, crates/meeting/src/transcript.rs, crates/meeting/src/summarise.rs, crates/meeting/src/context.rs, crates/meeting/src/context_block.rs, crates/meeting/src/summary_md.rs, crates/meeting/src/vault.rs, crates/meeting/src/meta.rs, crates/meeting/src/jobs.rs, crates/meeting/src/lock.rs, crates/meeting/src/notify.rs
 
 `meeting process <recording>` turns a recording (`webm`, `mp4`, `m4a`, `mov`, `mkv`, `mp3`, `wav` or `ogg`) into a transcript, a summary, and an Obsidian note. It runs in the foreground. It refuses any path that is not `<recordings_dir>/<name>/recording.<ext>` (or under `Archive/`) before writing a job, so a refused path leaves no Jobs-tab row; the refusal points to moving the file into its own folder or to `meeting import`. The native host starts it as a detached child ([native-messaging.md](native-messaging.md)); the recording itself comes from [recording.md](recording.md). Crate layout: [../tool.md](../tool.md).
 
@@ -31,7 +31,11 @@ sequenceDiagram
     M->>P: recording, retranscribe, language, job_id
     P->>FS: write job (queued)
     P->>FS: Lock::acquire(lock)
-    P->>FS: load meta.json, plan::plan(mtimes)
+    P->>FS: load meta.json, context.json (either flag on)
+    opt desktop flag on
+        P->>P: store start_run (row processing)
+    end
+    P->>FS: plan::plan(mtimes)
     P->>FS: save meta + job
     opt plan.extract
         P->>X: webm to .audio.ogg
@@ -44,18 +48,22 @@ sequenceDiagram
         P->>FS: transcript.md
     end
     alt transcript has speech
-        opt flag on and context.json valid
-            P->>FS: context::load(context.json)
-            opt meeting_id and an address stored
+        opt context flag on and context.json valid
+            alt desktop flag on and calendar_event present
+                Note over P: the event is the match, no Keychain read, no fetch
+            else meeting_id and an address stored
                 P->>P: calendar_fetch, ical::parse, calendar::pick
             end
             P->>P: context_block::build
         end
         P->>C: block (if any) + transcript on stdin (summarising)
         P->>FS: summary.md (writing)
-        P->>V: note (replace if same recording)
+        opt desktop flag on
+            P->>P: store merge_run (row done, edits kept)
+        end
+        P->>V: note from the merged row, else from Claude's output (replace if same recording)
     else no speech
-        Note over P: title "No speech detected", no Claude, no note
+        Note over P: title "No speech detected", no Claude, no note (row no_speech)
     end
     P->>FS: delete audio.ogg and deepgram.json, job done
     M->>M: notify::notify
@@ -71,9 +79,9 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 | `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`). |
 | `audio.ogg` | `extract::extract` (via `.part`, renamed on success) | Mono, 16 kHz, Opus 32 kbps. Deleted on success. |
 | `deepgram.json` | `write_atomic` | Raw Deepgram response. Deleted on success. |
-| `context.json` | `native::store_context` (host, on `process`) | Kept, only with the context flag on. The extension's meeting context after the PRD limits; reused by `retry`, moved with the folder on Archive/Trash. Read by `context::load` on every summary run with the flag on; a file that fails `context::check` is ignored and logged by rule name only. |
+| `context.json` | `native::store_context` (host, on `process`) | Kept, only with the context flag on. The extension's meeting context after the PRD limits; reused by `retry`, moved with the folder on Archive/Trash. Read by `context::load` once per run with either flag on; a file that fails `context::check` is ignored and logged by rule name only. The desktop app writes it too, with `platform: "desktop"` and an optional `calendar_event`; see [Notes store](#notes-store-desktop-flag-on). |
 | `transcript.md` | `transcript::render` | Kept. Lines `[hh:mm:ss] Speaker N: text`, header with language and speaker count. |
-| `summary.md` | `summary_md::render` | Kept. Same body as the vault note. |
+| `summary.md` | `summary_md::render` | Kept. Always Claude's unedited output: the vault note's body, unless the note was edited in the desktop app. |
 | `<vault_dir>/<vault_folder>/YYYY-MM-DD HHMM <title>.md` | `vault::write_note` | Kept. Frontmatter: `date`, `language`, `speakers`, `recording`, `transcript`, then only when known `meeting_title`, `attendees`, `calendar` (`matched`/`no_match`/`fetch_failed`); those values are stripped of control characters and line separators, cut to 300 characters and JSON-quoted. `Pipeline::context_extra` supplies them from `vault::note_people` and the calendar lookup; `calendar` appears only when the context has a meeting ID and the Keychain holds an address or fails to read. |
 | `~/Library/Application Support/meeting-manager/jobs/<job_id>.json` | `JobStore::write` | Kept. One per run; the extension reads these. |
 
@@ -82,11 +90,29 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 - Summary sections: Key points, Decisions, Action items, Insights, Speakers. Names inferred by Claude are marked `(inferred)`.
 - Summary text is always English; the transcript stays in the recording language.
 
+## Notes store (desktop flag on)
+
+With `FEATURE_DESKTOP_APP=1` in the tool build (`Pipeline.desktop`), every run also writes the recording's row in the notes store (`store.rs`, `notes.sqlite`; PRD `docs/prds/desktop-app.md` FR-12, FR-13, FR-19). Off, no store file or directory is created and `claude`'s arguments and stdin and the note bytes are unchanged.
+
+| When | Store call | Row |
+|---|---|---|
+| Lock held, `meta.json` and `context.json` read | `start_run` | `processing`, `failed_stage` and `error` cleared; `source`, `recorded_at`, language |
+| `writing`, after `summary.md` | `merge_run`, then `set_vault_note_path` | `done`: title, `body_md` (the summary without its `# title` line), speakers, language, `duration_s`, transcript (the utterance lines), event link, note path |
+| No speech | `merge_run` | `no_speech`, title `No speech detected`, empty transcript, no body |
+| Any failure after the lock | `merge_run` from `State::fail` | `failed`, `failed_stage` (the stage name) and `error` (the first line of the reason, without the stage prefix); an earlier title, body, speakers and transcript stay |
+
+- A run refused before the lock is held (bad path, missing recording, `already processing`) never touches the row.
+- `source` is `browser` for `recording.webm`, `desktop` when a valid `context.json` has `platform: "desktop"`, else `import`.
+- Reruns keep edits: `merge_run` keeps a title, body or speaker name edited in the app and never changes "My notes". The vault note is then written from the merged row (`vault::compose_body`: `# <title>`, the body, `## My notes` when not empty; `speakers` from `store::shown_name`), so the note file follows an edited title. Job title, notification and `done` title are the note's title. `summary.md` and `meta.json` keep Claude's output.
+- `calendar_event` in `context.json` becomes the row's `event` (`occurrence_id`, `series_id`, `title`, `start`, `end`, `calendar`), with the context flag on or off. With the context flag also on it is the calendar match: the Keychain is not read, nothing is fetched, and the context block and the note's `meeting_title`, `attendees` and `calendar: "matched"` are built as from an iCal match, even when the context also has a meeting ID. The event's `calendar` name goes only to the store. With the desktop flag off the event is ignored.
+- `calendar_event` limits (`context::check`): an empty or over-255-character `occurrence_id` or `series_id`, a `start` or `end` that is not ISO 8601 with an offset, or a wrong type, missing or unknown field drops only the event (logged as `calendar_event dropped: <rule>`). `title` is cut to 300 characters, `organizer`, `calendar` and attendee names to 100, `description` to 20,000, attendees to 200, and an attendee whose name contains `@` is removed; any cut lists `calendar_event` in `truncated` (so the block says `partial: calendar_event`).
+- A store that cannot be opened or written never fails the run: it is logged as `store open|start|merge|note path failed: <kind>` (`store::error_kind`) and the note is written from Claude's output.
+
 ## Context block
 
 `context_block::build` (PRD `docs/prds/meeting-context.md` FR-9) turns `context.json`, a calendar match, `recorded_at` and `duration_s` into the text Claude reads before the transcript. `Pipeline::context_extra` calls it on every summary run (first run and rerun) when the flag is on and `context.json` loads; otherwise, or when it builds `None`, `claude` gets today's arguments and stdin.
 
-- Sent only when there is Meet's `meeting_title`, a non-empty `participants` or `speaking`, or a calendar match. Identity alone (platform, URL, tab title, times) builds `None`.
+- Sent only when there is Meet's `meeting_title`, a non-empty `participants` or `speaking`, or a calendar match (from the iCal address, or a desktop `calendar_event`). Identity alone (platform, URL, tab title, times) builds `None`.
 - Layout, between `=====BEGIN MEETING CONTEXT=====` and `=====END MEETING CONTEXT=====`: `platform:`, `meeting_title:`, `calendar_title:`, `recorded_at:`, `duration:` (`hh:mm:ss`), `organizer:`, `attendees:` (`- "Name" accepted`), `participants:` (`- "Name" (self)`), `speaking:` (`- 00:00:01-00:00:35: "A", "B"`, the transcript's clock), the description between `<<<DESCRIPTION` and `DESCRIPTION>>>`, then `partial: <fields>` (from `truncated`, minus `tab_title`) and `cut: <parts>`. Absent parts are left out.
 - Injection: names and titles are JSON strings on one line; the description is split on every line-break character (`\n`, `\r`, U+2028, ...) and a line equal to any of the five fence lines (trimmed, any case) gets a `\` prefix, so the block always ends at its own `END`.
 - Size: at most 64 KiB. Over that, `fit` drops speaking intervals shortest-first (later one on a tie), then cuts the description from the end, then drops attendees from the end, and names each in `cut:`. If it still does not fit (only a huge calendar title or organizer can do that), nothing is sent.
@@ -117,7 +143,7 @@ stateDiagram-v2
 ```
 
 - A stage is skipped when the plan says its output is already fresh. A run with a fresh transcript goes straight to `summarising`.
-- `Job.error` is `"<stage>: <first line of the error>"`. Failing at `queued` means the recording was missing, locked, or had no language.
+- `Job.error` is `"<stage>: <first line of the error>"`; with the desktop flag on the store row gets the same stage and reason. Failing at `queued` means the recording was missing, locked, or had no language.
 - A re-run with the same `--job-id` updates that job in place and keeps its `started_at`; without one, a new `job_id` is made. Each run is one entry in `meta.json` `runs`, keyed by `job_id`.
 - Archive ([native-messaging.md](native-messaging.md#archive)) moves the folder and rewrites `meta.json`'s `recording` and the note's `recording`/`transcript` paths, so a later `meeting process` on the archived recording updates the same note.
 - stdout prints each stage name, then `done: <summary path>` (or `done: No speech detected`).
@@ -146,7 +172,7 @@ stateDiagram-v2
 - Retry after a failure is just running again. After a `summarising` failure the audio and raw JSON still exist, so Deepgram and ffmpeg are skipped.
 - `--retranscribe` or `--language` forces a fresh transcription: `plan.delete_transcript_and_raw` removes `transcript.md` and `deepgram.json` first (the audio is reused if fresh).
 - Language: `--language bn|en` wins, else the language stored in `meta.json`. With neither, the run fails with `no language stored for this recording; pass --language bn|en`. The language is saved to `meta.json` before any stage.
-- The Deepgram key is read from the Keychain only when Deepgram is actually called, so a resume never needs it. The calendar address is read only when the flag is on and `context.json` has a meeting ID, so older recordings, imports, Teams and other sites never touch it.
+- The Deepgram key is read from the Keychain only when Deepgram is actually called, so a resume never needs it. The calendar address is read only when the flag is on and `context.json` has a meeting ID and no usable `calendar_event`, so older recordings, imports, Teams, other sites and desktop recordings started from an event never touch it.
 
 ## Failure handling
 
@@ -160,9 +186,10 @@ stateDiagram-v2
 | summarise | No result in 15 minutes | Claude is killed; fails with a timeout message. |
 | summarise | Calendar: Keychain read error, fetch failure (offline, timeout, non-2xx, over 50 MiB, not iCalendar, TLS, redirect to `http` or more than 3), parse error | Never fails the job: logged as `calendar <kind>` (`keychain`, the `FetchError` kind such as `calendar too large`, or `not iCalendar`), the note gets `calendar: "fetch_failed"` and the summary runs without calendar data. A match logs `calendar matched`, no match `calendar no_match`. |
 | write | Vault directory missing | Fails, tells the user to run `meeting install`. |
-| any | Another run holds the lock | Fails with `already processing`; the other run's lock is left alone. |
+| any | Another run holds the lock | Fails with `already processing`; the other run's lock and store row are left alone. |
+| any | Notes store cannot be opened or written (desktop flag on) | Never fails the job: logged as `store <operation> failed: <kind>`; the note is written from Claude's output. |
 
-- On failure the job becomes `failed`, intermediates are kept, and `main.rs` sends a notification with the stage and the first 100 chars of the reason.
+- On failure the job becomes `failed` (and, with the desktop flag on, the store row), intermediates are kept, and `main.rs` sends a notification with the stage and the first 100 chars of the reason.
 - Success sends `Meeting summary ready: <title>`. Notification errors are only logged.
 - Empty transcript: the run ends `done` with title `No speech detected`, `summary_path` is null, and no summary or note is written. Intermediates are still deleted.
 - Transcript text, the Deepgram key, the calendar address and any title, name or description from the context or calendar are never logged.

@@ -304,6 +304,7 @@ fn process(
         claude_timeout: Duration::from_secs(15 * 60),
         context: context_enabled(),
         desktop: desktop_enabled(),
+        store_path: store::default_path(&config::home()?),
         calendar: secret::calendar_address,
         calendar_policy: Policy::REAL,
     };

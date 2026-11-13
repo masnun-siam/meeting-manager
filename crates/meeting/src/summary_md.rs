@@ -19,6 +19,16 @@ pub fn render(s: &Summary) -> String {
     out
 }
 
+/// `body` without its leading `# <title>` line and the blank line after it: what the notes
+/// store keeps, so a title edit also changes the heading (D28).
+pub fn body_without_title(body: &str) -> &str {
+    if !body.starts_with("# ") {
+        return body;
+    }
+    let rest = body.split_once('\n').map_or("", |(_, rest)| rest);
+    rest.strip_prefix('\n').unwrap_or(rest)
+}
+
 /// The `speakers` frontmatter list of the vault note: inferred names marked, unnamed ones by label.
 pub fn speaker_names(s: &Summary) -> Vec<String> {
     s.speakers
@@ -202,6 +212,22 @@ We met.
     fn evidence_is_quoted_and_kept_on_one_line() {
         let line = speaker(&guess("Speaker 0", Some("Rahim"), "said\nhi"));
         assert_eq!(line, "- Speaker 0: Rahim (inferred), \"said hi\"");
+    }
+
+    #[test]
+    fn body_without_title_drops_only_the_heading() {
+        let s = fixture();
+        let full = render(&s);
+        let body = body_without_title(&full);
+        assert!(body.starts_with("We met.\n"), "{body}");
+        assert_eq!(format!("# {}\n\n{body}", s.title), full);
+        assert_eq!(
+            body_without_title("We met.\n\n# Later\n"),
+            "We met.\n\n# Later\n"
+        );
+        assert_eq!(body_without_title("#hashtag first\n"), "#hashtag first\n");
+        assert_eq!(body_without_title("# Only the heading"), "");
+        assert_eq!(body_without_title("# Heading\nnext"), "next");
     }
 
     #[test]

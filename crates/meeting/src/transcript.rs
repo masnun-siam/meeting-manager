@@ -91,6 +91,16 @@ pub fn has_speech(transcript_md: &str) -> bool {
     transcript_md.lines().any(|l| l.starts_with('['))
 }
 
+/// The utterance lines of a rendered transcript, without its header: what the notes store
+/// keeps and searches. Empty when there is no speech.
+pub fn utterance_lines(transcript_md: &str) -> String {
+    transcript_md
+        .lines()
+        .filter(|l| l.starts_with('['))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +179,19 @@ mod tests {
     #[test]
     fn has_speech_on_utterance_lines() {
         assert!(has_speech(&rendered(EN, Language::En)));
+    }
+
+    #[test]
+    fn utterance_lines_drop_the_header() {
+        assert_eq!(
+            utterance_lines(&rendered(EN, Language::En)),
+            "[00:00:01] Speaker 0: Hi, thanks for joining.\n[00:00:04] Speaker 1: Thanks, Rahim.\n"
+        );
+        assert_eq!(utterance_lines(&rendered(EMPTY, Language::En)), "");
+        let bn = rendered(BN, Language::Bn);
+        let lines = utterance_lines(&bn);
+        assert!(lines.starts_with("[00:00:00] Speaker 0: আসসালামু আলাইকুম, কেমন আছেন?\n"));
+        assert!(bn.ends_with(&lines));
     }
 
     #[test]
