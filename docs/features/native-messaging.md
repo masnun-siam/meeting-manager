@@ -1,6 +1,6 @@
 # Native messaging
 
-Covers: crates/meeting/src/native.rs, crates/meeting/src/context.rs, crates/meeting/tests/native_host.rs, extension/src/shared/native.ts, extension/src/shared/nativeClient.ts, extension/src/background/save.ts, extension/src/popup/JobsTab.tsx, extension/src/popup/useJobs.ts
+Covers: crates/meeting/src/native.rs, crates/meeting/src/folders.rs, crates/meeting/src/spawn.rs, crates/meeting/src/context.rs, crates/meeting/tests/native_host.rs, extension/src/shared/native.ts, extension/src/shared/nativeClient.ts, extension/src/background/save.ts, extension/src/popup/JobsTab.tsx, extension/src/popup/useJobs.ts
 
 The extension talks to the `meeting` binary through Chrome native messaging. Chrome starts `meeting <origin>` (no subcommand: the host manifest can't add arguments; `chrome_args` in `main.rs` turns it into `native-host <origin>`) per `chrome.runtime.sendNativeMessage` call; the host answers and exits at end of input. See [../architecture.md](../architecture.md), [processing.md](processing.md), [setup.md](setup.md).
 
@@ -35,24 +35,33 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 | `trash` | `job_id` | `{ok}` | See [Trash](#trash) |
 | `list_jobs` | `limit` | `{ok, jobs: JobSummary[]}` | Newest `started_at` first via `JobStore::list` |
 | `open` | `job_id`, `what` (`summary`\|`folder`) | `{ok}` | Runs `/usr/bin/open` on `summary_path` or the recording's parent dir |
-| `health` | none | `{ok, checks: {name, ok, fix}[]}` | `doctor::checks`, same list as `meeting doctor` ([setup.md](setup.md)) |
+| `health` | none | `{ok, checks: {name, ok, fix}[]}` | `doctor::checks`, same list as `meeting doctor` ([setup.md](setup.md)), so a `FEATURE_DESKTOP_APP=1` build adds `meeting_path` |
 
 `JobSummary` (`native.ts`) mirrors `jobs::Job`: `job_id`, `recording`, `title`, `stage`, `error`, `started_at`, `updated_at`, `summary_path`. Optional fields are `null`, never omitted. Stages: `queued`, `extracting`, `transcribing`, `summarising`, `writing`, `done`, `failed`.
 
 ## Archive
 
-`archive` acts on the job's recording folder, never on a path from the extension.
+`archive` acts on the job's recording folder, never on a path from the extension. The host only looks the job up (`lookup_job`, step 1's first half) and maps the result to a reply; every other rule is `folders::archive(config, jobs, store, recording)`, which the desktop app will call with a recording path of its own.
 
-1. Unknown or malformed `job_id` → `unknown_job`. Recording file gone → delete its jobs, reply `{ok: true}`.
+1. Unknown or malformed `job_id` → `unknown_job`. Recording file gone → delete its jobs, reply `{ok: true}` (if the jobs cannot be deleted: `archive_failed`, or `trash_failed` for `trash`).
 2. `check_recording` → `invalid_path`; folder already under `Archive/` → `invalid_path` ("already archived"); held lock → `already_processing`.
 3. Rename the folder to `<recordings_dir>/Archive/<name>[-2, -3, ...]` (first free name).
 4. Set `meta.json`'s `recording` (skipped if absent) to the moved file under its real name (`recording.m4a` stays `recording.m4a`), then `vault::repoint_note` rewrites the note's `recording:` and `transcript:` lines (skipped if no note), then `JobStore::remove_for` deletes every job for the recording.
 
 A failure after step 3 replies `archive_failed`; the folder stays in `Archive/` and the jobs stay.
 
+### Notes store
+
+Only a host built with `FEATURE_DESKTOP_APP=1` (`Host.desktop`) opens the notes database at `Host.store_path` (`store::default_path`), once per `archive` or `trash` request, and passes it to `folders`. With the flag off no store file or directory is created.
+
+- Archive: right after the rename in step 3, the row's recording path becomes the archived path (`Store::moved`), so it is right even when a later step fails.
+- Trash: the row is removed (`Store::removed`) once the folder is in the Trash. The missing-file shortcut of either verb removes the row too.
+- A refusal before the move (`invalid_path`, `already_processing`, a failed trash command) touches no row, and no row is ever created here.
+- A store that cannot be opened or written never changes the reply: it is logged as `store open failed: <kind>`, `store moved failed: <kind>` or `store removed failed: <kind>` (`store::error_kind`, a fixed word) and the move goes on.
+
 ## Trash
 
-`trash` runs the same steps 1–2 as `archive` (job lookup, missing-file shortcut, `check_recording`, held lock), except an archived recording is allowed. It then runs `/usr/bin/trash -s <folder>` (absolute path; `-s` makes a failed move exit non-zero) through the injected `Host::trash`, and `JobStore::remove_for` deletes every job for the recording. The vault note is untouched. `/usr/bin/trash` ships with macOS 15+; on older macOS the reply is `trash_failed` naming the missing command.
+`trash` runs the same steps 1–2 as `archive` (job lookup, missing-file shortcut, `check_recording`, held lock), except an archived recording is allowed. `folders::trash` then runs `/usr/bin/trash -s <folder>` (absolute path; `-s` makes a failed move exit non-zero) through the injected `Host::trash`, and `JobStore::remove_for` deletes every job for the recording. The vault note is untouched. `/usr/bin/trash` ships with macOS 15+; on older macOS the reply is `trash_failed` naming the missing command.
 
 ## Errors
 
@@ -64,8 +73,8 @@ Error reply: `{ok: false, code, message}`.
 | `not_configured` | No or invalid config |
 | `invalid_path` | `check_recording` failed: not absolute, not `<recordings_dir>/<name>/recording.<ext>` or `<recordings_dir>/Archive/<name>/recording.<ext>` (ext one of `RECORDING_EXTENSIONS`: webm, mp4, m4a, mov, mkv, mp3, wav, ogg), missing, not a file, outside `recordings_dir` (after canonicalising, so symlinks out are refused) |
 | `already_processing` | `lock::is_held` on the recording's lock; no job is written |
-| `archive_failed` | `archive` failed after the check: the message names the step (`move`, `meta.json`, `vault note`, `jobs`) and the path |
-| `trash_failed` | `trash` could not move the folder (command missing or non-zero exit): the message names the reason; nothing moved, jobs stay; or the folder is in the Trash but its jobs could not be removed (the message says so) |
+| `archive_failed` | `archive` failed after the check: the message names the step (`move`, `meta.json`, `vault note`, `jobs`) and the path; or the recording is gone and its jobs could not be removed, or `recordings_dir` could not be read |
+| `trash_failed` | `trash` could not move the folder (command missing or non-zero exit): the message names the reason; nothing moved, jobs stay; or the folder is in the Trash but its jobs could not be removed (the message says so); or the recording is gone and its jobs could not be removed |
 | `unknown_job` | Id missing from the store, or not `[A-Za-z0-9-]+` (stops path traversal) |
 | `missing_file` | `open` target no longer exists, or `summary_path` is null |
 | `host_missing` | Client only, not a wire code: Chrome says "Specified native messaging host not found"; `sendNative` returns `HOST_MISSING_MESSAGE` |
@@ -97,7 +106,7 @@ sequenceDiagram
     P->>S: update stage as it runs
 ```
 
-- `spawn_process` runs `<exe> process <recording> [--language bn|en] --job-id <id>` with `process_group(0)` and null stdio, so the job outlives the host.
+- `spawn::process_detached` runs `<exe> process <recording> [--language bn|en] [--job-id <id>]` (the host always passes the job id) with `process_group(0)` and null stdio, so the job outlives the host. `<exe>` is `Host.exe`, the running binary; `PATH` is never used.
 - `saveRecording` maps replies via `noticeFor`: `ok` gives `saved`; `host_missing` or `not_configured` gives a `setup` notice; anything else is `error`. A thrown error becomes "Could not reach the meeting tool: ...".
 - `process` is only sent when the recording ran at least `MIN_PROCESS_MS` (10 s, `background/recordingControl.ts`); otherwise `saveRecording` returns the `too_short` notice.
 
@@ -121,4 +130,4 @@ The popup does not call `health`; no extension code sends it.
 - `list_jobs_round_trip_over_stdio`: framed `list_jobs` returns a job from the jobs dir.
 - `process_and_retry_outlive_the_host`: `process` replies in under 1 s; a stub `ffmpeg` that fails shows the job reaching `failed` (`extracting: ffmpeg failed...`) after the host exited; `retry` yields a new `job_id`.
 
-Handler cases (origin, framing, path checks, locks, open) are unit tests in `native.rs`. Client parsing is covered by `extension/src/shared/nativeClient.test.ts`.
+Handler cases (origin, framing, path checks, locks, open, the store wiring) are unit tests in `native.rs`; the Archive and Trash rules are tested in `folders.rs`, the detached spawn in `spawn.rs`. Client parsing is covered by `extension/src/shared/nativeClient.test.ts`.
