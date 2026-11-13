@@ -29,7 +29,7 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 
 | Request (`type`) | Fields | Success reply | Notes |
 |---|---|---|---|
-| `process` | `path`, `language` (`bn`\|`en`), optional `context` | `{ok, job_id}` | `start_checked`; spawns `meeting process`. With `Host.context` on (`FEATURE_MEETING_CONTEXT=1` build), a `context` is checked by `context::check` and written to `context.json` beside the recording before the job file; a missing, rejected or unwritable context is logged by rule name only and never changes the reply. Off: `context` is ignored. |
+| `process` | `path`, `language` (`bn`\|`en`), optional `context` | `{ok, job_id}` | `start_checked`; spawns `meeting process`. With `Host.context` on (`FEATURE_MEETING_CONTEXT=1` build), a `context` is checked by `context::check` and written to `context.json` beside the recording before the job file; a missing, rejected or unwritable context is logged by rule name only and never changes the reply. `context::check` also accepts `platform: "desktop"` and a `calendar_event` (the desktop app's fields; the extension sends neither). Off: `context` is ignored. |
 | `retry` | `job_id` | `{ok, job_id}` | Same as `process` on the old job's recording, no `--language`, no `context` (an existing `context.json` stays); `job_id` is the new job |
 | `archive` | `job_id` | `{ok}` | See [Archive](#archive) |
 | `trash` | `job_id` | `{ok}` | See [Trash](#trash) |
