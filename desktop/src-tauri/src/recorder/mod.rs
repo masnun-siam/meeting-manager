@@ -13,6 +13,7 @@ use std::fmt::Display;
 use std::fs;
 use std::io::ErrorKind;
 use std::mem;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -78,6 +79,8 @@ pub struct Deps {
     pub capture: Capture,
     pub clock: fn() -> Clock,
     pub local_minute: folder::LocalMinute,
+    /// Creates the WAV's sink (`wav::open`).
+    pub open_wav: fn(&std::path::Path) -> anyhow::Result<Box<dyn wav::Sink>>,
     pub spawn: SpawnFn,
     pub check_tool: CheckToolFn,
     pub cap_s: u64,
@@ -225,6 +228,7 @@ impl Recorder {
                 capture: capture::real(),
                 clock: real_clock,
                 local_minute: meeting::import::local_minute,
+                open_wav: wav::open,
                 spawn: meeting::spawn::process_detached,
                 check_tool: meeting::spawn::check_tool,
                 cap_s: CAP_S,
@@ -339,7 +343,14 @@ impl Recorder {
             }
             *state = State::Starting;
         }
-        let opened = self.open(language, event);
+        // A panic in an injected call must not leave the recorder stuck in `Starting`.
+        let opened = panic::catch_unwind(AssertUnwindSafe(|| self.open(language, event)))
+            .unwrap_or_else(|_| {
+                Err(Refused::new(
+                    "capture_failed",
+                    "Could not start recording; try again",
+                ))
+            });
         let mut state = self.state();
         let (session, rx) = match opened {
             Ok(opened) => opened,
@@ -349,6 +360,8 @@ impl Recorder {
             }
         };
         let (id, folder) = (session.id, session.folder.clone());
+        // Cleared before the session is visible, so a fast automatic stop's notice survives.
+        *lock(&self.inner.notice) = None;
         *state = State::Active(Box::new(session));
         // Spawned with the lock held, so a stop queued before it ran finds the session active.
         let weak = Arc::downgrade(&self.inner);
@@ -368,7 +381,6 @@ impl Recorder {
         }
         drop(state);
         tracing::info!("recorder: started");
-        *lock(&self.inner.notice) = None;
         self.save_language(language);
         self.changed();
         Ok(folder)
@@ -431,14 +443,16 @@ impl Recorder {
                 let _ = ctl.try_send(Msg::Stop(write_failure(kind)));
             })
         };
-        let writer = WavWriter::create(
-            &folder.join(handoff::WAV),
+        let sink = (deps.open_wav)(&folder.join(handoff::WAV))
+            .map_err(|e| Refused::new("capture_failed", format!("{e:#}")))?;
+        let writer = WavWriter::start(
+            sink,
             deps.flush_every,
             QUEUE_CHUNKS,
             shared.dropped.clone(),
             on_error,
         )
-        .map_err(|e| Refused::new("capture_failed", format!("{e:#}")))?;
+        .map_err(|e| Refused::new("capture_failed", format!("cannot write audio: {e}")))?;
         handoff::write_context(&folder, &started, event.clone());
         let cap_frames = deps.cap_s * u64::from(SAMPLE_RATE);
         let samples = samples_callback(shared.clone(), writer.sender(), cap_frames, ctl.clone());
@@ -550,13 +564,18 @@ impl Recorder {
         };
         let recorder = self.clone();
         Some(thread::spawn(move || {
-            handoff::ensure_context(&folder, &started, event);
-            let notice = if disk_full {
-                Notice::retry(notice::DISK_FULL, &folder)
-            } else {
-                let tools = recorder.tools(ffmpeg);
-                handoff::finish_recording(&tools, &folder, language, frames, &reason.prefix())
-            };
+            let saved = panic::catch_unwind(AssertUnwindSafe(|| {
+                handoff::ensure_context(&folder, &started, event);
+                if disk_full {
+                    Notice::retry(notice::DISK_FULL, &folder)
+                } else {
+                    let tools = recorder.tools(ffmpeg);
+                    handoff::finish_recording(&tools, &folder, language, frames, &reason.prefix())
+                }
+            }));
+            // Never stuck in `saving`: the WAV, if still there, can be retried.
+            let notice = saved
+                .unwrap_or_else(|_| Notice::retry("Saving failed unexpectedly; retry", &folder));
             recorder.finish_saving(notice);
         }))
     }
@@ -958,6 +977,15 @@ mod tests {
     }
 
     fn rig_with(name: &str, capture: Capture, cap_s: u64) -> Rig {
+        rig_full(name, capture, cap_s, wav::open)
+    }
+
+    fn rig_full(
+        name: &str,
+        capture: Capture,
+        cap_s: u64,
+        open_wav: fn(&std::path::Path) -> anyhow::Result<Box<dyn wav::Sink>>,
+    ) -> Rig {
         let home = temp(&format!("recorder-{name}"));
         let env = Env::at(home.clone());
         write_config(&env, ffmpeg());
@@ -967,6 +995,7 @@ mod tests {
                 capture,
                 clock,
                 local_minute: minute,
+                open_wav,
                 spawn: fake_spawn,
                 check_tool: meeting::spawn::check_tool,
                 cap_s,
@@ -1300,6 +1329,90 @@ mod tests {
         assert!(!folder.join(M4A).exists());
         assert!(spawns_under(&folder).is_empty());
         assert_eq!(status.state, "idle");
+    }
+
+    /// The WAV file, failing as a full disk does once it holds 2 s of audio.
+    struct SmallDisk {
+        file: fs::File,
+        room: usize,
+    }
+
+    impl std::io::Write for SmallDisk {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if buf.len() > self.room {
+                return Err(std::io::Error::from(ErrorKind::StorageFull));
+            }
+            self.room -= buf.len();
+            self.file.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.file.flush()
+        }
+    }
+
+    impl std::io::Seek for SmallDisk {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.file.seek(pos)
+        }
+    }
+
+    fn open_small_disk(path: &std::path::Path) -> anyhow::Result<Box<dyn wav::Sink>> {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        Ok(Box::new(SmallDisk {
+            file,
+            room: 44 + 4 * SECOND,
+        }))
+    }
+
+    #[test]
+    fn a_full_disk_in_the_writer_stops_on_its_own_and_keeps_the_wav() {
+        let rig = rig_full("writer-full", ok_capture(), 3 * 3600, open_small_disk);
+        let folder = rig.start().unwrap();
+        push(5 * SECOND);
+        let status = rig.wait_idle();
+        assert_eq!(
+            status.notice,
+            Some(Notice::retry(notice::DISK_FULL, &folder))
+        );
+        let kept = wav::repair(&folder.join(WAV)).unwrap();
+        assert!(kept > 0 && kept <= 2 * SECOND as u64, "{kept}");
+        assert!(!folder.join(M4A).exists());
+        assert!(spawns_under(&folder).is_empty());
+    }
+
+    #[test]
+    fn stop_answers_saving_at_once_and_idle_after_the_conversion() {
+        let rig = rig("saving", ok_capture());
+        let slow = rig.home.join("ffmpeg");
+        fs::write(&slow, "#!/bin/sh\nsleep 1\necho slow >&2\nexit 1\n").unwrap();
+        fs::set_permissions(&slow, fs::Permissions::from_mode(0o755)).unwrap();
+        write_config(&rig.env(), slow);
+        let folder = rig.start().unwrap();
+        push(SECOND);
+        let saving = rig.recorder.stop(Reason::User).unwrap();
+        let status = rig.recorder.status();
+        assert_eq!(status.state, "saving");
+        assert_eq!(status.folder.as_deref(), folder.to_str());
+        assert_eq!(status.elapsed_s, 1);
+        assert_eq!(rig.start().unwrap_err().code, "already_recording");
+        saving.join().unwrap();
+        assert_eq!(rig.state(), "idle");
+    }
+
+    #[test]
+    fn a_late_automatic_stop_never_ends_a_newer_recording() {
+        let rig = rig("stale-stop", ok_capture());
+        rig.start().unwrap();
+        rig.stop(Reason::User);
+        rig.start().unwrap();
+        // The first session's id was 1.
+        assert!(rig.recorder.stop_session(Some(1), Reason::Cap).is_none());
+        assert_eq!(rig.state(), "recording");
+        rig.stop(Reason::User);
     }
 
     #[test]

@@ -4,9 +4,11 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use meeting::Language;
 use meeting::context::{self, CalendarEvent, Context, Platform};
 
@@ -87,10 +89,21 @@ fn check(ctx: &Context) -> Result<Context, &'static str> {
 }
 
 fn write_private(path: &Path, ctx: &Context) -> anyhow::Result<()> {
-    meeting::jobs::write_atomic(path, &serde_json::to_vec(ctx)?)?;
-    // `write_atomic` creates with the umask; the rename kept that mode, so narrow it now.
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    Ok(())
+    // As `jobs::write_atomic`, but the temp file is created `0600`: the file names the event
+    // and its attendees, so it is never readable by others, not even before a rename.
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .with_context(|| format!("cannot write {}", tmp.display()))?;
+    file.write_all(&serde_json::to_vec(ctx)?)?;
+    drop(file);
+    fs::rename(&tmp, path).with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// Converts the folder's WAV to `recording.m4a`, deletes the WAV, and spawns `meeting process`
@@ -152,6 +165,7 @@ fn usable_tool(tools: &Tools) -> Option<&Path> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;
 
     use meeting::calendar::Response;

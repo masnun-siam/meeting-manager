@@ -36,10 +36,19 @@ pub struct WavWriter {
     thread: JoinHandle<Result<u64, ErrorKind>>,
 }
 
+/// Creates `path` (it must not exist) with mode `0600`: the recorder's real sink.
+pub fn open(path: &Path) -> anyhow::Result<Box<dyn Sink>> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("cannot create {}", path.display()))?;
+    Ok(Box::new(file))
+}
+
 impl WavWriter {
-    /// Creates `path` (it must not exist) with mode `0600`, writes the header and starts the
-    /// thread. `queue` is the channel's capacity in chunks; `dropped` counts chunks the sender
-    /// could not queue, and the writer logs once when it sees one.
+    /// `open` then `start`.
     pub fn create(
         path: &Path,
         flush_every: Duration,
@@ -47,17 +56,14 @@ impl WavWriter {
         dropped: Arc<AtomicU64>,
         on_error: OnError,
     ) -> anyhow::Result<WavWriter> {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("cannot create {}", path.display()))?;
-        WavWriter::start(Box::new(file), flush_every, queue, dropped, on_error)
+        WavWriter::start(open(path)?, flush_every, queue, dropped, on_error)
             .with_context(|| format!("cannot write {}", path.display()))
     }
 
-    fn start(
+    /// Writes the header to `sink` and starts the thread. `queue` is the channel's capacity in
+    /// chunks; `dropped` counts chunks the sender could not queue, and the writer logs once when
+    /// it sees one.
+    pub fn start(
         sink: Box<dyn Sink>,
         flush_every: Duration,
         queue: usize,
