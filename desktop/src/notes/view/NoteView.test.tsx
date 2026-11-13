@@ -202,15 +202,18 @@ describe('NoteView display', () => {
     expect(transcriptTab).toHaveFocus();
   });
 
-  it.each(['processing', 'failed', 'no_speech'] as const)('a %s note is read-only except "My notes"', async (status) => {
-    setup(testNote({ status, failed_stage: 'transcribe', error: 'Deepgram said no' }));
-    await ready();
+  it.each(['processing', 'failed', 'no_speech'] as const)(
+    'a %s note is read-only except "My notes"',
+    async (status) => {
+      setup(testNote({ status, failed_stage: 'transcribe', error: 'Deepgram said no' }));
+      await ready();
 
-    expect(screen.queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('textbox', { name: /Name for/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: 'My notes' })).toBeInTheDocument();
-  });
+      expect(screen.queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('textbox', { name: /Name for/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'My notes' })).toBeInTheDocument();
+    },
+  );
 
   it('shows a failed note’s stage and error as text', async () => {
     setup(testNote({ status: 'failed', failed_stage: 'transcribe', error: 'Deepgram <i>401</i>' }));
