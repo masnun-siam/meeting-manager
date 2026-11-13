@@ -15,6 +15,7 @@ import { CALENDAR_DENIED, localDate, timeOf, tooFar } from './format';
 
 export const EARLIER_LIMIT = 20;
 export const TOO_FAR = 'This event starts more than 7 days from now, so it cannot be recorded yet.';
+export const BUSY = 'A recording is already running.';
 
 const RESPONSES: Record<AttendeeResponse, string> = {
   accepted: 'Accepted',
@@ -67,12 +68,11 @@ export function EventView(props: { occurrenceId: string; onBack: () => void; onO
       <button ref={back} type="button" onClick={props.onBack}>
         Back
       </button>
-      {loaded.kind === 'loading' ? <p role="status">Loading event…</p> : null}
-      {loaded.kind === 'error' ? (
-        <p role="status" className={styles.problem}>
-          {loaded.message}
-        </p>
-      ) : null}
+      {/* Always mounted: screen readers skip a live region that appears already filled. */}
+      <div role="status" className={loaded.kind === 'error' ? styles.problem : undefined}>
+        {loaded.kind === 'loading' ? 'Loading event…' : null}
+        {loaded.kind === 'error' ? loaded.message : null}
+      </div>
       {loaded.kind === 'ready' ? (
         <>
           <h2 ref={heading} tabIndex={-1} className={styles.title}>
@@ -145,6 +145,7 @@ function StartFromEvent({ event }: { event: CalendarEventDetail }) {
   const [busy, setBusy] = useState(false);
 
   const idle = status?.state === 'idle';
+  const running = status !== null && !idle;
   const far = tooFar(event.start);
   const language = chosen ?? status?.language ?? 'en';
 
@@ -165,6 +166,7 @@ function StartFromEvent({ event }: { event: CalendarEventDetail }) {
       </button>
       <div role="status" className={styles.problem}>
         {far ? <p>{TOO_FAR}</p> : null}
+        {running ? <p>{BUSY}</p> : null}
         {message ? <p>{message}</p> : null}
       </div>
     </div>

@@ -3,7 +3,7 @@ import type { CalendarDay } from '../api';
 import { EventView } from './EventView';
 import { CALENDAR_DENIED, dayLabel, timeRange } from './format';
 import styles from './Upcoming.module.css';
-import { useUpcoming } from './useUpcoming';
+import { type UpcomingView, useUpcoming } from './useUpcoming';
 
 export const EMPTY = 'Nothing on your calendar for the next 7 days.';
 
@@ -35,27 +35,26 @@ export function Upcoming({ onOpenNote }: { onOpenNote: (id: number) => void }) {
   return (
     <section className={styles.upcoming} aria-labelledby="upcoming-heading">
       <h2 id="upcoming-heading">Upcoming</h2>
-      {view.kind === 'loading' ? <p role="status">Loading calendar…</p> : null}
-      {view.kind === 'denied' ? (
-        <p role="status" className={styles.problem}>
-          {CALENDAR_DENIED}
-        </p>
-      ) : null}
-      {view.kind === 'error' ? (
-        <p role="status" className={styles.problem}>
-          {view.message}
-        </p>
-      ) : null}
-      {view.kind === 'ready' ? (
-        <>
-          <div role="status" className={styles.problem}>
-            {view.error}
-          </div>
-          <Days days={view.days} rows={rows.current} onOpen={open} />
-        </>
-      ) : null}
+      {/* Always mounted: screen readers skip a live region that appears already filled. */}
+      <div role="status" className={view.kind === 'loading' ? undefined : styles.problem}>
+        {statusText(view)}
+      </div>
+      {view.kind === 'ready' ? <Days days={view.days} rows={rows.current} onOpen={open} /> : null}
     </section>
   );
+}
+
+function statusText(view: UpcomingView): string | null {
+  switch (view.kind) {
+    case 'loading':
+      return 'Loading calendar…';
+    case 'denied':
+      return CALENDAR_DENIED;
+    case 'error':
+      return view.message;
+    case 'ready':
+      return view.error;
+  }
 }
 
 function Days(props: { days: CalendarDay[]; rows: Map<string, HTMLButtonElement>; onOpen: (id: string) => void }) {
@@ -63,8 +62,10 @@ function Days(props: { days: CalendarDay[]; rows: Map<string, HTMLButtonElement>
   if (days.length === 0) return <p>{EMPTY}</p>;
 
   return days.map((day) => (
-    <section key={day.date} className={styles.day} aria-label={dayLabel(day.date)}>
-      <h3 className={styles.dayHeading}>{dayLabel(day.date)}</h3>
+    <section key={day.date} className={styles.day} aria-labelledby={`day-${day.date}`}>
+      <h3 id={`day-${day.date}`} className={styles.dayHeading}>
+        {dayLabel(day.date)}
+      </h3>
       <ul className={styles.events}>
         {day.events.map((event) => (
           <li key={event.occurrence_id}>

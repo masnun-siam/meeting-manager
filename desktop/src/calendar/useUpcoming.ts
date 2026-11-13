@@ -40,6 +40,9 @@ export function useUpcoming(): UpcomingView {
 
   useEffect(() => {
     active.current = true;
+    // Per effect run, not the shared ref: under StrictMode a first run's `listen` can resolve after
+    // the second run has set the ref again.
+    let cancelled = false;
     let unlisten: (() => void) | null = null;
     let debounce: ReturnType<typeof setTimeout> | undefined;
     const onChange = () => {
@@ -52,7 +55,7 @@ export function useUpcoming(): UpcomingView {
     listen(CHANGED_EVENT, onChange).then(
       (stop) => {
         // Unmounted before `listen` resolved: stop listening at once.
-        if (active.current) unlisten = stop;
+        if (!cancelled) unlisten = stop;
         else stop();
       },
       // Outside the Tauri webview there is no event bus; focus still refreshes.
@@ -61,6 +64,7 @@ export function useUpcoming(): UpcomingView {
 
     return () => {
       active.current = false;
+      cancelled = true;
       window.removeEventListener('focus', refresh);
       clearTimeout(debounce);
       unlisten?.();

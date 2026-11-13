@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarEventDetail, EarlierNote } from '../api';
 import * as api from '../api';
 import { statusReply } from '../recording/test-status';
-import { EventView, TOO_FAR } from './EventView';
+import { BUSY, EventView, TOO_FAR } from './EventView';
 
 vi.mock('../api', async () => (await import('../api.mock')).mockApi());
 
@@ -104,6 +104,14 @@ describe('EventView', () => {
     expect(notes.querySelector('b')).toBeNull();
   });
 
+  it('hides the Notes section when the event has no notes', async () => {
+    calendarEvent.mockResolvedValue({ ok: true, event: { ...EVENT, description: null }, earlier: [] });
+    setup();
+    await screen.findByRole('heading', { name: 'Design review' });
+
+    expect(screen.queryByRole('heading', { name: 'Notes' })).not.toBeInTheDocument();
+  });
+
   it('starts a recording linked to the event in the chosen language', async () => {
     const { user } = setup();
     await screen.findByRole('heading', { name: 'Design review' });
@@ -121,7 +129,7 @@ describe('EventView', () => {
     setup();
     await screen.findByRole('heading', { name: 'Design review' });
 
-    await waitFor(() => expect(api.recorderStatus).toHaveBeenCalled());
+    expect(await screen.findByText(BUSY)).toBeInTheDocument();
     expect(start()).toBeDisabled();
   });
 

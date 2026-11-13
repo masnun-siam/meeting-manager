@@ -6,10 +6,6 @@
   color: #c5221f;
 }
 
-.problem:empty {
-  display: none;
-}
-
 .day {
   margin-top: 16px;
 }

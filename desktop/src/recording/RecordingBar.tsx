@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   type Language,
   type RecorderState,
@@ -38,6 +38,11 @@ export function RecordingBar() {
   const language = idle ? (chosen ?? status?.language ?? 'en') : (status?.language ?? 'en');
   const notice = status?.notice ?? null;
 
+  // FR-1: once a recording runs, the idle default is the language it used, not an older pick.
+  useEffect(() => {
+    if (!idle) setChosen(null);
+  }, [idle]);
+
   async function run<T>(call: () => Promise<Reply<T>>, onOk: (reply: T) => void) {
     setMessage(null);
     setBusy(true);
@@ -47,7 +52,15 @@ export function RecordingBar() {
     else setMessage(result.text);
   }
 
-  const start = () => run(() => recorderStart({ language, event_occurrence_id: null }), refresh);
+  // Recording at once, so Start can't be pressed again before the next poll; the poll confirms it.
+  const start = () =>
+    run(
+      () => recorderStart({ language, event_occurrence_id: null }),
+      () => {
+        setState('recording');
+        refresh();
+      },
+    );
   const follow = (reply: StateReply) => setState(reply.state);
   const control = (call: () => Promise<Reply<StateReply>>) => run(call, follow);
   const retry = (folder: string) => run(() => recorderRetry({ folder }), follow);
@@ -105,7 +118,11 @@ export function RecordingBar() {
         {state === 'saving' ? <p>Saving the recording…</p> : null}
         {message ? <p className={styles.problem}>{message}</p> : null}
         {error ? <p className={styles.problem}>{error}</p> : null}
-        {notice ? <p className={notice.kind === 'error' ? styles.problem : undefined}>{noticeText(notice)}</p> : null}
+        {notice ? (
+          <p className={notice.kind === 'error' || notice.kind === 'setup' ? styles.problem : undefined}>
+            {noticeText(notice)}
+          </p>
+        ) : null}
       </div>
     </header>
   );

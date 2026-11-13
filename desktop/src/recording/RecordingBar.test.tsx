@@ -54,6 +54,31 @@ describe('RecordingBar', () => {
     expect(api.recorderStart).toHaveBeenCalledWith({ language: 'en', event_occurrence_id: null });
   });
 
+  it('Start shows recording at once, so it cannot be pressed twice', async () => {
+    const user = setup();
+    await waitFor(() => expect(start()).toBeEnabled());
+
+    holdPolls();
+    await user.click(start());
+    await waitFor(() => expect(start()).toBeDisabled());
+    expect(api.recorderStart).toHaveBeenCalledOnce();
+  });
+
+  it('after a recording, the idle language is the one it used, not an older pick', async () => {
+    const user = setup();
+    await waitFor(() => expect(start()).toBeEnabled());
+    await user.selectOptions(language(), 'Bengali');
+
+    recorderStatus.mockResolvedValue(statusReply({ state: 'recording', language: 'en' }));
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    expect(language()).toHaveValue('en');
+
+    recorderStatus.mockResolvedValue(statusReply({ state: 'idle', language: 'en' }));
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    expect(language()).toHaveValue('en');
+    expect(start()).toBeEnabled();
+  });
+
   it('recording: disables Start, locks the language and advances the timer', async () => {
     let elapsed = 240;
     recorderStatus.mockImplementation(async () =>

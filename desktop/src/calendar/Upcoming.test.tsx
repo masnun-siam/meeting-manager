@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarDay, CalendarListEvent } from '../api';
 import * as api from '../api';
@@ -172,6 +173,20 @@ describe('Upcoming', () => {
     const { unmount } = setup();
     unmount();
     await waitFor(() => expect(events.unlisten[0]).toHaveBeenCalledOnce());
+  });
+
+  it('leaves exactly one live listener under StrictMode and none after unmount', async () => {
+    const { unmount } = render(
+      <StrictMode>
+        <Upcoming onOpenNote={vi.fn()} />
+      </StrictMode>,
+    );
+    await screen.findByText('Standup');
+    await waitFor(() => expect(events.unlisten.length).toBeGreaterThanOrEqual(2));
+    expect(events.handlers).toHaveLength(1);
+
+    unmount();
+    expect(events.handlers).toHaveLength(0);
   });
 
   it('a failed refetch keeps the last good list and shows the error', async () => {

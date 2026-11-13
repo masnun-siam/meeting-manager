@@ -64,10 +64,6 @@
   color: #c5221f;
 }
 
-.problem:empty {
-  display: none;
-}
-
 .problem p {
   margin: 0;
 }
