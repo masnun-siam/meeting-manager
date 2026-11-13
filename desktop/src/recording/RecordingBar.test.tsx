@@ -26,6 +26,9 @@ function setup() {
   return user;
 }
 
+// Later polls never answer, so only a command's reply can change the state.
+const holdPolls = () => recorderStatus.mockReturnValue(new Promise(() => {}));
+
 const start = () => screen.getByRole('button', { name: 'Start recording' });
 const language = () => screen.getByRole('combobox', { name: 'Language' });
 const status = () => screen.getByRole('status');
@@ -78,9 +81,10 @@ describe('RecordingBar', () => {
     await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 3));
     expect(screen.getByRole('timer')).toHaveTextContent('00:01:01');
 
+    holdPolls();
     await user.click(screen.getByRole('button', { name: 'Resume' }));
     expect(api.recorderResume).toHaveBeenCalledOnce();
-    expect(screen.getByText('● REC')).toBeInTheDocument();
+    expect(await screen.findByText('● REC')).toBeInTheDocument();
   });
 
   it('Pause and Stop follow the returned state without waiting for a poll', async () => {
@@ -89,13 +93,15 @@ describe('RecordingBar', () => {
     vi.mocked(api.recorderStop).mockResolvedValue({ ok: true, state: 'saving' });
     const user = setup();
 
-    await user.click(await screen.findByRole('button', { name: 'Pause' }));
+    const pause = await screen.findByRole('button', { name: 'Pause' });
+    holdPolls();
+    await user.click(pause);
     expect(api.recorderPause).toHaveBeenCalledOnce();
-    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(api.recorderStop).toHaveBeenCalledOnce();
-    expect(status()).toHaveTextContent('Saving the recording…');
+    await waitFor(() => expect(status()).toHaveTextContent('Saving the recording…'));
   });
 
   it('saving: every control is disabled and a status line says so', async () => {
@@ -185,12 +191,13 @@ describe('RecordingBar', () => {
     const user = setup();
 
     expect(await screen.findByText('ffmpeg: invalid data')).toBeInTheDocument();
+    holdPolls();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(api.recorderRetry).toHaveBeenCalledWith({ folder: '/r/meeting-1' });
     expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled();
 
     await act(async () => retry.resolve({ ok: true, state: 'saving' }));
-    expect(status()).toHaveTextContent('Saving the recording…');
+    await waitFor(() => expect(status()).toHaveTextContent('Saving the recording…'));
   });
 
   it.each(['not_found', 'already_recording'] as const)('Retry shows the %s message', async (code) => {
