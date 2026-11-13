@@ -122,7 +122,11 @@ A file that can't be read counts as missing. After the folders, rows whose recor
 | `recording/notices.ts`, `recording/attempt.ts` | The FR-2 permission texts; the notice text is the Rust side's `message`, never rebuilt from `kind`. `attempt` turns an error reply or a rejected call into the text shown |
 | `calendar/Upcoming.tsx`, `calendar/useUpcoming.ts` | Today + 7 days by day ("Today" first), loading, empty, denied (FR-8) and error states; refetches on window focus and on `calendar-changed` (debounced 300 ms, no timer); a failed refetch keeps the last list. A day's `date` is read as a local date (`calendar/format.ts`) |
 | `calendar/EventView.tsx` | One event (FR-10): details, attendees by name with a text response, notes as plain text, Start recording linked to the event (disabled while recording or more than 7 days away, FR-11), up to 20 "Earlier notes" that open in All notes. Focus goes to its heading, and back to the row on Back |
-| `notes/list/NotesList.tsx`, `notes/view/NoteView.tsx`, `settings/Settings.tsx` | One placeholder per view; each UI issue owns its folder |
+| `notes/list/NotesList.tsx` | All notes (FR-15, FR-16): a "Search meetings" box sending `notes_list {query}` 200 ms after the last key (blank is `null`), rows in the order the command returns as buttons that open the note, the PRD's empty and "No meetings match." texts, a `store_unavailable` alert with Rescan folders, other failures in a `role="status"` line above the last good list |
+| `notes/list/useNotes.ts` | `notes_list` at once on a query change, every 3 s while `document.visibilityState` is `visible` and on becoming visible; the latest request wins and a reply asked before the current query is dropped |
+| `notes/list/useRescanProgress.ts` | `rescan_status` on mount and every 1 s while `running`, shown as "Loading meetings… N of M" (FR-14); the list is refetched once when a run stops |
+| `notes/list/format.ts` | Row labels: `recorded_at` read as local time, `H:MM:SS` / `M:SS`, Bengali / English, Browser / Import / Desktop, status word (the job stage while `processing`) |
+| `notes/view/NoteView.tsx`, `settings/Settings.tsx` | One placeholder per view; each UI issue owns its folder |
 
 Conventions are the extension's: colocated `*.test.ts(x)`, CSS modules, Biome. No inline `style` attributes: the content security policy forbids them.
 
