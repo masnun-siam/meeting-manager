@@ -335,9 +335,22 @@ mod tests {
     #[test]
     fn a_stub_answers_not_implemented() {
         let app = started(Mode::On);
-        let reply = invoke(&app, "main", "recorder_status").unwrap();
+        let reply = invoke(&app, "main", "recorder_retry").unwrap();
         assert_eq!(reply["ok"], false);
         assert_eq!(reply["code"], "not_implemented");
+    }
+
+    #[test]
+    fn the_recorder_commands_answer_through_ipc() {
+        let app = started(Mode::On);
+        let status = invoke(&app, "main", "recorder_status").unwrap();
+        assert_eq!(status["ok"], true);
+        assert_eq!(status["state"], "idle");
+        assert_eq!(status["language"], "bn");
+        for command in ["recorder_pause", "recorder_resume", "recorder_stop"] {
+            let reply = invoke(&app, "main", command).unwrap();
+            assert_eq!(reply["code"], "not_recording", "{command}");
+        }
     }
 
     #[test]

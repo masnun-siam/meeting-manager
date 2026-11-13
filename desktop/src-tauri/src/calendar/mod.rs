@@ -28,7 +28,8 @@ const HIDDEN_KEY: &str = "hidden_calendars";
 const EARLIER_LIMIT: usize = 20;
 /// The Tauri event the UI refetches on.
 pub const CHANGED_EVENT: &str = "calendar-changed";
-const DENIED_MESSAGE: &str = "Allow Meeting in System Settings › Privacy & Security › Calendars";
+pub(crate) const DENIED_MESSAGE: &str =
+    "Allow Meeting in System Settings › Privacy & Security › Calendars";
 
 #[derive(Debug, PartialEq)]
 pub enum CalendarError {
