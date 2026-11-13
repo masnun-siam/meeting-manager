@@ -77,6 +77,11 @@ impl Graph {
             tracing::warn!("{e}; resampling instead");
         }
         let rate = devices::nominal_rate(aggregate)?;
+        if !(rate.is_finite() && rate > 0.0) {
+            bail!(
+                "Core Audio aggregate device reports no usable sample rate; reconnect the microphone and try again"
+            );
+        }
 
         let layout = devices::input_channels(aggregate, "read aggregate stream layout")?;
         let expected: Vec<u32> = parts

@@ -327,7 +327,9 @@ impl Drop for Listeners {
                 )
             };
             if let Err(e) = status("remove device listener", code) {
-                tracing::warn!("{e}");
+                tracing::warn!("{e}; keeping its sender alive");
+                // A listener still registered may run later; leaking the sender keeps it valid.
+                return;
             }
         }
         // SAFETY: created by `Box::into_raw` in `listen`; every listener using it is removed, and

@@ -88,6 +88,17 @@ impl Rebuild {
     }
 }
 
+/// The `Failed` message after 5 s without a successful rebuild; `last_error` is empty when the
+/// devices never stayed still long enough to try.
+fn give_up_reason(last_error: &str) -> String {
+    let cause = if last_error.is_empty() {
+        "the devices kept changing"
+    } else {
+        last_error
+    };
+    format!("Audio capture could not follow the device change: {cause}")
+}
+
 pub enum Msg {
     Changed,
     Stop,
@@ -115,7 +126,9 @@ impl Worker {
         let mut last_error = String::new();
         loop {
             let now = (self.now)();
-            if now >= next_health {
+            // While a rebuild is pending the old graph may already report a bad layout; the
+            // health check waits for the new graph.
+            if now >= next_health && state.next(now) == Next::Idle {
                 if let Some(reason) = (self.health)() {
                     return self.fail(reason, &rx);
                 }
@@ -135,12 +148,7 @@ impl Worker {
                     }
                     continue;
                 }
-                Next::GiveUp => {
-                    return self.fail(
-                        format!("Audio capture could not follow the device change: {last_error}"),
-                        &rx,
-                    );
-                }
+                Next::GiveUp => return self.fail(give_up_reason(&last_error), &rx),
                 Next::Wait(at) => at.min(next_health),
                 Next::Idle => next_health,
             };
@@ -250,6 +258,7 @@ mod tests {
     /// A worker on a millisecond policy whose `build` sleeps `build_time`, fails the first
     /// `failures` times and calls `during` on its first call.
     fn spawn(
+        settle: Duration,
         failures: usize,
         build_time: Duration,
         health: Box<dyn FnMut() -> Option<String> + Send>,
@@ -262,9 +271,9 @@ mod tests {
         let mut during = Some(during);
         let worker = Worker {
             policy: Policy {
-                settle: 10 * MS,
+                settle,
                 retry: 5 * MS,
-                give_up: 100 * MS,
+                give_up: 500 * MS,
                 health: 20 * MS,
             },
             build: Box::new({
@@ -318,7 +327,7 @@ mod tests {
 
     #[test]
     fn the_worker_rebuilds_once_per_burst_and_reports_it() {
-        let fake = spawn(0, Duration::ZERO, healthy(), Box::new(|| {}));
+        let fake = spawn(10 * MS, 0, Duration::ZERO, healthy(), Box::new(|| {}));
         for _ in 0..5 {
             fake.tx.send(Msg::Changed).unwrap();
         }
@@ -334,6 +343,7 @@ mod tests {
     fn a_change_during_a_rebuild_gives_one_more_rebuild() {
         let (tx, rx) = mpsc::channel::<Sender<Msg>>();
         let fake = spawn(
+            10 * MS,
             0,
             20 * MS,
             healthy(),
@@ -351,7 +361,7 @@ mod tests {
 
     #[test]
     fn failures_are_retried_until_one_succeeds() {
-        let fake = spawn(3, Duration::ZERO, healthy(), Box::new(|| {}));
+        let fake = spawn(10 * MS, 3, Duration::ZERO, healthy(), Box::new(|| {}));
         fake.tx.send(Msg::Changed).unwrap();
         wait_for(&fake.events, 1);
         fake.tx.send(Msg::Stop).unwrap();
@@ -362,7 +372,13 @@ mod tests {
 
     #[test]
     fn giving_up_reports_once_halts_and_ignores_later_changes() {
-        let fake = spawn(usize::MAX, Duration::ZERO, healthy(), Box::new(|| {}));
+        let fake = spawn(
+            10 * MS,
+            usize::MAX,
+            Duration::ZERO,
+            healthy(),
+            Box::new(|| {}),
+        );
         fake.tx.send(Msg::Changed).unwrap();
         wait_for(&fake.events, 1);
         let builds = fake.builds.load(Ordering::SeqCst);
@@ -385,6 +401,7 @@ mod tests {
     #[test]
     fn a_failed_health_check_is_reported_once() {
         let fake = spawn(
+            10 * MS,
             0,
             Duration::ZERO,
             Box::new(|| Some("Microphone permission was revoked".into())),
@@ -401,8 +418,67 @@ mod tests {
     }
 
     #[test]
+    fn health_waits_for_a_pending_rebuild_that_fixes_it() {
+        let fixed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fake = spawn(
+            50 * MS,
+            0,
+            Duration::ZERO,
+            Box::new({
+                let fixed = fixed.clone();
+                move || (!fixed.load(Ordering::SeqCst)).then(|| "bad layout".to_string())
+            }),
+            Box::new({
+                let fixed = fixed.clone();
+                move || fixed.store(true, Ordering::SeqCst)
+            }),
+        );
+        // Keep a rebuild pending past the first health tick (20 ms), then let it succeed.
+        for _ in 0..50 {
+            fake.tx.send(Msg::Changed).unwrap();
+            thread::sleep(2 * MS);
+        }
+        wait_for(&fake.events, 1);
+        thread::sleep(60 * MS);
+        fake.tx.send(Msg::Stop).unwrap();
+        fake.handle.join().unwrap();
+        // A sleep may overshoot the settle time and give an extra rebuild; never a failure.
+        let events = fake.events.lock().unwrap();
+        assert!(
+            events.iter().all(|e| *e == Event::DeviceChanged),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn changes_that_never_settle_give_up_after_five_seconds_without_an_attempt() {
+        let t0 = Instant::now();
+        let mut r = Rebuild::new(policy());
+        let mut now = t0;
+        while now < t0 + 5000 * MS {
+            r.changed(now);
+            assert!(matches!(r.next(now), Next::Wait(_)));
+            now += 100 * MS;
+        }
+        assert_eq!(r.next(t0 + 5000 * MS), Next::GiveUp);
+    }
+
+    #[test]
+    fn giving_up_names_the_last_error_or_the_unsettled_devices() {
+        assert_eq!(
+            give_up_reason("Core Audio create aggregate device failed (OSStatus -50)"),
+            "Audio capture could not follow the device change: \
+             Core Audio create aggregate device failed (OSStatus -50)"
+        );
+        assert_eq!(
+            give_up_reason(""),
+            "Audio capture could not follow the device change: the devices kept changing"
+        );
+    }
+
+    #[test]
     fn stop_ends_the_worker_promptly_without_an_event() {
-        let fake = spawn(0, Duration::ZERO, healthy(), Box::new(|| {}));
+        let fake = spawn(10 * MS, 0, Duration::ZERO, healthy(), Box::new(|| {}));
         let start = Instant::now();
         fake.tx.send(Msg::Stop).unwrap();
         fake.handle.join().unwrap();
@@ -414,7 +490,7 @@ mod tests {
 
     #[test]
     fn dropping_every_sender_stops_the_worker() {
-        let fake = spawn(0, Duration::ZERO, healthy(), Box::new(|| {}));
+        let fake = spawn(10 * MS, 0, Duration::ZERO, healthy(), Box::new(|| {}));
         drop(fake.tx);
         fake.handle.join().unwrap();
         assert_eq!(fake.halts.load(Ordering::SeqCst), 1);

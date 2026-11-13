@@ -51,7 +51,9 @@ pub enum Event {
     Failed(String),
 }
 
-/// A running capture. Dropping it without `stop` leaves the capture running.
+/// A running capture. Call `stop` to end it; dropping it also ends it, but without waiting for the
+/// capture thread. Never call `stop` from inside `events`: `events` runs on the thread `stop`
+/// waits for.
 pub struct Stream {
     stop: Box<dyn FnOnce() + Send>,
 }
@@ -68,6 +70,7 @@ impl Stream {
 
 /// Receives mono 48 kHz i16 samples, already mixed and clipped.
 pub type Samples = Box<dyn FnMut(&[i16]) + Send>;
+/// Runs on the capture thread; it must not call `Stream::stop` (see `Stream`).
 pub type Events = Box<dyn FnMut(Event) + Send>;
 
 pub struct Capture {
@@ -125,6 +128,8 @@ fn open(samples: Samples, events: Events) -> anyhow::Result<Stream> {
                 let mut current = graph.lock().unwrap_or_else(PoisonError::into_inner);
                 // The old graph goes first: two IOProcs never feed `samples` at once.
                 current.take();
+                // The flag belongs to the graph just dropped; the new one starts clean.
+                broken.store(false, Ordering::Relaxed);
                 *current = Some(Graph::build(samples.clone(), broken.clone())?);
                 Ok(())
             }

@@ -24,16 +24,23 @@ pub fn check() -> Result<(), Denied> {
 /// Asks for the microphone if macOS has not asked yet and waits for the answer (the user may take
 /// minutes, so call it off the main thread), then probes System Audio Recording with a throwaway
 /// tap, which makes macOS ask on first use. The microphone is checked first; only the first denial
-/// is returned.
+/// is returned. A probe that fails for another reason (no input device) is not a denial: `start`
+/// reports it with its own message.
 pub fn request() -> Result<(), Denied> {
     if microphone_status() == AVAuthorizationStatus::NotDetermined && !ask_microphone() {
         return Err(Denied::Microphone);
     }
     check()?;
-    graph::probe().map_err(|e| {
-        tracing::warn!("system audio probe failed: {e:#}");
-        Denied::SystemAudio
-    })
+    match graph::probe() {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tracing::warn!("system audio probe failed: {e:#}");
+            match e.downcast_ref::<Denied>() {
+                Some(&denied) => Err(denied),
+                None => Ok(()),
+            }
+        }
+    }
 }
 
 pub fn microphone_revoked() -> bool {
