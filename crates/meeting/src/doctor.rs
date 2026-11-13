@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::calendar_fetch::FetchError;
 use crate::config::Config;
 use crate::ical;
+use crate::spawn;
 
 pub const HOST_NAME: &str = "com.meeting_manager.host";
 
@@ -87,35 +88,52 @@ pub fn checks(env: &Env) -> Vec<Check> {
     );
     let config = check("config", env.config.is_ok(), INSTALL);
     let rest = match env.config {
-        Ok(c) => vec![
-            check(
-                "vault",
-                c.vault_dir.is_dir(),
-                &format!(
-                    "Create {} or run `meeting install` again",
-                    c.vault_dir.display()
+        Ok(c) => {
+            let mut rest = vec![
+                check(
+                    "vault",
+                    c.vault_dir.is_dir(),
+                    &format!(
+                        "Create {} or run `meeting install` again",
+                        c.vault_dir.display()
+                    ),
                 ),
-            ),
-            check(
-                "ffmpeg",
-                c.ffmpeg_path.is_file(),
-                "Install ffmpeg (`brew install ffmpeg`), then run `meeting install`",
-            ),
-            check(
-                "claude",
-                c.claude_path.is_file(),
-                "Install Claude Code, then run `meeting install`",
-            ),
-            check(
-                "claude_login",
-                claude_logged_in(&c.claude_path),
-                "Run `claude auth login`",
-            ),
-            check("native_host", manifest_matches(env, c), INSTALL),
-        ],
-        Err(_) => ["vault", "ffmpeg", "claude", "claude_login", "native_host"]
-            .map(|name| check(name, false, INSTALL))
-            .into(),
+                check(
+                    "ffmpeg",
+                    c.ffmpeg_path.is_file(),
+                    "Install ffmpeg (`brew install ffmpeg`), then run `meeting install`",
+                ),
+                check(
+                    "claude",
+                    c.claude_path.is_file(),
+                    "Install Claude Code, then run `meeting install`",
+                ),
+                check(
+                    "claude_login",
+                    claude_logged_in(&c.claude_path),
+                    "Run `claude auth login`",
+                ),
+                check("native_host", manifest_matches(env, c), INSTALL),
+            ];
+            if env.desktop {
+                let ok = c
+                    .meeting_path
+                    .as_deref()
+                    .is_some_and(|p| spawn::check_tool(p).is_ok());
+                rest.push(check("meeting_path", ok, INSTALL));
+            }
+            rest
+        }
+        Err(_) => {
+            let mut names = vec!["vault", "ffmpeg", "claude", "claude_login", "native_host"];
+            if env.desktop {
+                names.push("meeting_path");
+            }
+            names
+                .into_iter()
+                .map(|name| check(name, false, INSTALL))
+                .collect()
+        }
     };
     let mut all = vec![config, key];
     all.extend(rest);
@@ -185,6 +203,7 @@ mod tests {
             ffmpeg_path: dir.join("ffmpeg"),
             claude_path: dir.join("claude"),
             extension_id: "ext".into(),
+            meeting_path: None,
         };
         fs::create_dir_all(&config.vault_dir).unwrap();
         fs::write(&config.ffmpeg_path, "").unwrap();
@@ -456,6 +475,78 @@ mod tests {
         assert_eq!(bad, [fx("native_host", "Run `meeting install`")]);
     }
 
+    /// The checks for a working setup with the desktop flag on and `meeting_path` set.
+    fn desktop_checks(dir: &Path, meeting_path: Option<PathBuf>, context: bool) -> Vec<Check> {
+        let (config, manifest, exe) = setup(dir);
+        let config = config.map(|c| Config { meeting_path, ..c });
+        checks(&Env {
+            config: &config,
+            key: key_ok,
+            manifest,
+            exe,
+            context,
+            desktop: true,
+            calendar: no_calendar,
+            fetch: no_fetch,
+        })
+    }
+
+    #[test]
+    fn meeting_path_is_checked_only_with_the_flag_on() {
+        let dir = temp("doctor-meeting-path");
+        let (config, manifest, exe) = setup(&dir);
+        let off = run(&config, key_ok, &manifest, &exe);
+        let on = desktop_checks(&dir, None, false);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(off.len(), 7);
+        assert!(off.iter().all(|c| c.name != "meeting_path"));
+        assert_eq!(on.len(), 8);
+        assert_eq!(on[..7], off[..]);
+        assert_eq!(on[7], check("meeting_path", false, "Run `meeting install`"));
+    }
+
+    #[test]
+    fn meeting_path_passes_for_an_executable_file() {
+        let dir = temp("doctor-meeting-path-ok");
+        let tool = dir.join("tool");
+        script(&tool, "");
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&tool, &link).unwrap();
+        let direct = desktop_checks(&dir, Some(tool), false);
+        let linked = desktop_checks(&dir, Some(link), false);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(direct[7], check("meeting_path", true, ""));
+        assert_eq!(linked[7], check("meeting_path", true, ""));
+    }
+
+    #[test]
+    fn meeting_path_fails_for_relative_missing_directory_and_non_executable() {
+        let dir = temp("doctor-meeting-path-bad");
+        let plain = dir.join("plain");
+        fs::write(&plain, "").unwrap();
+        fs::set_permissions(&plain, fs::Permissions::from_mode(0o644)).unwrap();
+        let bad = [
+            PathBuf::from("bin/meeting"),
+            dir.join("missing"),
+            dir.clone(),
+            plain,
+        ]
+        .map(|p| desktop_checks(&dir, Some(p), false).remove(7));
+        fs::remove_dir_all(&dir).unwrap();
+        for c in bad {
+            assert_eq!(c, check("meeting_path", false, "Run `meeting install`"));
+        }
+    }
+
+    #[test]
+    fn meeting_path_precedes_calendar_when_both_flags_are_on() {
+        let dir = temp("doctor-meeting-path-calendar");
+        let all = desktop_checks(&dir, None, true);
+        fs::remove_dir_all(&dir).unwrap();
+        let names: Vec<_> = all.iter().map(|c| c.name).collect();
+        assert_eq!(names[6..], ["native_host", "meeting_path", "calendar"]);
+    }
+
     #[test]
     fn config_error_fails_dependents_but_still_checks_the_key() {
         let config = Err("meeting is not configured".to_string());
@@ -481,6 +572,22 @@ mod tests {
                 .all(|f| f.1 == "Run `meeting install`")
         );
         assert_eq!(failing(&no_key).len(), 7);
+
+        let desktop = checks(&Env {
+            config: &config,
+            key: key_ok,
+            manifest: nowhere.into(),
+            exe: nowhere.into(),
+            context: false,
+            desktop: true,
+            calendar: no_calendar,
+            fetch: no_fetch,
+        });
+        let failed = failing(&desktop);
+        assert_eq!(desktop.len(), 8);
+        assert_eq!(failed.len(), 7);
+        assert_eq!(failed[6], fx("meeting_path", "Run `meeting install`"));
+        assert!(failed.iter().all(|f| f.1 == "Run `meeting install`"));
     }
 
     #[test]

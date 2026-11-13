@@ -539,6 +539,7 @@ mod tests {
                 ffmpeg_path: ffmpeg(),
                 claude_path: claude,
                 extension_id: "x".into(),
+                meeting_path: None,
             },
             deepgram: Deepgram {
                 base_url,

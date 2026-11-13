@@ -58,12 +58,22 @@ pub fn install(
     home: &Path,
     path_var: &OsStr,
     exe: &Path,
+    desktop: bool,
 ) -> anyhow::Result<Config> {
     let config_path = home.join(".config/meeting-manager/config.toml");
     let existing = Config::load_from(&config_path).ok();
 
     let ffmpeg_path = require_tool("ffmpeg", path_var, "install it with `brew install ffmpeg`")?;
     let claude_path = require_tool("claude", path_var, "install Claude Code")?;
+    // Only a desktop build writes the path; any other build carries an existing one over.
+    let meeting_path = if desktop {
+        Some(
+            fs::canonicalize(exe)
+                .with_context(|| format!("cannot resolve the path of {}", exe.display()))?,
+        )
+    } else {
+        existing.as_ref().and_then(|c| c.meeting_path.clone())
+    };
 
     let default_vault = existing
         .as_ref()
@@ -97,6 +107,7 @@ pub fn install(
         ffmpeg_path,
         claude_path,
         extension_id: EXTENSION_ID.into(),
+        meeting_path,
     };
     config.save_to(&config_path)?;
 
@@ -148,15 +159,37 @@ mod tests {
     }
 
     fn run(e: &Env, answers: &str) -> (anyhow::Result<Config>, String) {
+        run_as(e, answers, Path::new("/opt/meeting"), false)
+    }
+
+    fn run_as(
+        e: &Env,
+        answers: &str,
+        exe: &Path,
+        desktop: bool,
+    ) -> (anyhow::Result<Config>, String) {
         let mut out = Vec::new();
         let r = install(
             &mut answers.as_bytes(),
             &mut out,
             &e.home,
             e.bin.as_os_str(),
-            Path::new("/opt/meeting"),
+            exe,
+            desktop,
         );
         (r, String::from_utf8(out).unwrap())
+    }
+
+    /// An executable `meeting` reached through a symlinked directory: (as given, canonical).
+    fn linked_exe(e: &Env) -> (PathBuf, PathBuf) {
+        let real = e.root.join("real");
+        fs::create_dir_all(&real).unwrap();
+        stub(&real, "meeting", "");
+        std::os::unix::fs::symlink(&real, e.root.join("link")).unwrap();
+        (
+            e.root.join("link/meeting"),
+            fs::canonicalize(real.join("meeting")).unwrap(),
+        )
     }
 
     fn files(e: &Env) -> (PathBuf, PathBuf) {
@@ -181,6 +214,7 @@ mod tests {
                 ffmpeg_path: e.bin.join("ffmpeg"),
                 claude_path: e.bin.join("claude"),
                 extension_id: EXTENSION_ID.into(),
+                meeting_path: None,
             }
         );
         assert_eq!(Config::load_from(&config_path).unwrap(), config);
@@ -193,6 +227,95 @@ mod tests {
         assert!(!out.contains("not logged in"));
         assert!(out.contains("Downloads/Meetings"));
         fs::remove_dir_all(&e.root).unwrap();
+    }
+
+    #[test]
+    fn desktop_install_writes_the_canonical_binary_path() {
+        let e = env("desktop", r#"{"loggedIn": true}"#);
+        let (exe, canonical) = linked_exe(&e);
+        let (r, _) = run_as(&e, &format!("{}\n\n", e.vault.display()), &exe, true);
+        let config = r.unwrap();
+        let (config_path, manifest) = files(&e);
+        let text = fs::read_to_string(&config_path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&fs::read(manifest).unwrap()).unwrap();
+        fs::remove_dir_all(&e.root).unwrap();
+        assert_ne!(exe, canonical);
+        assert_eq!(config.meeting_path, Some(canonical.clone()));
+        assert!(text.ends_with(&format!(
+            "meeting_path = {:?}\n",
+            canonical.to_string_lossy()
+        )));
+        // The manifest keeps the path as given, as it does without the flag.
+        assert_eq!(written, doctor::expected_manifest(&exe, EXTENSION_ID));
+    }
+
+    #[test]
+    fn desktop_install_twice_is_byte_identical() {
+        let e = env("desktop-twice", r#"{"loggedIn": true}"#);
+        let (exe, _) = linked_exe(&e);
+        let (first, _) = run_as(&e, &format!("{}\nCalls\n", e.vault.display()), &exe, true);
+        let (config_path, manifest) = files(&e);
+        let snapshot = (
+            fs::read(&config_path).unwrap(),
+            fs::read(&manifest).unwrap(),
+        );
+        let (second, _) = run_as(&e, "\n\n", &exe, true);
+        let after = (
+            fs::read(&config_path).unwrap(),
+            fs::read(&manifest).unwrap(),
+        );
+        fs::remove_dir_all(&e.root).unwrap();
+        assert_eq!(first.unwrap(), second.unwrap());
+        assert_eq!(snapshot, after);
+    }
+
+    #[test]
+    fn desktop_install_with_an_unresolvable_exe_writes_nothing() {
+        let e = env("desktop-no-exe", "{}");
+        let (r, _) = run_as(
+            &e,
+            &format!("{}\n\n", e.vault.display()),
+            &e.root.join("gone/meeting"),
+            true,
+        );
+        let (config_path, manifest) = files(&e);
+        let wrote = config_path.exists() || manifest.exists();
+        fs::remove_dir_all(&e.root).unwrap();
+        assert!(
+            r.unwrap_err()
+                .to_string()
+                .contains("cannot resolve the path of")
+        );
+        assert!(!wrote);
+    }
+
+    #[test]
+    fn install_without_the_flag_writes_no_meeting_path() {
+        let e = env("no-flag", "{}");
+        let (exe, _) = linked_exe(&e);
+        let (r, _) = run_as(&e, &format!("{}\n\n", e.vault.display()), &exe, false);
+        let text = fs::read_to_string(files(&e).0).unwrap();
+        fs::remove_dir_all(&e.root).unwrap();
+        assert_eq!(r.unwrap().meeting_path, None);
+        assert!(!text.contains("meeting_path"));
+    }
+
+    #[test]
+    fn install_without_the_flag_keeps_an_existing_meeting_path() {
+        let e = env("no-flag-keep", "{}");
+        let (exe, _) = linked_exe(&e);
+        let answers = format!("{}\n\n", e.vault.display());
+        run_as(&e, &answers, &exe, false).0.unwrap();
+        let config_path = files(&e).0;
+        let mut seeded = fs::read_to_string(&config_path).unwrap();
+        seeded.push_str("meeting_path = \"/x/meeting\"\n");
+        fs::write(&config_path, &seeded).unwrap();
+        let (r, _) = run_as(&e, "\n\n", &exe, false);
+        let text = fs::read_to_string(&config_path).unwrap();
+        fs::remove_dir_all(&e.root).unwrap();
+        assert_eq!(r.unwrap().meeting_path, Some("/x/meeting".into()));
+        assert_eq!(text, seeded);
     }
 
     #[test]
