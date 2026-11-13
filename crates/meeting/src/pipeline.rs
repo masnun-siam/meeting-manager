@@ -31,6 +31,8 @@ pub struct Pipeline {
     pub claude_timeout: Duration,
     /// `FEATURE_MEETING_CONTEXT`: off, `context.json` and the calendar are never read.
     pub context: bool,
+    /// `FEATURE_DESKTOP_APP`: off, no store is touched.
+    pub desktop: bool,
     /// The secret iCal address. Called only for a context with a meeting ID.
     pub calendar: fn() -> anyhow::Result<Option<String>>,
     pub calendar_policy: Policy,
@@ -548,6 +550,7 @@ mod tests {
             key: || Ok("test-key".into()),
             claude_timeout: Duration::from_secs(10),
             context: false,
+            desktop: false,
             calendar: stored_address,
             calendar_policy: Policy {
                 https_only: false,

@@ -1,45 +1,19 @@
-mod calendar;
-mod calendar_fetch;
-mod config;
-mod context;
-mod context_block;
-mod deepgram;
-mod doctor;
-mod extract;
-mod ical;
-mod import;
-mod install;
-mod jobs;
-mod lock;
-mod logging;
-mod meta;
-mod native;
-mod notify;
-mod pipeline;
-mod plan;
-mod secret;
-mod summarise;
-mod summary_md;
-#[cfg(test)]
-mod test_support;
-mod transcript;
-mod vault;
-
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::bail;
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-use crate::calendar_fetch::{FetchError, Policy};
-use crate::config::Config;
-use crate::deepgram::Deepgram;
-use crate::jobs::JobStore;
-use crate::notify::Outcome;
-use crate::pipeline::{Ending, Pipeline};
+use meeting::Language;
+use meeting::calendar_fetch::{self, FetchError, Policy};
+use meeting::config::{self, Config};
+use meeting::deepgram::Deepgram;
+use meeting::jobs::JobStore;
+use meeting::notify::{self, Outcome};
+use meeting::pipeline::{Ending, Pipeline};
+use meeting::{doctor, import, install, logging, native, secret};
 
 /// Turns meeting recordings into transcripts and Obsidian notes.
 #[derive(Parser, Debug)]
@@ -92,21 +66,20 @@ enum ConfigCommand {
     SetCalendar,
 }
 
-#[derive(ValueEnum, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum Language {
-    Bn,
-    En,
-}
-
-fn context_gate(value: Option<&str>) -> bool {
+fn flag_gate(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
 /// Whether the tool was built with `FEATURE_MEETING_CONTEXT=1`. Read at build time
 /// because Chrome starts the host with launchd's environment, not the shell's.
 pub fn context_enabled() -> bool {
-    context_gate(option_env!("FEATURE_MEETING_CONTEXT"))
+    flag_gate(option_env!("FEATURE_MEETING_CONTEXT"))
+}
+
+/// Whether the tool was built with `FEATURE_DESKTOP_APP=1`. Read at build time
+/// because Chrome starts the host with launchd's environment, not the shell's.
+pub fn desktop_enabled() -> bool {
+    flag_gate(option_env!("FEATURE_DESKTOP_APP"))
 }
 
 /// The CLI for this build. Clap cannot remove a derived subcommand, so with the gate off
@@ -212,6 +185,7 @@ fn run(command: Command, context: bool) -> anyhow::Result<()> {
             manifest: doctor::manifest_path(&config::home()?),
             exe: std::env::current_exe()?,
             context,
+            desktop: desktop_enabled(),
             calendar: secret::calendar_address,
             fetch: fetch_calendar,
         };
@@ -276,6 +250,7 @@ fn run(command: Command, context: bool) -> anyhow::Result<()> {
             manifest: doctor::manifest_path(&config::home()?),
             exe: std::env::current_exe()?,
             context,
+            desktop: desktop_enabled(),
             calendar: secret::calendar_address,
             fetch: fetch_calendar,
         });
@@ -326,6 +301,7 @@ fn process(
         key: secret::deepgram_key,
         claude_timeout: Duration::from_secs(15 * 60),
         context: context_enabled(),
+        desktop: desktop_enabled(),
         calendar: secret::calendar_address,
         calendar_policy: Policy::REAL,
     };
@@ -351,10 +327,22 @@ mod tests {
 
     #[test]
     fn the_gate_is_on_only_for_the_value_1() {
-        assert!(context_gate(Some("1")));
-        for off in [None, Some("0"), Some(""), Some("true")] {
-            assert!(!context_gate(off), "{off:?}");
+        assert!(flag_gate(Some("1")));
+        for off in [None, Some("0"), Some(""), Some("true"), Some("yes")] {
+            assert!(!flag_gate(off), "{off:?}");
         }
+    }
+
+    #[test]
+    fn both_flags_go_through_the_gate() {
+        assert_eq!(
+            context_enabled(),
+            flag_gate(option_env!("FEATURE_MEETING_CONTEXT"))
+        );
+        assert_eq!(
+            desktop_enabled(),
+            flag_gate(option_env!("FEATURE_DESKTOP_APP"))
+        );
     }
 
     #[test]

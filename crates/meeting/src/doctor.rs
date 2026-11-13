@@ -25,6 +25,8 @@ pub struct Env<'a> {
     pub exe: PathBuf,
     /// Whether `FEATURE_MEETING_CONTEXT` was set at build time; off leaves out `calendar`.
     pub context: bool,
+    /// `FEATURE_DESKTOP_APP`: off, no store is touched.
+    pub desktop: bool,
     pub calendar: fn() -> anyhow::Result<Option<String>>,
     pub fetch: fn(&str) -> Result<String, FetchError>,
 }
@@ -205,6 +207,7 @@ mod tests {
             manifest: manifest.into(),
             exe: exe.into(),
             context: false,
+            desktop: false,
             calendar: no_calendar,
             fetch: no_fetch,
         })
@@ -267,6 +270,7 @@ mod tests {
             manifest: nowhere.into(),
             exe: nowhere.into(),
             context: true,
+            desktop: false,
             calendar,
             fetch,
         })
@@ -295,6 +299,7 @@ mod tests {
             manifest,
             exe,
             context: true,
+            desktop: false,
             calendar: stored,
             fetch: feed,
         });
@@ -354,6 +359,7 @@ mod tests {
             manifest,
             exe,
             context: true,
+            desktop: false,
             calendar: stored,
             fetch: offline,
         });
