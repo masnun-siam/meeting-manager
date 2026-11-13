@@ -117,7 +117,12 @@ A file that can't be read counts as missing. After the folders, rows whose recor
 | File | Holds |
 |---|---|
 | `App.tsx` | Sidebar (Upcoming, All notes, Settings) as buttons with `aria-current`, `RecordingBar` above every view, the open note id |
-| `recording/RecordingBar.tsx`, `calendar/Upcoming.tsx`, `notes/list/NotesList.tsx`, `notes/view/NoteView.tsx`, `settings/Settings.tsx` | One placeholder per view; each UI issue owns its folder |
+| `recording/RecordingBar.tsx` | Above every view: Language select, Start recording (ad hoc), the state mark and `role="timer"` "Recorded time" from `elapsed_s`, Pause/Resume, Stop, the saving line, error replies and the status `notice`, with Retry for an `error` notice that has a `folder` (FR-1 to FR-7) |
+| `recording/useRecorderStatus.ts` | Polls `recorder_status` every second; the latest request wins; `setState` applies a command's returned state at once and drops polls already in flight. Also used by the event view |
+| `recording/notices.ts`, `recording/attempt.ts` | The FR-2 permission texts; the notice text is the Rust side's `message`, never rebuilt from `kind`. `attempt` turns an error reply or a rejected call into the text shown |
+| `calendar/Upcoming.tsx`, `calendar/useUpcoming.ts` | Today + 7 days by day ("Today" first), loading, empty, denied (FR-8) and error states; refetches on window focus and on `calendar-changed` (debounced 300 ms, no timer); a failed refetch keeps the last list. A day's `date` is read as a local date (`calendar/format.ts`) |
+| `calendar/EventView.tsx` | One event (FR-10): details, attendees by name with a text response, notes as plain text, Start recording linked to the event (disabled while recording or more than 7 days away, FR-11), up to 20 "Earlier notes" that open in All notes. Focus goes to its heading, and back to the row on Back |
+| `notes/list/NotesList.tsx`, `notes/view/NoteView.tsx`, `settings/Settings.tsx` | One placeholder per view; each UI issue owns its folder |
 
 Conventions are the extension's: colocated `*.test.ts(x)`, CSS modules, Biome. No inline `style` attributes: the content security policy forbids them.
 
