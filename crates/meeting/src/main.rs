@@ -13,7 +13,7 @@ use meeting::deepgram::Deepgram;
 use meeting::jobs::JobStore;
 use meeting::notify::{self, Outcome};
 use meeting::pipeline::{Ending, Pipeline};
-use meeting::{doctor, import, install, logging, native, secret};
+use meeting::{doctor, import, install, logging, native, secret, store};
 
 /// Turns meeting recordings into transcripts and Obsidian notes.
 #[derive(Parser, Debug)]
@@ -183,6 +183,7 @@ fn run(command: Command, context: bool) -> anyhow::Result<()> {
             trash: native::trash_with_system,
             key: secret::deepgram_key,
             manifest: doctor::manifest_path(&config::home()?),
+            store_path: store::default_path(&config::home()?),
             exe: std::env::current_exe()?,
             context,
             desktop: desktop_enabled(),
@@ -237,6 +238,7 @@ fn run(command: Command, context: bool) -> anyhow::Result<()> {
             &config::home()?,
             &std::env::var_os("PATH").unwrap_or_default(),
             &std::env::current_exe()?,
+            desktop_enabled(),
         )?;
         print!("{}", install_next(secret::deepgram_key().is_ok(), context));
         return Ok(());

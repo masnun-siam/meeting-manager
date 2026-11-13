@@ -1,21 +1,21 @@
 # Setup and configuration
 
-Covers: crates/meeting/src/install.rs, crates/meeting/src/config.rs, crates/meeting/src/secret.rs, crates/meeting/src/doctor.rs, crates/meeting/src/main.rs
+Covers: crates/meeting/src/install.rs, crates/meeting/src/config.rs, crates/meeting/src/secret.rs, crates/meeting/src/doctor.rs, crates/meeting/src/spawn.rs, crates/meeting/src/main.rs
 
 First-run order: `meeting install`, `meeting config set-key`, `meeting doctor`. Commands are wired in `run` in `main.rs`. See [../tool.md](../tool.md), [native-messaging.md](native-messaging.md).
 
 ## `meeting install`
 
-`install::install` takes input, output, home, PATH and exe as arguments (no globals).
+`install::install` takes input, output, home, PATH, exe and `desktop` (the `FEATURE_DESKTOP_APP` build flag) as arguments (no globals).
 
-1. Finds `ffmpeg` and `claude` on `PATH` (first executable file; symlinks kept). Missing: error, nothing written.
+1. Finds `ffmpeg` and `claude` on `PATH` (first executable file; symlinks kept). Missing: error, nothing written. With `desktop` on, also resolves the running binary to its canonical path; a path that cannot be resolved is an error, nothing written.
 2. Prompts `Vault path` (default: existing config value; required; must be a directory; leading `~/` expands) and `Vault folder` (default `Meetings` or existing).
 3. Writes the native host manifest atomically (`jobs::write_atomic`).
-4. Writes the config file. An existing `recordings_dir` is kept; otherwise `~/Downloads/Meetings`.
+4. Writes the config file. An existing `recordings_dir` is kept; otherwise `~/Downloads/Meetings`. With `desktop` on, `meeting_path` is the canonical path from step 1 (the manifest keeps the path as given). With it off, `install` never writes the key itself and carries an existing value over unchanged.
 5. Warns if `claude` is not logged in; prints where recordings are read from.
 6. `main.rs` then prints the next step (`config set-key` if no key is stored, else `doctor`; `install_next`). With `FEATURE_MEETING_CONTEXT=1` one more line names `meeting config set-calendar` as optional.
 
-Re-running is safe: existing values become the defaults.
+Re-running is safe: existing values become the defaults, and a second run leaves both files byte-identical. A config written by a desktop build still loads in a build without the flag.
 
 | Artifact | Path |
 |---|---|
@@ -39,6 +39,7 @@ TOML, no secrets (`config::Config`). Paths are absolute because Chrome starts th
 | `ffmpeg_path` | Absolute path to `ffmpeg` | found on `PATH` |
 | `claude_path` | Absolute path to `claude` | found on `PATH` |
 | `extension_id` | Origin the host accepts | `EXTENSION_ID` |
+| `meeting_path` | Absolute, canonical path of the `meeting` binary the desktop app spawns. Optional: written by `install` only in a `FEATURE_DESKTOP_APP=1` build; a config without it loads and the extension works as before | absent |
 
 `Config::load` errors: missing file gives "meeting is not configured; run `meeting install`"; bad TOML gives "invalid config <path>".
 
@@ -72,6 +73,7 @@ Runs `doctor::checks`; prints `✓ name` or `✗ name: fix`; exits non-zero with
 | `claude` | `claude_path` is a file | Install Claude Code, then `meeting install` |
 | `claude_login` | `claude auth status --json` exits 0 with `loggedIn: true` | Run `claude auth login` |
 | `native_host` | Manifest JSON equals `expected_manifest(current exe, config.extension_id)` | Run `meeting install` |
+| `meeting_path` | Only with `FEATURE_DESKTOP_APP=1`. `meeting_path` is set and passes `spawn::check_tool`: absolute, an executable regular file (a symlink to one passes) | Run `meeting install` |
 | `calendar` | Only with `FEATURE_MEETING_CONTEXT=1`. No address stored, or the stored one fetches (20 s, `Policy::REAL`) and parses | Names the cause (`offline`, `rejected (http <status>)`, `not an iCalendar feed`, `failed (<kind>)`, Keychain unreadable) and `meeting config set-calendar`; never the address |
 
-Without a config, the five checks after `deepgram_key` all fail with the install fix; `calendar` does not need the config and still runs. Order is as listed. An unreachable calendar can make `doctor` and `health` take up to 20 s.
+Without a config, the five checks after `deepgram_key` (and `meeting_path`, when present) all fail with the install fix; `calendar` does not need the config and still runs. Order is as listed: `meeting_path` after `native_host`, `calendar` last. A config from before the desktop app has no `meeting_path`, so a desktop build's `doctor` fails that check until `meeting install` is run again. An unreachable calendar can make `doctor` and `health` take up to 20 s.

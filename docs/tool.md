@@ -1,6 +1,6 @@
 # Rust crate: `meeting`
 
-Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (lib.rs, main.rs, calendar.rs, calendar_fetch.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, context_block.rs, ical.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, store.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
+Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (lib.rs, main.rs, calendar.rs, calendar_fetch.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, folders.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, context_block.rs, ical.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, spawn.rs, store.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
 
 One crate (`meeting`, edition 2024) with a library (`src/lib.rs`, linked by the desktop app) and the `meeting` binary (`src/main.rs`). Dependencies: `clap`, `serde`, `serde_json`, `toml`, `anyhow`, `tracing`, `tracing-subscriber`, `ureq` (HTTP), `keyring` (Keychain), `rusqlite` (bundled SQLite with FTS5, for the desktop app's store). External programs: `ffmpeg`, `claude`, `osascript`. See [architecture.md](architecture.md) for how the crate fits with the extension.
 
@@ -33,6 +33,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `meta.rs` | `meta.json`: language, speakers, run history; `recorded_at` from folder name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
 | `lock.rs` | Per-recording PID lock file | `Lock::acquire`, `Lock::path_for`, `is_held` |
 | `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
+| `folders.rs` | Archive and Trash for one recording folder, by recording path: the moves, the `meta.json` and vault note rewrite, job removal and, when given a store, the row update. Returns a `Refusal` (code and message) instead of failing. Called by `native`; the desktop app will call it too | `archive`, `trash`, `Refusal` |
 | `import.rs` | `meeting import`: validate, name and copy a source into a new meeting folder | `import` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
 | `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. Used by `set-calendar` and the `calendar` doctor check through `main::fetch_calendar`, and by `pipeline` with `Pipeline.calendar_policy` | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
@@ -44,13 +45,14 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `logging.rs` | File logger init | `init` |
 | `config.rs` | `config.toml` load/save, `home()`, `check_recording` (the foldered-recording path rule), `RECORDING_EXTENSIONS` | `Config`, `home`, `check_recording`, `RECORDING_EXTENSIONS` |
 | `secret.rs` | Keychain access for the Deepgram key and the calendar address; `meeting config set-calendar` logic | `deepgram_key`, `set_key`, `calendar_address`, `set_calendar`, `read_hidden` |
-| `store.rs` | The desktop app's notes database (`notes.sqlite`: SQLite, WAL, FTS5 search): open and migrate by `PRAGMA user_version`, one row per recording, the rerun merge that keeps edits, the edit rules, search. Nothing calls it yet; see [Notes store](#notes-store) | `Store`, `Row`, `ListRow`, `RunStart`, `RunResult`, `Edit`, `EditError`, `OpenError`, `error_kind`, `shown_name`, `default_path` |
+| `spawn.rs` | Start `meeting process` detached (own process group, null stdio) from an absolute path, and the rule for a usable tool path (absolute, executable regular file). Used by `native` and the `meeting_path` doctor check; the desktop app will call both | `process_detached`, `check_tool` |
+| `store.rs` | The desktop app's notes database (`notes.sqlite`: SQLite, WAL, FTS5 search): open and migrate by `PRAGMA user_version`, one row per recording, the rerun merge that keeps edits, the edit rules, search. Called by `folders` (through `native`) in a desktop build; see [Notes store](#notes-store) | `Store`, `Row`, `ListRow`, `RunStart`, `RunResult`, `Edit`, `EditError`, `OpenError`, `error_kind`, `shown_name`, `default_path` |
 | `install.rs` | `meeting install` | `install` |
-| `doctor.rs` | `meeting doctor` checks (incl. the gated `calendar` check), manifest path | `checks`, `Env`, `manifest_path` |
+| `doctor.rs` | `meeting doctor` checks (incl. the gated `calendar` and `meeting_path` checks), manifest path | `checks`, `Env`, `manifest_path` |
 | `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut); `load` reads and checks the file, logging only the rule | `Context`, `check`, `load` |
 | `context_block.rs` | Pure builder of the fenced, escaped, 64 KiB-capped meeting-context block for Claude; called by `pipeline` | `build`, `Input`, `SEPARATOR` |
 | `ical.rs` | In-house iCalendar reader for the calendar match: unfolding, unescaping, raw times, `VTIMEZONE` offsets, HTML description to text; malformed input is an `Err`, never a panic. `secret` and `doctor` call `parse`; `calendar` reads the events | `parse`, `Calendar`, `Event`, `When`, `Zone`, `Event::plain_description` |
-| `native.rs` | Chrome native messaging host | `Host`, `serve` |
+| `native.rs` | Chrome native messaging host; Archive and Trash look the job up and call `folders`, with the store when `Host.desktop` is on | `Host` (incl. `store_path`), `serve` |
 | `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `mock_raw`, `stall`, `stub`, `envelope`, `temp`, `VALID` |
 
 Processing modules are covered in [features/processing.md](features/processing.md). `native.rs`: [features/native-messaging.md](features/native-messaging.md). `install.rs`, `doctor.rs`, `config.rs`, `secret.rs`: [features/setup.md](features/setup.md).
@@ -64,7 +66,8 @@ flowchart TD
     main --> pipeline & native & install & doctor & notify & logging & secret & deepgram & jobs & config & calendar_fetch
     pipeline --> plan & extract & deepgram & transcript & summarise & summary_md & vault & meta & jobs & lock & config
     pipeline --> context & calendar_fetch & ical & calendar & context_block
-    native --> jobs & lock & doctor & config & vault & meta & context & calendar_fetch
+    native --> jobs & lock & doctor & config & context & calendar_fetch & folders & spawn & store
+    folders --> store & vault & meta & jobs & lock & config
     secret --> calendar_fetch & ical
     context --> summarise
     summarise --> context_block
@@ -77,7 +80,7 @@ flowchart TD
     jobs --> config
     logging --> config
     vault --> calendar & context
-    doctor --> config & calendar_fetch & ical
+    doctor --> config & calendar_fetch & ical & spawn
 ```
 
 - `main.rs` is the only place that builds dependencies (`Config::load()`, `JobStore::default_dir()`, `secret::deepgram_key`, `secret::calendar_address`, `Policy::REAL`, `context_enabled()`, `desktop_enabled()`) and passes them in.
@@ -86,6 +89,7 @@ flowchart TD
 - `ical` imports nothing from the crate; `calendar` imports only `ical`; `pipeline` calls `pick`, and `context_block` and `vault` read its types.
 - `summarise` imports only `context_block::SEPARATOR`; `context_block` reads types from `context` and `calendar` and the clock format from `transcript`.
 - `store` imports only `jobs::now_utc` and `crate::Language`.
+- `spawn` imports only `crate::Language`. `folders` holds every Archive and Trash rule; `native` only maps a job id to its recording and a `Refusal` to a reply.
 - `jobs::write_atomic` is the shared atomic-write helper (also used by `meta`, `pipeline`).
 
 ## Conventions
@@ -94,7 +98,7 @@ flowchart TD
 - Dependency injection by struct fields and fn pointers, not traits: `Pipeline.key: fn() -> Result<String>`, `Pipeline.calendar: fn() -> Result<Option<String>>`, `Pipeline.calendar_policy`, `Deepgram { base_url, retry_delays }`, `native::Host { open, key, ... }`, `doctor::Env`. Tests swap the fields.
 - Subprocesses (`ffmpeg`, `claude`, `osascript`, `ps`) use absolute paths from config or constants, because Chrome starts the host with a bare `PATH`.
 - Writes that readers may see use write-to-`.tmp`-then-rename (`write_atomic`, `extract` uses `.part`, `vault::write_note` uses a dotted `.tmp`). `config.rs` `save_to` writes directly.
-- Feature flags: `FEATURE_MEETING_CONTEXT` (`context_enabled`) and `FEATURE_DESKTOP_APP` (`desktop_enabled`) are read once at build time in `main.rs`, both through `flag_gate` (on only for `1`), and passed to the library as plain `bool` fields (`context`, `desktop`). The library reads no flag itself.
+- Feature flags: `FEATURE_MEETING_CONTEXT` (`context_enabled`) and `FEATURE_DESKTOP_APP` (`desktop_enabled`) are read once at build time in `main.rs`, both through `flag_gate` (on only for `1`), and passed to the library as plain `bool` fields (`context`, `desktop`) or arguments (`install::install`'s `desktop`). The library reads no flag itself. With `desktop` off, `install` writes no `meeting_path`, `doctor` has no `meeting_path` check and the native host opens no store.
 - Logging: `tracing` macros, file only, via `logging::init()`. See Gotchas.
 - Time: UTC strings built by hand (`jobs::format_utc`), no time crate.
 - Not removing a file that is absent: `remove` helpers treat `NotFound` as success (`pipeline.rs`, `lock.rs`).
@@ -102,7 +106,7 @@ flowchart TD
 
 ## Notes store
 
-`store.rs` owns `~/Library/Application Support/meeting-manager/notes.sqlite` (`store::default_path(home)`). It is only to be opened when `FEATURE_DESKTOP_APP` is on; no caller exists yet (the pipeline, the native host and the app will use it).
+`store.rs` owns `~/Library/Application Support/meeting-manager/notes.sqlite` (`store::default_path(home)`). It is only to be opened when `FEATURE_DESKTOP_APP` is on. The native host opens it for Archive and Trash (`Host.store_path`, only when `Host.desktop`) and passes it to `folders`; the pipeline and the app will use it too.
 
 - **Open:** `Store::open` creates the directory and the file with mode 0600 before SQLite sees it (so `-wal` and `-shm` get the same mode), sets a 5 s busy timeout and WAL, then runs the migration steps above the stored `user_version` in one `BEGIN IMMEDIATE` transaction that re-reads the version under the lock. Schema version: 1. SQLite refuses the switch to WAL at once while another connection holds a lock, so `open` repeats the set-up on a busy error for up to 5 s: several processes may open a new file at the same time.
 - **Typed open errors:** `OpenError::Newer { found }` (the file's version is above this build's; the file is not touched) and `OpenError::Corrupt` (not a SQLite database), both downcastable from the `anyhow::Error`. Every other failure (directory, permissions, busy) is a plain error, so a caller never moves a healthy database aside.
@@ -110,7 +114,7 @@ flowchart TD
 - **Runs:** `start_run` upserts the row by path as `processing` and touches no note field. `merge_run` reads and writes under one write lock: an edited title, body or speaker name is kept, unedited ones follow the result, a `None` in the result never erases a stored value, "My notes" never changes, and each edited speaker name is put back into the new unedited title and body.
 - **Edits:** `edit` allows "My notes" in every status (up to 1,048,576 bytes) and title, body and speaker names only on a `done` note. A speaker rename replaces the previous name (`Name (inferred)`, `Name` or the label) as a whole word in title and body, without marking them edited. A whole word is bounded by characters that are not `char::is_alphanumeric`. `clear_edits` drops the edited marks.
 - **Search:** `list(Some(query))` quotes every typed word (operators and column filters are plain text), requires all of them, treats the last as a prefix, and orders by `bm25` then newest. `list` and `earlier` return `ListRow` (no body, transcript, speakers or notes).
-- **Logging:** the store logs nothing. Callers log `store::error_kind(&e)`, a fixed word (`busy`, `read_only`, `corrupt`, `disk_full`, `cannot_open`, `constraint`, `sqlite`, `newer_version`, `io`, `other`), never the error text.
+- **Logging:** the store logs nothing. Callers log `store {op} failed: {kind}` with a fixed operation name (`open`, `moved`, `removed`) and `store::error_kind(&e)`, a fixed word (`busy`, `read_only`, `corrupt`, `disk_full`, `cannot_open`, `constraint`, `sqlite`, `newer_version`, `io`, `other`), never the error text.
 - A `Store` holds one connection; each caller opens its own.
 
 ## Testing
