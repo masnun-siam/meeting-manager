@@ -161,6 +161,7 @@ fn platform(p: Platform) -> &'static str {
         Platform::Zoom => "zoom",
         Platform::Teams => "teams",
         Platform::Other => "other",
+        Platform::Desktop => "desktop",
     }
 }
 
@@ -212,6 +213,7 @@ mod tests {
             participants: Vec::new(),
             speaking: Vec::new(),
             truncated: Vec::new(),
+            calendar_event: None,
         }
     }
 
@@ -335,6 +337,36 @@ DESCRIPTION>>>
 partial: participants
 =====END MEETING CONTEXT====="
         );
+    }
+
+    #[test]
+    fn a_desktop_recording_with_an_event_renders_like_a_calendar_match() {
+        let desktop = Context {
+            platform: Platform::Desktop,
+            url: None,
+            meeting_id: None,
+            tab_title: None,
+            ..context()
+        };
+        let m = meeting();
+        assert_eq!(
+            build(&input(Some(&desktop), Some(&m))).unwrap(),
+            "=====BEGIN MEETING CONTEXT=====
+platform: desktop
+calendar_title: \"Weekly sync\"
+recorded_at: 2026-10-19T14:30
+duration: 01:02:05
+organizer: \"Karim\"
+attendees:
+- \"Rahim\" accepted
+- \"Nadia\" declined
+<<<DESCRIPTION
+Agenda:
+1. Release
+DESCRIPTION>>>
+=====END MEETING CONTEXT====="
+        );
+        assert_eq!(build(&input(Some(&desktop), None)), None);
     }
 
     #[test]

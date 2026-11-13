@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 
 use crate::calendar::{Meeting, Response};
-use crate::{Language, context};
+use crate::{Language, context, store};
 
 /// Values from other people are cut to this many characters (PRD FR-10).
 const MAX_VALUE_CHARS: usize = 300;
@@ -73,9 +73,69 @@ pub fn note_people(
     (title, attendees)
 }
 
+/// The note body: `# <title>`, a blank line, `body_md`, then `## My notes` when there are any
+/// (D28). Without notes it is exactly the body `summary_md::render` gives for that title.
+pub fn compose_body(title: &str, body_md: &str, my_notes: &str) -> String {
+    let mut out = format!("# {title}\n\n{body_md}");
+    if my_notes.is_empty() {
+        return out;
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("\n## My notes\n\n");
+    out.push_str(my_notes);
+    if !my_notes.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Writes `note` to `<vault_dir>/<folder>/YYYY-MM-DD HHMM <title>.md`, replacing the
 /// existing note for the same recording (matched by its `recording` frontmatter).
 pub fn write_note(vault_dir: &Path, folder: &str, note: &Note) -> anyhow::Result<PathBuf> {
+    save(vault_dir, folder, note, &context_lines(note))
+}
+
+/// Writes the note for a store row after an edit in the app. The store does not hold
+/// `meeting_title`, `attendees` and `calendar`, so those lines are copied from the current
+/// note (D29); the name follows the row's title.
+pub fn rewrite_from_row(
+    vault_dir: &Path,
+    folder: &str,
+    row: &store::Row,
+) -> anyhow::Result<PathBuf> {
+    let (Some(title), Some(body_md), Some(language)) = (&row.title, &row.body_md, row.language)
+    else {
+        bail!("this note has no summary yet; run `meeting process` on its recording first");
+    };
+    let kept = find_existing(&vault_dir.join(folder), &row.recording_path)
+        .and_then(|note| fs::read_to_string(note).ok())
+        .map(|text| kept_context_lines(&text))
+        .unwrap_or_default();
+    let speakers: Vec<String> = row.speakers.iter().map(store::shown_name).collect();
+    let note = Note {
+        recorded_at: &row.recorded_at,
+        title,
+        language,
+        speakers: &speakers,
+        recording: &row.recording_path,
+        transcript: &row.recording_path.with_file_name("transcript.md"),
+        body: &compose_body(title, body_md, &row.my_notes),
+        meeting_title: None,
+        attendees: &[],
+        calendar: None,
+    };
+    save(vault_dir, folder, &note, &kept)
+}
+
+/// Places the note file; `context_lines` are its frontmatter lines after `transcript`.
+fn save(
+    vault_dir: &Path,
+    folder: &str,
+    note: &Note,
+    context_lines: &str,
+) -> anyhow::Result<PathBuf> {
     if !vault_dir.is_dir() {
         bail!(
             "vault directory {} does not exist; run `meeting install`",
@@ -104,7 +164,7 @@ pub fn write_note(vault_dir: &Path, folder: &str, note: &Note) -> anyhow::Result
         ".{}.tmp",
         target.file_name().unwrap_or_default().to_string_lossy()
     ));
-    fs::write(&tmp, render(date, note))
+    fs::write(&tmp, render(date, note, context_lines))
         .with_context(|| format!("cannot write {}", tmp.display()))?;
     fs::rename(&tmp, &target).with_context(|| format!("cannot write {}", target.display()))?;
 
@@ -161,19 +221,32 @@ pub fn repoint_note(
     fs::rename(&tmp, &note).with_context(|| format!("cannot write {}", note.display()))
 }
 
-fn render(date: &str, note: &Note) -> String {
+fn render(date: &str, note: &Note, context_lines: &str) -> String {
     let language = match note.language {
         Language::Bn => "bn",
         Language::En => "en",
     };
-    // A JSON string is a valid YAML double-quoted scalar, so no YAML crate is needed.
-    let quote = |s: &str| serde_json::to_string(s).expect("a string always serialises");
     let speakers = note
         .speakers
         .iter()
         .map(|s| quote(s))
         .collect::<Vec<_>>()
         .join(", ");
+    format!(
+        "---\ndate: {date}\nlanguage: {language}\nspeakers: [{speakers}]\nrecording: {}\ntranscript: {}\n{context_lines}---\n\n{}",
+        quote(&note.recording.to_string_lossy()),
+        quote(&note.transcript.to_string_lossy()),
+        note.body
+    )
+}
+
+/// A JSON string is a valid YAML double-quoted scalar, so no YAML crate is needed.
+fn quote(s: &str) -> String {
+    serde_json::to_string(s).expect("a string always serialises")
+}
+
+/// The `meeting_title`, `attendees` and `calendar` frontmatter lines of `note`.
+fn context_lines(note: &Note) -> String {
     let mut extra = String::new();
     if let Some(title) = note.meeting_title.map(clean).filter(|t| !t.is_empty()) {
         extra.push_str(&format!("meeting_title: {}\n", quote(&title)));
@@ -191,12 +264,24 @@ fn render(date: &str, note: &Note) -> String {
     if let Some(outcome) = note.calendar {
         extra.push_str(&format!("calendar: {}\n", quote(outcome.as_str())));
     }
-    format!(
-        "---\ndate: {date}\nlanguage: {language}\nspeakers: [{speakers}]\nrecording: {}\ntranscript: {}\n{extra}---\n\n{}",
-        quote(&note.recording.to_string_lossy()),
-        quote(&note.transcript.to_string_lossy()),
-        note.body
-    )
+    extra
+}
+
+/// The same three lines, verbatim, from the frontmatter of an existing note's `text`.
+fn kept_context_lines(text: &str) -> String {
+    let mut lines = text.lines();
+    if lines.next() != Some("---") {
+        return String::new();
+    }
+    lines
+        .take_while(|line| *line != "---")
+        .filter(|line| {
+            ["meeting_title: ", "attendees: ", "calendar: "]
+                .iter()
+                .any(|key| line.starts_with(key))
+        })
+        .map(|line| format!("{line}\n"))
+        .collect()
 }
 
 /// A value from other people, safe on one frontmatter line: no control characters or line
@@ -209,7 +294,7 @@ fn clean(s: &str) -> String {
 }
 
 /// The `.md` file directly in `dir` whose `recording` frontmatter equals `recording`.
-fn find_existing(dir: &Path, recording: &Path) -> Option<PathBuf> {
+pub fn find_existing(dir: &Path, recording: &Path) -> Option<PathBuf> {
     let want = recording.to_string_lossy();
     let mut notes: Vec<PathBuf> = fs::read_dir(dir)
         .ok()?
@@ -528,7 +613,7 @@ mod tests {
     }
 
     fn frontmatter(n: &Note) -> String {
-        let text = render("2026-10-19", n);
+        let text = render("2026-10-19", n, &context_lines(n));
         let end = text.find("\n---\n").unwrap();
         text[4..end + 1].to_string()
     }
@@ -594,8 +679,8 @@ mod tests {
             ..note("T", "b", &sp, Path::new(REC))
         };
         assert_eq!(
-            render("2026-10-19", &n),
-            render("2026-10-19", &note("T", "b", &sp, Path::new(REC)))
+            context_lines(&n),
+            context_lines(&note("T", "b", &sp, Path::new(REC)))
         );
     }
 
@@ -700,6 +785,144 @@ mod tests {
         assert!(after.contains(&format!(
             "recording: \"/r/A/recording.webm\"\ntranscript: \"/r/A/transcript.md\"\n{EXTRA}---\n"
         )));
+    }
+
+    #[test]
+    fn compose_body_adds_my_notes_only_when_there_are_any() {
+        assert_eq!(compose_body("T", "Body.\n", ""), "# T\n\nBody.\n");
+        assert_eq!(compose_body("T", "Body", ""), "# T\n\nBody");
+        let want = "# T\n\nBody.\n\n## My notes\n\nmine\n";
+        assert_eq!(compose_body("T", "Body.\n", "mine"), want);
+        assert_eq!(compose_body("T", "Body.", "mine\n"), want);
+    }
+
+    fn row(title: &str, recording: &Path) -> store::Row {
+        let speaker = |label: &str, name: Option<&str>, name_edited| store::SpeakerRow {
+            label: label.into(),
+            name: name.map(Into::into),
+            evidence: String::new(),
+            name_edited,
+        };
+        store::Row {
+            id: 1,
+            recording_path: recording.into(),
+            source: store::Source::Browser,
+            recorded_at: "2026-10-19T14:30".into(),
+            duration_s: None,
+            language: Some(Language::Bn),
+            status: store::Status::Done,
+            failed_stage: None,
+            error: None,
+            title: Some(title.into()),
+            title_edited: true,
+            body_md: Some("Body.\n".into()),
+            body_edited: false,
+            speakers: vec![
+                speaker("Speaker 0", Some("Rahim Uddin"), true),
+                speaker("Speaker 1", Some("Karim"), false),
+                speaker("Speaker 2", None, false),
+            ],
+            my_notes: String::new(),
+            transcript: None,
+            event: None,
+            vault_note_path: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn rewrite_from_row_keeps_the_context_lines_and_follows_the_title() {
+        let vault = temp("rewrite-row");
+        let sp = speakers();
+        let people = vec!["Rahim".to_string(), "Karim".to_string()];
+        write_note(
+            &vault,
+            "Meetings",
+            &with_extra(note("Weekly sync", "old", &sp, Path::new(REC)), &people),
+        )
+        .unwrap();
+        let path = rewrite_from_row(&vault, "Meetings", &row("Mine", Path::new(REC))).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let files = md_files(&vault.join("Meetings"));
+        fs::remove_dir_all(&vault).unwrap();
+        assert_eq!(files, ["2026-10-19 1430 Mine.md"]);
+        assert_eq!(
+            text,
+            format!(
+                "---\ndate: 2026-10-19\nlanguage: bn\nspeakers: [\"Rahim Uddin\", \"Karim (inferred)\", \"Speaker 2\"]\nrecording: \"{REC}\"\ntranscript: \"/Users/a/Downloads/Meetings/meeting-2026-10-19_1430/transcript.md\"\n{EXTRA}---\n\n# Mine\n\nBody.\n"
+            )
+        );
+    }
+
+    #[test]
+    fn rewrite_from_row_without_a_note_has_no_context_lines_and_adds_my_notes() {
+        let vault = temp("rewrite-row-new");
+        let with_notes = store::Row {
+            my_notes: "mine".into(),
+            ..row("T", Path::new(REC))
+        };
+        let path = rewrite_from_row(&vault, "Meetings", &with_notes).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        fs::remove_dir_all(&vault).unwrap();
+        assert!(text.contains("transcript.md\"\n---\n\n# T\n"), "{text}");
+        assert!(
+            text.ends_with("# T\n\nBody.\n\n## My notes\n\nmine\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn rewrite_from_row_copies_only_frontmatter_lines() {
+        let vault = temp("rewrite-row-body");
+        let sp = speakers();
+        // A body line that looks like a key is not frontmatter.
+        write_note(
+            &vault,
+            "Meetings",
+            &note("T", "calendar: \"matched\"\n", &sp, Path::new(REC)),
+        )
+        .unwrap();
+        let path = rewrite_from_row(&vault, "Meetings", &row("T", Path::new(REC))).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        fs::remove_dir_all(&vault).unwrap();
+        assert!(!text.contains("calendar:"), "{text}");
+    }
+
+    #[test]
+    fn rewrite_from_row_needs_a_summary_and_a_vault() {
+        let vault = temp("rewrite-row-refused");
+        let base = || row("T", Path::new(REC));
+        for unfinished in [
+            store::Row {
+                title: None,
+                ..base()
+            },
+            store::Row {
+                body_md: None,
+                ..base()
+            },
+            store::Row {
+                language: None,
+                ..base()
+            },
+        ] {
+            let err = rewrite_from_row(&vault, "Meetings", &unfinished).unwrap_err();
+            assert!(err.to_string().contains("no summary yet"), "{err}");
+        }
+        assert!(!vault.join("Meetings").exists());
+        fs::remove_dir_all(&vault).unwrap();
+
+        let missing =
+            std::env::temp_dir().join(format!("meeting-test-{}-nope-row", std::process::id()));
+        let err = rewrite_from_row(&missing, "Meetings", &base()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "vault directory {} does not exist; run `meeting install`",
+                missing.display()
+            )
+        );
     }
 
     fn context(title: Option<&str>, roster: &[&str]) -> context::Context {
