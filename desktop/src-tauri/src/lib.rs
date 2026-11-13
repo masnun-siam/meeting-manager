@@ -319,7 +319,7 @@ mod tests {
     fn the_config_is_locked_down() {
         let config = json_file("tauri.conf.json");
         assert_eq!(config["productName"], "Meeting");
-        assert_eq!(config["identifier"], "com.meeting-manager.desktop");
+        assert_eq!(config["identifier"], "com.masnunsiam.meeting-manager");
         assert_eq!(config["build"]["frontendDist"], "../dist");
         assert_eq!(config["build"]["devUrl"], "http://localhost:1420");
         assert_eq!(config["app"]["windows"], serde_json::json!([]));
