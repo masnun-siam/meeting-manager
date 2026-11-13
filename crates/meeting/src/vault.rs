@@ -172,7 +172,8 @@ fn save(
     if let Some(old) = existing.filter(|old| *old != target) {
         fs::remove_file(&old).with_context(|| format!("cannot remove {}", old.display()))?;
     }
-    tracing::info!("wrote note {}", target.display());
+    // The file name holds the title, so the path is not logged.
+    tracing::info!("wrote note");
     Ok(target)
 }
 
