@@ -16,6 +16,7 @@ Written for agents about to change the code. Start with architecture, then the d
 | [features/recording.md](features/recording.md) | Recording, pause/stop, mic permission, saving, leftover recovery |
 | [features/native-messaging.md](features/native-messaging.md) | Extension ↔ tool protocol, hand-off, Jobs tab |
 | [features/processing.md](features/processing.md) | `meeting process`: ffmpeg, Deepgram, Claude summary, vault note, job states |
+| [features/desktop-calendar.md](features/desktop-calendar.md) | Desktop calendar module: EventKit, upcoming list, filters, ids, `calendar-changed` |
 | [features/setup.md](features/setup.md) | `meeting install`, config file, Deepgram key, `meeting doctor` |
 | [guides/](guides/) | User guides: installation, quickstart (contributing is `CONTRIBUTING.md` at the root) |
 | [prds/](prds/) | Product requirements (owned by `/create-prd`) |
