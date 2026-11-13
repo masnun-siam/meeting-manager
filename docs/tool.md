@@ -27,7 +27,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 |---|---|---|
 | `lib.rs` | Library root: every module below as `pub mod`, `Language` | `Language` |
 | `main.rs` | CLI parsing (gate-dependent via `cli`), wiring, exit code; imports the library as `meeting::` | `Cli`, `Command`, `cli`, `run`, `fetch_calendar`, `context_enabled`, `desktop_enabled` |
-| `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change. Before summarising, with `context` on, loads `context.json`, looks the meeting up in the calendar and builds the context block (`context_extra`, `look_up`); calendar errors never fail the job | `Pipeline` (fields `key`, `context`, `desktop`, `calendar`, `calendar_policy`), `Pipeline::run`, `Ending`, `State` |
+| `pipeline.rs` | Orchestrates one `process` run; saves job and meta on every stage change. Before summarising, with `context` on, loads `context.json`, looks the meeting up in the calendar and builds the context block (`context_extra`, `look_up`); calendar errors never fail the job. With `desktop` on, writes the notes store (`processing` at the start, the outcome at the end), writes the vault note from the merged row and takes `calendar_event` as the calendar match; store errors never fail the job | `Pipeline` (fields `key`, `context`, `desktop`, `store_path`, `calendar`, `calendar_policy`), `Pipeline::run`, `Ending`, `State`, `Track` |
 | `plan.rs` | Pure function: which stages to skip, from file mtimes | `plan`, `Plan`, `Files` |
 | `jobs.rs` | Job file store, `Stage` enum, atomic write, UTC time and ids | `Job`, `JobStore`, `Stage`, `write_atomic`, `now_utc`, `new_job_id` |
 | `meta.rs` | `meta.json`: language, speakers, run history; `recorded_at` from folder name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
@@ -37,19 +37,19 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `import.rs` | `meeting import`: validate, name and copy a source into a new meeting folder | `import` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
 | `calendar_fetch.rs` | Download the secret iCalendar address under `Policy` (https only, ≤3 https redirects, 20 s, 50 MiB); errors are kinds only, never the address. Used by `set-calendar` and the `calendar` doctor check through `main::fetch_calendar`, and by `pipeline` with `Pipeline.calendar_policy` | `fetch`, `Policy`, `Policy::REAL`, `FetchError` |
-| `transcript.rs` | Parse Deepgram JSON, render `transcript.md` | `parse`, `render`, `has_speech`, `hh_mm_ss`, `Transcript`, `Utterance` |
+| `transcript.rs` | Parse Deepgram JSON, render `transcript.md`; `utterance_lines` gives the store's copy (no header) | `parse`, `render`, `has_speech`, `utterance_lines`, `hh_mm_ss`, `Transcript`, `Utterance` |
 | `summarise.rs` | Run headless `claude` (optionally after a context block), validate structured output | `summarise`, `Summary`, `SCHEMA`, `SYSTEM_PROMPT` |
-| `summary_md.rs` | Render `Summary` to Markdown | `render`, `speaker_names` |
-| `vault.rs` | Write the Obsidian note | `write_note`, `Note` |
+| `summary_md.rs` | Render `Summary` to Markdown; `body_without_title` is the store's `body_md` | `render`, `speaker_names`, `body_without_title` |
+| `vault.rs` | Write the Obsidian note: from a run (`write_note`) or from a store row after an app edit (`rewrite_from_row`, which copies the note's `meeting_title`, `attendees` and `calendar` lines); `compose_body` joins title, body and "My notes" | `write_note`, `Note`, `compose_body`, `rewrite_from_row`, `find_existing`, `repoint_note`, `note_people` |
 | `notify.rs` | macOS notification via `osascript` | `notify`, `message`, `Outcome` |
 | `logging.rs` | File logger init | `init` |
 | `config.rs` | `config.toml` load/save, `home()`, `check_recording` (the foldered-recording path rule), `RECORDING_EXTENSIONS` | `Config`, `home`, `check_recording`, `RECORDING_EXTENSIONS` |
 | `secret.rs` | Keychain access for the Deepgram key and the calendar address; `meeting config set-calendar` logic | `deepgram_key`, `set_key`, `calendar_address`, `set_calendar`, `read_hidden` |
 | `spawn.rs` | Start `meeting process` detached (own process group, null stdio) from an absolute path, and the rule for a usable tool path (absolute, executable regular file). Used by `native` and the `meeting_path` doctor check; the desktop app will call both | `process_detached`, `check_tool` |
-| `store.rs` | The desktop app's notes database (`notes.sqlite`: SQLite, WAL, FTS5 search): open and migrate by `PRAGMA user_version`, one row per recording, the rerun merge that keeps edits, the edit rules, search. Called by `folders` (through `native`) in a desktop build; see [Notes store](#notes-store) | `Store`, `Row`, `ListRow`, `RunStart`, `RunResult`, `Edit`, `EditError`, `OpenError`, `error_kind`, `shown_name`, `default_path` |
+| `store.rs` | The desktop app's notes database (`notes.sqlite`: SQLite, WAL, FTS5 search): open and migrate by `PRAGMA user_version`, one row per recording, the rerun merge that keeps edits, the edit rules, search. Called by `pipeline` and by `folders` (through `native`) in a desktop build; see [Notes store](#notes-store) | `Store`, `Row`, `ListRow`, `RunStart`, `RunResult`, `Edit`, `EditError`, `OpenError`, `error_kind`, `shown_name`, `default_path` |
 | `install.rs` | `meeting install` | `install` |
 | `doctor.rs` | `meeting doctor` checks (incl. the gated `calendar` and `meeting_path` checks), manifest path | `checks`, `Env`, `manifest_path` |
-| `context.rs` | `context.json`: the extension's meeting context, checked against the PRD limits table (reject or cut); `load` reads and checks the file, logging only the rule | `Context`, `check`, `load` |
+| `context.rs` | `context.json`: the extension's or the desktop app's meeting context (`platform: "desktop"`, optional `calendar_event`), checked against the PRD limits tables (reject or cut); a rejected `calendar_event` drops only the event; `load` reads and checks the file, logging only the rule | `Context`, `CalendarEvent`, `EventAttendee`, `Platform`, `check`, `load` |
 | `context_block.rs` | Pure builder of the fenced, escaped, 64 KiB-capped meeting-context block for Claude; called by `pipeline` | `build`, `Input`, `SEPARATOR` |
 | `ical.rs` | In-house iCalendar reader for the calendar match: unfolding, unescaping, raw times, `VTIMEZONE` offsets, HTML description to text; malformed input is an `Err`, never a panic. `secret` and `doctor` call `parse`; `calendar` reads the events | `parse`, `Calendar`, `Event`, `When`, `Zone`, `Event::plain_description` |
 | `native.rs` | Chrome native messaging host; Archive and Trash look the job up and call `folders`, with the store when `Host.desktop` is on | `Host` (incl. `store_path`), `serve` |
@@ -65,7 +65,9 @@ Arrows are imports in non-test code: `crate::` inside the library, `meeting::` f
 flowchart TD
     main --> pipeline & native & install & doctor & notify & logging & secret & deepgram & jobs & config & calendar_fetch
     pipeline --> plan & extract & deepgram & transcript & summarise & summary_md & vault & meta & jobs & lock & config
-    pipeline --> context & calendar_fetch & ical & calendar & context_block
+    pipeline --> context & calendar_fetch & ical & calendar & context_block & store
+    vault --> store & calendar & context
+    context --> calendar
     native --> jobs & lock & doctor & config & context & calendar_fetch & folders & spawn & store
     folders --> store & vault & meta & jobs & lock & config
     secret --> calendar_fetch & ical
