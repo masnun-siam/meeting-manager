@@ -1,0 +1,42 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 160px;
+  padding: 8px;
+  border-right: 1px solid #d0d0d0;
+}
+
+.entry {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.entry[aria-current="page"] {
+  background: #e3edfd;
+  font-weight: 600;
+}
+
+.view {
+  flex: 1;
+  padding: 16px;
+  overflow: auto;
+}
