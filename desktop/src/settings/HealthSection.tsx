@@ -31,7 +31,11 @@ export function HealthSection() {
     <section aria-labelledby="settings-health" className={styles.section}>
       <h3 id="settings-health">Health</h3>
       {view.kind === 'loading' && <p>Checking…</p>}
-      {view.kind === 'failed' && <p className={styles.problem}>{view.message}</p>}
+      {view.kind === 'failed' && (
+        <p role="alert" className={styles.problem}>
+          {view.message}
+        </p>
+      )}
       {view.kind === 'checks' && view.checks.length === 0 && <p>No checks reported</p>}
       {view.kind === 'checks' && view.checks.length > 0 && (
         <ul aria-label="Health checks" className={styles.plain}>

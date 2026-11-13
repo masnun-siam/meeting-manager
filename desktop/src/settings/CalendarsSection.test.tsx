@@ -113,6 +113,28 @@ describe('CalendarsSection', () => {
     expect(box(/Home/)).not.toBeChecked();
   });
 
+  it('reverts to what the app last saved when a queued change fails after an earlier one succeeded', async () => {
+    storeOf(work, home);
+    const first = deferred<unknown>();
+    const { user } = setup();
+    await screen.findByRole('checkbox', { name: /Work/ });
+    const store = api.setHiddenCalendars.getMockImplementation();
+    api.setHiddenCalendars
+      .mockImplementationOnce(async (req) => {
+        await first.promise;
+        return store?.(req);
+      })
+      .mockResolvedValueOnce({ ok: false, code: 'store_unavailable', message: 'disk full' });
+
+    await user.click(box(/Work/));
+    await user.click(box(/Home/));
+    await act(async () => first.resolve(undefined));
+
+    expect(await screen.findByText('disk full')).toBeInTheDocument();
+    expect(box(/Work/)).not.toBeChecked();
+    expect(box(/Home/)).toBeChecked();
+  });
+
   it('reverts and explains a rejected call', async () => {
     const { user } = setup();
     await screen.findByRole('checkbox', { name: /Work/ });

@@ -67,7 +67,12 @@ export function CalendarsSection() {
     const request = ++latest.current;
     queue.current = queue.current.then(async () => {
       const reply = await attempt(() => setHiddenCalendars({ ids: [...next] }));
-      if (!active.current || request !== latest.current) return;
+      if (!active.current) return;
+      if (request !== latest.current) {
+        // A newer change is queued; remember what the app saved so a failure of that one reverts to it.
+        if (reply.ok) confirmed.current = hiddenOf(reply.reply.calendars);
+        return;
+      }
       if (reply.ok) {
         apply(reply.reply.calendars);
       } else {
@@ -83,7 +88,11 @@ export function CalendarsSection() {
       {view.kind === 'loading' && <p>Loading calendars…</p>}
       {view.kind === 'denied' && <p>{CALENDAR_DENIED}</p>}
       {view.kind === 'not_asked' && <p>Calendars appear here once you allow access in Upcoming.</p>}
-      {view.kind === 'failed' && <p className={styles.problem}>{view.message}</p>}
+      {view.kind === 'failed' && (
+        <p role="alert" className={styles.problem}>
+          {view.message}
+        </p>
+      )}
       {view.kind === 'list' && view.calendars.length === 0 && <p>No calendars found</p>}
       {view.kind === 'list' && view.calendars.length > 0 && (
         <ul aria-label="Calendars" className={styles.plain}>

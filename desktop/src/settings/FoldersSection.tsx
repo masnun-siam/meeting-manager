@@ -9,7 +9,11 @@ export function FoldersSection({ view }: { view: InfoView }) {
     <section aria-labelledby="settings-folders" className={styles.section}>
       <h3 id="settings-folders">Folders</h3>
       {view.kind === 'loading' && <p>Loading folders…</p>}
-      {view.kind === 'failed' && <p className={styles.problem}>{view.message}</p>}
+      {view.kind === 'failed' && (
+        <p role="alert" className={styles.problem}>
+          {view.message}
+        </p>
+      )}
       {view.kind === 'info' && (
         <>
           <dl className={styles.folders}>
