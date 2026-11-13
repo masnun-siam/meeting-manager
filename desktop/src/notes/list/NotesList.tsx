@@ -45,11 +45,7 @@ export function NotesList({ onOpen }: { onOpen: (id: number) => void }) {
         value={input}
         onChange={(event) => setInput(event.target.value)}
       />
-      {progress?.running && (
-        <p role="status">
-          Loading meetings… {progress.done} of {progress.total}
-        </p>
-      )}
+      <p role="status">{progress?.running && `Loading meetings… ${progress.done} of ${progress.total}`}</p>
       {view.kind === 'loading' && <p>Loading meetings…</p>}
       {view.kind === 'unavailable' && (
         <div role="alert" className={styles.problem}>

@@ -341,6 +341,28 @@ describe('NotesList', () => {
       expect(api.rescanStatus).toHaveBeenCalledTimes(3);
     });
 
+    it('ignores a late backfill status that a newer one already answered', async () => {
+      const late = deferred<unknown>();
+      api.rescanStatus
+        .mockResolvedValueOnce({ ok: true, running: true, done: 1, total: 4 })
+        .mockReturnValueOnce(late.promise)
+        .mockResolvedValue(idle);
+      setup();
+      expect(await screen.findByText('Loading meetings… 1 of 4')).toBeInTheDocument();
+      await tick(1000);
+      await tick(1000);
+      await screen.findByText(/No meetings yet/);
+      expect(screen.queryByText(/of 4/)).not.toBeInTheDocument();
+      const lists = api.notesList.mock.calls.length;
+
+      await act(async () => late.resolve({ ok: true, running: true, done: 2, total: 4 }));
+      await tick(3000);
+
+      expect(screen.queryByText(/of 4/)).not.toBeInTheDocument();
+      expect(api.rescanStatus).toHaveBeenCalledTimes(3);
+      expect(api.notesList.mock.calls.length).toBe(lists + 1);
+    });
+
     it('does not poll the backfill when it is not running', async () => {
       setup();
       await screen.findByText(/No meetings yet/);
