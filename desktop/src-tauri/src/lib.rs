@@ -92,8 +92,17 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
 /// What startup does: the state first, so no command can run without it, then the window, then
 /// the hooks.
 fn launch<R: Runtime>(app: &AppHandle<R>, mode: Mode) -> anyhow::Result<()> {
+    launch_in(app, mode, env::Env::new)
+}
+
+/// `launch` with the `Env` from `new_env`, so tests keep every command off the real home.
+fn launch_in<R: Runtime>(
+    app: &AppHandle<R>,
+    mode: Mode,
+    new_env: impl FnOnce() -> anyhow::Result<env::Env>,
+) -> anyhow::Result<()> {
     if mode == Mode::On {
-        let env = env::Env::new()?;
+        let env = new_env()?;
         app.manage(App {
             recorder: recorder::Recorder::new(&env),
             calendar: calendar::Calendar::new(&env),
@@ -159,7 +168,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::ops::Deref;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use serde_json::Value;
     use tauri::ipc::{CallbackFn, InvokeBody};
@@ -196,14 +207,43 @@ mod tests {
         "settings_info",
     ];
 
-    /// A started app on the mock runtime. The mock runtime runs `setup` only inside its event
-    /// loop, so the test does what `setup` does: call `launch`.
-    fn started(mode: Mode) -> tauri::App<MockRuntime> {
+    /// A started app on the mock runtime, its `Env` in a temp home removed on drop: invoking a
+    /// command must never touch the real store, vault or recordings.
+    struct Started {
+        app: tauri::App<MockRuntime>,
+        home: PathBuf,
+    }
+
+    impl Deref for Started {
+        type Target = tauri::App<MockRuntime>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.app
+        }
+    }
+
+    impl Drop for Started {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.home);
+        }
+    }
+
+    /// The mock runtime runs `setup` only inside its event loop, so the test does what `setup`
+    /// does: call `launch`, here with a temp home.
+    fn started(mode: Mode) -> Started {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let home = std::env::temp_dir().join(format!(
+            "meeting-desktop-lib-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&home).unwrap();
         let app = configure(mock_builder(), mode)
             .build(mock_context(noop_assets()))
             .unwrap();
-        launch(app.handle(), mode).unwrap();
-        app
+        let env_home = home.clone();
+        launch_in(app.handle(), mode, || Ok(env::Env::at(env_home))).unwrap();
+        Started { app, home }
     }
 
     fn invoke(app: &tauri::App<MockRuntime>, window: &str, command: &str) -> Result<Value, Value> {
@@ -281,7 +321,7 @@ mod tests {
         // Tauri serves `index.html` as the root of the app's origin.
         let url = app.get_webview_window("main").unwrap().url().unwrap();
         assert!(matches!(url.path(), "" | "/" | "/index.html"), "{url}");
-        assert!(app.try_state::<App>().is_some());
+        assert_eq!(app.state::<App>().env.home, app.home);
         for command in COMMANDS {
             // Only that it is registered: the issue that owns a command changes what it answers.
             let reply = invoke(&app, "main", command);
