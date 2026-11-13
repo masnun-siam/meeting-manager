@@ -1,6 +1,6 @@
 # PRD — Meeting desktop app
 
-**Status:** In review · **Date:** 2026-11-13 · **Slug:** `desktop-app` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager (private)
+**Status:** Approved · **Date:** 2026-11-13 · **Slug:** `desktop-app` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager (private)
 
 This document is the source of truth for the feature: every issue is derived from it, and a decision that is not written here has not been made. It adds to [meeting-recorder.md](meeting-recorder.md), [recording-folders.md](recording-folders.md), [recording-import.md](recording-import.md) and [meeting-context.md](meeting-context.md) without changing their behaviour while `FEATURE_DESKTOP_APP` is off; with it on, the changes listed under "Changes to existing behaviour" apply and win over those PRDs.
 
@@ -326,7 +326,7 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 
 ## Epics
 
-- **E1 Meeting desktop app** — covers FR-1 to FR-23. Issue: —
+- **E1 Meeting desktop app** — covers FR-1 to FR-23. Issue: #134
 
 ## Decisions
 
@@ -357,7 +357,7 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 - 2026-11-13 **D24 The app lives in `desktop/`; its Rust side is a second workspace member that links a new library target of the `meeting` crate; `meeting install` records its own absolute path as `meeting_path` in `config.toml`, and the app spawns that binary.** One binary runs the pipeline, so the app and the extension never run different builds of it. Decided by: Siam, "desktop/ + meeting_path in config (Recommended)".
 - 2026-11-13 **D25 Markdown is rendered on the Rust side with `pulldown-cmark`, raw HTML disabled.** Nothing from a transcript or summary can inject script; edit mode is a plain markdown textarea. Adds `pulldown-cmark` to D22's set. Decided by: Siam, "Render in Rust, add pulldown-cmark (Recommended)".
 - 2026-11-13 **D26 "My notes" is written into the vault note as a `## My notes` section when not empty.** Obsidian search finds it too. Decided by: Siam, "Yes, as a '## My notes' section (Recommended)".
-- 2026-11-13 **D27 Smaller rules set while writing, proposed by Claude for the owner's review in this PRD's review:** macOS 14.4 minimum (Core Audio process taps); sleep, quit (after confirm) and capture failure stop and save; AAC mono 64 kbps for `recording.m4a`; store file mode 0600 and FileVault as encryption at rest, like the existing files; "My notes" capped at 1 MB; at most 20 earlier notes; a corrupt store is moved aside and rebuilt by Rescan; Rescan drops rows whose recording no longer exists; single app instance; the app polls the store and job files every 3 s while visible; occurrence and series identifiers from EventKit's event identifier and external identifier. Team proposal, no source. Decided by: Siam (to confirm in review).
+- 2026-11-13 **D27 Smaller rules set while writing, proposed by Claude for the owner's review in this PRD's review:** macOS 14.4 minimum (Core Audio process taps); sleep, quit (after confirm) and capture failure stop and save; AAC mono 64 kbps for `recording.m4a`; store file mode 0600 and FileVault as encryption at rest, like the existing files; "My notes" capped at 1 MB; at most 20 earlier notes; a corrupt store is moved aside and rebuilt by Rescan; Rescan drops rows whose recording no longer exists; single app instance; the app polls the store and job files every 3 s while visible; occurrence and series identifiers from EventKit's event identifier and external identifier. Team proposal, no source. Confirmed by: Siam on approval, "approve it".
 
 ## Open questions
 
