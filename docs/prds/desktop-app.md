@@ -237,6 +237,7 @@ No change to the native-messaging protocol or the extension.
 | `note_rerun` | `{id, replace_edits: bool}` | `{ok}` | `unknown_note`, `already_processing`, `tool_missing`, `recording_missing`, `store_unavailable` (D41) |
 | `note_archive` / `note_trash` | `{id}` | `{ok}` | `already_processing`, `invalid_path`, `archive_failed` / `trash_failed` (same rules as the host), `unknown_note`, `store_unavailable` (D41) |
 | `note_open` | `{id, what: obsidian\|folder}` | `{ok}` | `missing_file`, `open_failed`, `store_unavailable` (D41) |
+| `note_open_link` | `{url}` | `{ok}` | `invalid_link` (scheme not `http`, `https` or `mailto`), `open_failed` (D43) |
 | `rescan` | — | `{started: true}`; progress through `rescan_status` → `{running, done, total}`; a broken store is moved aside and rebuilt (D33) | `not_configured` (no readable `config.toml`) |
 | `health` | — | `{checks: [{name, ok, fix}]}` (as `meeting doctor`) | — |
 | `settings_info` (D33) | — | `{recordings_dir, vault_dir, vault_folder, store: {ok: true} \| {ok: false, message}}` | `not_configured` |
@@ -375,6 +376,7 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 - 2026-11-13 **D40 Backfill reads a valid `calendar_event` from `context.json`** (same checks as the pipeline) to fill the row's `event`, so a rebuilt store keeps "Earlier notes". Decided by: Siam during issue refinement, "Yes, read it (Recommended)".
 - 2026-11-13 **D41 More error codes:** `store_unavailable` on `note_update`, `note_rerun`, `note_open`, `note_archive`, `note_trash`; `unknown_note` on `note_archive`, `note_trash`; `archive_failed`, `trash_failed` passed through from the host's rules; `open_failed` when `/usr/bin/open` fails. Decided by: Siam during issue refinement, "Add them (Recommended)".
 - 2026-11-14 **D42 Calendar error codes:** `calendar_failed` on `calendar_events` and `calendar_event` when Calendar cannot be read (the EventKit worker stopped or the command failed; message "Calendar could not be read; quit and reopen Meeting"), and `store_unavailable` on `set_hidden_calendars` when the store cannot be written, so a hidden-calendar choice never silently fails to stick. `calendars` keeps no error code (`[]` without access). Decided by: Siam during implementation of #142, "Add two codes (Recommended)".
+- 2026-11-14 **D43 Summary links open in the system browser through the app's own command, and the window never navigates away.** A click on an `http`, `https` or `mailto` link in the note view's summary calls `note_open_link {url}`; the Rust side checks the scheme again and opens it with the existing `/usr/bin/open` opener (argument list, no shell), so no new crate or plugin (D22 unchanged). The main webview gets an `on_navigation` guard (built into `tauri`) that refuses any URL outside the app's own origin, so no link, form or script can load a remote page in the window. Rejected: `tauri-plugin-opener` (a new dependency and a plugin exposed to the webview) and inert links (a summary's links would be useless). Decided by: Siam while filing #164 from #147, "Own command + guard (Recommended)".
 
 ## Open questions
 
@@ -387,6 +389,7 @@ None.
 - 2026-11-13: D32–D35 added during issue refinement (two crates; API additions in the table; Bengali tokenizer; rename survives reruns). Affect #136, #137, #139, #141, #142, #143, #144, #145, #146, #147, #148.
 - 2026-11-13: D36–D41 added during issue refinement (audio permission detection, Open in Obsidian, health via `meeting doctor`, My notes on unfinished notes, backfill event link, error codes in the table). Affect #140, #141, #143, #144, #145, #147.
 - 2026-11-14: D42 added during implementation of #142 (`calendar_failed` on `calendar_events`/`calendar_event`, `store_unavailable` on `set_hidden_calendars`). Affects #142, #145, #148.
+- 2026-11-14: D43 added while filing #164 from #147 (summary links open through `note_open_link`; `on_navigation` guard; API table row). Affects #147, #164.
 
 ## Related
 
