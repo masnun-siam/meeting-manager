@@ -21,6 +21,7 @@ Rust, from the repo root (single-crate workspace):
 |---|---|
 | `cargo build` | Builds `target/debug/meeting` |
 | `FEATURE_MEETING_CONTEXT=1 cargo build` | Turns the meeting-context feature on (build-time; unset is off, Cargo rebuilds when it changes); see `FLAGS.md` |
+| `FEATURE_DESKTOP_APP=1 cargo build` | Turns the desktop-app feature on (build-time; unset is off); see `FLAGS.md` |
 | `cargo test` | Unit tests (in-module `#[cfg(test)]`) plus `crates/meeting/tests/*.rs` integration tests |
 | `cargo fmt --all --check` | Format gate |
 | `cargo clippy --all-targets -- -D warnings` | Lint gate; any warning fails |

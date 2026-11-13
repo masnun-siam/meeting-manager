@@ -68,6 +68,8 @@ pub struct Host {
     pub exe: PathBuf,
     /// Whether `FEATURE_MEETING_CONTEXT` was set at build time; off ignores `context`.
     pub context: bool,
+    /// `FEATURE_DESKTOP_APP`: off, no store is touched.
+    pub desktop: bool,
     pub calendar: fn() -> anyhow::Result<Option<String>>,
     pub fetch: fn(&str) -> Result<String, FetchError>,
 }
@@ -210,6 +212,7 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
             manifest: host.manifest.clone(),
             exe: host.exe.clone(),
             context: host.context,
+            desktop: host.desktop,
             calendar: host.calendar,
             fetch: host.fetch,
         })})),
@@ -535,6 +538,7 @@ mod tests {
             manifest: dir.join("host.json"),
             exe: dir.join("meeting"),
             context: true,
+            desktop: false,
             calendar: || Ok(None),
             fetch: |_| panic!("no calendar is stored"),
         }
