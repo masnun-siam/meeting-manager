@@ -1,3 +1,64 @@
 .upcoming {
   display: block;
 }
+
+.problem {
+  color: #c5221f;
+}
+
+.day {
+  margin-top: 16px;
+}
+
+.dayHeading {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: #f1f3f4;
+}
+
+.row:focus-visible {
+  outline: 2px solid #1a73e8;
+  outline-offset: 1px;
+}
+
+.eventTitle {
+  font-weight: 600;
+}
+
+.meta {
+  color: #3c4043;
+  font-variant-numeric: tabular-nums;
+}
+
+.marker {
+  padding: 0 6px;
+  border: 1px solid #5f6368;
+  border-radius: 8px;
+  color: #3c4043;
+  font-size: 12px;
+}

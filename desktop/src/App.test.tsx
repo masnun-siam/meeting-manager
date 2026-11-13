@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,6 +46,13 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
+    // The recording bar comes first: its Language select and Start button, then the sidebar.
+    const start = screen.getByRole('button', { name: 'Start recording' });
+    await waitFor(() => expect(start).toBeEnabled());
+    await user.tab();
+    expect(screen.getByRole('combobox', { name: 'Language' })).toHaveFocus();
+    await user.tab();
+    expect(start).toHaveFocus();
     await user.tab();
     expect(entry('Upcoming')).toHaveFocus();
     await user.tab();
