@@ -587,7 +587,8 @@ fn start_tracking(
     Some(run)
 }
 
-fn source_of(recording: &Path, ctx: Option<&context::Context>) -> Source {
+/// The row's `source` by the desktop PRD's rule; the app's backfill applies the same one.
+pub fn source_of(recording: &Path, ctx: Option<&context::Context>) -> Source {
     if recording.extension().is_some_and(|ext| ext == "webm") {
         Source::Browser
     } else if ctx.is_some_and(|c| c.platform == context::Platform::Desktop) {
@@ -597,7 +598,8 @@ fn source_of(recording: &Path, ctx: Option<&context::Context>) -> Source {
     }
 }
 
-fn event_link(event: &context::CalendarEvent) -> EventLink {
+/// The store's link to the calendar event; also used by the app's backfill (D40).
+pub fn event_link(event: &context::CalendarEvent) -> EventLink {
     EventLink {
         occurrence_id: event.occurrence_id.clone(),
         series_id: event.series_id.clone(),
