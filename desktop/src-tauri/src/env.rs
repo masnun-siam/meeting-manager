@@ -74,6 +74,7 @@ mod tests {
             ffmpeg_path: "/opt/homebrew/bin/ffmpeg".into(),
             claude_path: "/usr/local/bin/claude".into(),
             extension_id: "abcdefghijklmnopabcdefghijklmnop".into(),
+            meeting_path: None,
         };
         config.save_to(&env.config_path()).unwrap();
     }
