@@ -1,6 +1,6 @@
 # Architecture
 
-Covers: Cargo.toml, crates/meeting/, extension/, .github/workflows/
+Covers: Cargo.toml, crates/meeting/, extension/, desktop/, .github/workflows/
 
 A Chrome extension records a meeting tab plus the mic; a local Rust CLI (`meeting`) transcribes it with Deepgram, summarises it with headless Claude Code and writes a note into an Obsidian vault. macOS only. No server: everything runs on the user's machine.
 
@@ -10,6 +10,7 @@ A Chrome extension records a meeting tab plus the mic; a local Rust CLI (`meetin
 |---|---|---|
 | Chrome MV3 extension (React 19, Vite, CRXJS) | `extension/` | [extension.md](extension.md) |
 | Rust CLI and native-messaging host `meeting` | `crates/meeting/` | [tool.md](tool.md) |
+| Desktop app `Meeting` (Tauri 2, React 19), a scaffold behind `FEATURE_DESKTOP_APP`: it links the `meeting` library and does nothing yet | `desktop/` | [desktop.md](desktop.md) |
 
 ```mermaid
 flowchart LR

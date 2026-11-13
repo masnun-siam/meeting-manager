@@ -1,0 +1,27 @@
+name: desktop
+
+on:
+  push:
+    branches: [main]
+    paths: ["desktop/**", .github/workflows/desktop.yml]
+  pull_request:
+    paths: ["desktop/**", .github/workflows/desktop.yml]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npx biome ci .
+      - run: npm test

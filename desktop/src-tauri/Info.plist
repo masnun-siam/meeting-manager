@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Meeting records your microphone during a call so it can transcribe and summarise the meeting.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Meeting records the audio of your calls so it can transcribe and summarise the meeting.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Meeting reads your calendar to list upcoming events and link a recording to its event.</string>
+</dict>
+</plist>
