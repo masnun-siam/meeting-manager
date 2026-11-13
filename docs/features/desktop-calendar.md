@@ -34,10 +34,10 @@ Tests swap in a fake `EventSource` (`Calendar::with(&env, source)`). In this cra
 | Command | Reply | Errors |
 |---|---|---|
 | `calendar_status` | `{access: granted\|denied\|not_asked}`; never prompts | none |
-| `calendar_events` | `{days: [{date, events: [{occurrence_id, series_id, title, start, end, calendar, has_notes}]}]}`. When `not_asked` it prompts once and waits | `calendar_denied`, `calendar_failed` |
-| `calendar_event {occurrence_id}` | `{event: <context.json calendar_event>, earlier: [{id, title, recorded_at}]}`; `earlier` from `Store::earlier(series_id, None, 20)`, title falling back to the meeting folder's name; a store that cannot be opened gives `earlier: []` | `calendar_denied`, `unknown_event`, `calendar_failed` |
+| `calendar_events` | `{days: [{date, events: [{occurrence_id, series_id, title, start, end, calendar, has_notes}]}]}`. When `not_asked` it prompts once and waits | `calendar_denied`, `calendar_failed` (D42) |
+| `calendar_event {occurrence_id}` | `{event: <context.json calendar_event>, earlier: [{id, title, recorded_at}]}`; `earlier` from `Store::earlier(series_id, None, 20)`, title falling back to the meeting folder's name; a store that cannot be opened gives `earlier: []` | `calendar_denied`, `unknown_event`, `calendar_failed` (D42) |
 | `calendars` | `{calendars: [{id, title, account, hidden}]}` sorted by account then title; `[]` when access is not granted | none |
-| `set_hidden_calendars {ids}` | Stores `ids` as a JSON list in the store setting `hidden_calendars` (unknown ids kept), replies like `calendars` | `store_unavailable` |
+| `set_hidden_calendars {ids}` | Stores `ids` as a JSON list in the store setting `hidden_calendars` (unknown ids kept), replies like `calendars` | `store_unavailable` (D42) |
 
 Every command runs on a blocking thread: EventKit calls block and must not run on the main thread.
 
