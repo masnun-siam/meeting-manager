@@ -1,6 +1,6 @@
 # Meeting Manager
 
-Chrome MV3 extension (`extension/`, React 19 + Vite/CRXJS, strict TS) records a meeting tab plus mic; the Rust CLI and native-messaging host `meeting` (`crates/meeting/`) transcribes with Deepgram, summarises with `claude -p` and writes an Obsidian note. macOS + Chrome only, no server. User-facing overview: [README.md](README.md).
+Chrome MV3 extension (`extension/`, React 19 + Vite/CRXJS, strict TS) records a meeting tab plus mic; the Rust CLI and native-messaging host `meeting` (`crates/meeting/`) transcribes with Deepgram, summarises with `claude -p` and writes an Obsidian note. The desktop app (`desktop/`, Tauri 2: React 19 UI in `desktop/src/`, Rust side in `desktop/src-tauri/` linking the `meeting` library) is a scaffold behind `FEATURE_DESKTOP_APP`. macOS + Chrome only, no server. User-facing overview: [README.md](README.md).
 
 ## Read first
 
@@ -13,8 +13,9 @@ Chrome MV3 extension (`extension/`, React 19 + Vite/CRXJS, strict TS) records a 
 |---|---|
 | Rust, repo root | `cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test` |
 | Extension, `extension/` | `npm run build && npm run typecheck && npx biome ci . && npm test` |
+| Desktop, `desktop/` | `npm run build && npm run typecheck && npx biome ci . && npm test` |
 
-Rust tests need a real `ffmpeg` on `PATH`. No git hooks run these for you.
+Rust tests need a real `ffmpeg` on `PATH`. The Rust gate also compiles `desktop/src-tauri`, which embeds `desktop/dist`: run `npm ci && npm run build` in `desktop/` first. No git hooks run these for you.
 
 ## Rules
 

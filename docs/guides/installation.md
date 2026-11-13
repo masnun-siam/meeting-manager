@@ -61,6 +61,22 @@ meeting doctor
 
 Every line must show `✓`. A `✗` line names its fix. The popup's Jobs tab should show "No meetings processed yet" rather than a "not installed" message.
 
+## 6. Install the desktop app (optional)
+
+The desktop app is behind the build-time flag `FEATURE_DESKTOP_APP` and is still a scaffold: it opens a window with its navigation and records nothing yet. It needs macOS 14.4 or later on Apple silicon. Build the tool and the app with the flag on:
+
+```sh
+FEATURE_DESKTOP_APP=1 cargo install --path crates/meeting
+meeting install
+cd desktop
+npm ci
+FEATURE_DESKTOP_APP=1 npm run tauri build
+```
+
+Move `Meeting.app` from `target/release/bundle/macos/` (at the repository root) to `/Applications`. The app is ad-hoc signed, so open it the first time with right-click › **Open**, then grant the permissions it asks for. Because the signature changes with every build, macOS may ask for Microphone, System Audio Recording and Calendar permission again after a rebuild.
+
+Built without the flag, the app only shows "Built without FEATURE_DESKTOP_APP".
+
 ## Update
 
 ```sh
@@ -71,6 +87,8 @@ cd extension && npm ci && npm run build
 
 Then click the reload icon on the extension in `chrome://extensions`. The binary path stays the same, so `meeting install` is only needed again if you install `meeting` somewhere else.
 
+With the desktop app installed, build the tool with `FEATURE_DESKTOP_APP=1` instead, rebuild the app as in section 6 and replace `/Applications/Meeting.app`.
+
 ## Uninstall
 
 ```sh
@@ -79,6 +97,8 @@ rm "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.mee
 rm -r ~/.config/meeting-manager "$HOME/Library/Application Support/meeting-manager" ~/Library/Logs/meeting-manager
 security delete-generic-password -s meeting-manager -a deepgram
 ```
+
+If you installed the desktop app, quit it and move `/Applications/Meeting.app` to the Trash. Its notes database (`notes.sqlite*`) is in `~/Library/Application Support/meeting-manager`, which the commands above already remove.
 
 Remove the extension from `chrome://extensions`. Recordings in `~/Downloads/Meetings` and notes in your vault are left alone.
 
