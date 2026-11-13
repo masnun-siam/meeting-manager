@@ -166,7 +166,9 @@ unsafe fn raw_event(e: &EKEvent) -> Option<RawEvent> {
         let identifier = e.eventIdentifier()?.to_string();
         let series_id = e
             .calendarItemExternalIdentifier()
-            .map_or_else(|| identifier.clone(), |s| s.to_string());
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| identifier.clone());
         let calendar = e.calendar();
         let attendees: Vec<RawPerson> = e
             .attendees()

@@ -322,11 +322,8 @@ async fn blocking<R: Runtime>(
     app: AppHandle<R>,
     f: impl FnOnce(&Calendar) -> Value + Send + 'static,
 ) -> Value {
-    let ran = tauri::async_runtime::spawn_blocking(move || match app.try_state::<App>() {
-        Some(state) => f(&state.calendar),
-        None => reply::err("not_ready", "The app is still starting"),
-    })
-    .await;
+    // `launch` manages the state before it opens the window, so no command can run without it.
+    let ran = tauri::async_runtime::spawn_blocking(move || f(&app.state::<App>().calendar)).await;
     ran.unwrap_or_else(|_| failed("a calendar command panicked"))
 }
 
@@ -931,6 +928,67 @@ pub(crate) mod tests {
             "2026-11-13 Sync"
         );
         assert_eq!(folder_name(Path::new("a.m4a")), "");
+    }
+
+    /// A mock app with the `App` state around `calendar`, as `launch` manages it, and a counter
+    /// of the `calendar-changed` events it emits.
+    fn launched(
+        name: &str,
+        source: EventSource,
+    ) -> (Home, tauri::App<tauri::test::MockRuntime>, Arc<AtomicUsize>) {
+        use tauri::Listener;
+        let (home, env) = home(name);
+        let app = tauri::test::mock_app();
+        app.manage(App {
+            recorder: crate::recorder::Recorder::new(&env),
+            calendar: Calendar::with(&env, source),
+            notes: crate::notes::Notes::new(&env),
+            admin: crate::admin::Admin::new(&env),
+            env,
+        });
+        let changed = Arc::new(AtomicUsize::new(0));
+        let seen = changed.clone();
+        app.listen_any(CHANGED_EVENT, move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        (home, app, changed)
+    }
+
+    /// Fires the change notification as soon as it is registered.
+    fn fire_on_watch(notify: Notify) -> bool {
+        notify();
+        true
+    }
+
+    #[test]
+    fn on_launch_emits_calendar_changed_on_a_change() {
+        let (_home, app, changed) = launched(
+            "launch",
+            EventSource {
+                watch: fire_on_watch,
+                ..source(granted)
+            },
+        );
+        on_launch(app.handle());
+        assert_eq!(changed.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn on_launch_does_nothing_without_access() {
+        fn must_not_watch(_: Notify) -> bool {
+            panic!("watched without access")
+        }
+        for access in [denied as fn() -> Access, not_asked] {
+            let (_home, app, changed) = launched(
+                "launch-denied",
+                EventSource {
+                    watch: must_not_watch,
+                    ..source(access)
+                },
+            );
+            on_launch(app.handle());
+            assert_eq!(changed.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]
