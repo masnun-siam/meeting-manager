@@ -2,7 +2,7 @@
 
 Covers: desktop/
 
-The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, package `meeting-desktop`, lib `meeting_desktop`) links the `meeting` library and whose UI (`desktop/src`) is React 19 with strict TS and CSS modules. It is a scaffold: the window, the navigation, the command contract and the module names exist; commands answer `not_implemented` until their module's issue fills them (the calendar commands are done: [features/desktop-calendar.md](features/desktop-calendar.md); the notes commands: [Notes commands](#notes-commands-notes) below). Behaviour: [prds/desktop-app.md](prds/desktop-app.md).
+The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, package `meeting-desktop`, lib `meeting_desktop`) links the `meeting` library and whose UI (`desktop/src`) is React 19 with strict TS and CSS modules. It is a scaffold: the window, the navigation, the command contract and the module names exist; commands answer `not_implemented` until their module's issue fills them (the calendar commands are done: [features/desktop-calendar.md](features/desktop-calendar.md); the recorder commands except `recorder_retry`: [features/desktop-recorder.md](features/desktop-recorder.md); the notes commands: [Notes commands](#notes-commands-notes) below). Behaviour: [prds/desktop-app.md](prds/desktop-app.md).
 
 ## Flag
 
@@ -21,7 +21,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | `lib.rs` | `run()`, the flag, `configure` (setup and command registration), `launch` (state, window, hooks), the `App` state `{env, recorder, calendar, notes, admin}`. `launch_in` takes the `Env` constructor, so its tests start the app in a temp home and an invoked command never touches the real store, vault or recordings. The issues that fill a module do not edit it |
 | `env.rs` | `Env { home, store_path, jobs }`; `config()` reloads `config.toml` on every call and returns the error as a string; `store()` opens the notes store and keeps `anyhow::Error`, so `store::OpenError` can be downcast. `Env::at(home)` is the constructor tests use |
 | `reply.rs` | `ok(fields)`, `err(code, message)`, `not_implemented(command)`: the reply shape of every command |
-| `recorder/mod.rs` | `Recorder`; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry`; hooks `on_launch`, `on_sleep`, `on_exit_requested` (`false` keeps the app running) |
+| `recorder/` | `Recorder` ([features/desktop-recorder.md](features/desktop-recorder.md)): WAV writer, folder, conversion, hand-off, notices; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry` (stub, #149); hooks `on_launch`, `on_sleep`, `on_exit_requested` (`false` keeps the app running; stubs until #149) |
 | `calendar/` | `Calendar` (EventKit, [features/desktop-calendar.md](features/desktop-calendar.md)); `calendar_status`, `calendar_events`, `calendar_event`, `calendars`, `set_hidden_calendars`; hook `on_launch`; `Calendar::event_for_context` for `context.json` |
 | `notes/mod.rs` | `Notes { open, spawn }` (fn pointers; real: `native::open_with_system`, `spawn::process_detached`); `notes_list`, `note_get`, `note_update`, `note_rerun`, `note_open`, each a thin wrapper over a `pub fn` taking `&Env` |
 | `notes/markdown.rs` | `render_html` (summary markdown to safe HTML) and `shown_transcript` (speaker labels to current names) |

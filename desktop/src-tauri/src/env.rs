@@ -31,7 +31,7 @@ impl Env {
         }
     }
 
-    fn config_path(&self) -> PathBuf {
+    pub(crate) fn config_path(&self) -> PathBuf {
         self.home.join(".config/meeting-manager/config.toml")
     }
 

@@ -79,7 +79,7 @@ pub fn import(
 
 /// Creates `meeting-<stamp>`, then `-2`, `-3`… on the first name `create_dir` accepts, so two
 /// imports in one minute never share a folder.
-fn create_folder(recordings_dir: &Path, stamp: &str) -> anyhow::Result<PathBuf> {
+pub fn create_folder(recordings_dir: &Path, stamp: &str) -> anyhow::Result<PathBuf> {
     for n in 1.. {
         let name = if n == 1 {
             format!("meeting-{stamp}")
