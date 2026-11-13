@@ -15,6 +15,10 @@ pub struct Config {
     pub ffmpeg_path: PathBuf,
     pub claude_path: PathBuf,
     pub extension_id: String,
+    /// Absolute path of the `meeting` binary the desktop app spawns. Written by `install`
+    /// only in a `FEATURE_DESKTOP_APP` build; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meeting_path: Option<PathBuf>,
 }
 
 fn default_vault_folder() -> String {
@@ -115,6 +119,7 @@ mod tests {
             ffmpeg_path: "/opt/homebrew/bin/ffmpeg".into(),
             claude_path: "/Users/a/.local/bin/claude".into(),
             extension_id: "obbaikcmcdooakogedoiiflflbbhpgdh".into(),
+            meeting_path: None,
         }
     }
 
@@ -141,6 +146,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.vault_folder, "Meetings");
+    }
+
+    #[test]
+    fn a_config_without_meeting_path_serialises_as_before() {
+        assert_eq!(
+            toml::to_string(&sample()).unwrap(),
+            r#"recordings_dir = "/Users/a/Downloads/Meetings"
+vault_dir = "/Users/a/Vault"
+vault_folder = "Calls"
+ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
+claude_path = "/Users/a/.local/bin/claude"
+extension_id = "obbaikcmcdooakogedoiiflflbbhpgdh"
+"#
+        );
+    }
+
+    #[test]
+    fn meeting_path_round_trips() {
+        let dir = temp("meeting-path");
+        let path = dir.join("config.toml");
+        let config = Config {
+            meeting_path: Some("/Users/a/.cargo/bin/meeting".into()),
+            ..sample()
+        };
+        config.save_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let loaded = Config::load_from(&path).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(text.ends_with("meeting_path = \"/Users/a/.cargo/bin/meeting\"\n"));
+        assert_eq!(loaded, config);
+    }
+
+    #[test]
+    fn an_old_config_file_loads_with_no_meeting_path() {
+        let config: Config = toml::from_str(
+            r#"
+            recordings_dir = "/r"
+            vault_dir = "/v"
+            vault_folder = "Meetings"
+            ffmpeg_path = "/f"
+            claude_path = "/c"
+            extension_id = "id"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.meeting_path, None);
     }
 
     #[test]
