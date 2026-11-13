@@ -107,7 +107,7 @@ All run on a blocking thread (permission prompts, joins and ffmpeg block). Repli
 | `ExitRequested` (Cmd-Q, the menu's Quit via `app.exit(0)`; closing the window only hides it, D15) | `Recorder::quit()`: idle → quit; saving → wait until idle, then quit; recording/paused → `confirm_quit()`: Cancel keeps recording (exit prevented), confirm → `stop(Quit)`, join the saving thread, then quit. A spawned job has its own process group and outlives the app. If conversion fails the WAV stays and the next launch recovers it | `on_exit_requested`, `quit` |
 | The confirmation | `NSAlert` "Quit Meeting?" / "The recording will be stopped and saved." / "Stop recording and quit", "Cancel". The app is activated first. Off the main thread it is not shown and the answer is Cancel | `sleep::confirm_quit_alert` |
 
-`quit` blocks the main thread while saving, so the menu-bar item never waits on the main thread: every update is queued with `run_on_main_thread`.
+Recovery and retry conversions are not waited for: quitting mid-way kills ffmpeg, and the next launch deletes the stale `recording.m4a.part` and recovers the kept WAV. `quit` blocks the main thread while saving, so the menu-bar item never waits on the main thread: every update is queued with `run_on_main_thread`.
 
 ## Crash recovery and retry
 

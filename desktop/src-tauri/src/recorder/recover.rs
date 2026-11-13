@@ -283,6 +283,12 @@ mod tests {
         let folder = recordings(&rig).join("meeting-2026-11-13_0600");
         fs::create_dir_all(&folder).unwrap();
         killed_wav(&folder.join(WAV), 12);
+        // The language last started with, not the default.
+        rig.env()
+            .store()
+            .unwrap()
+            .set_setting("language", "en")
+            .unwrap();
         rig.recorder.recover_all();
         let duration = duration_s(&folder.join(M4A));
         assert!((duration - 12.0).abs() <= 1.0, "{duration}");
@@ -292,7 +298,7 @@ mod tests {
             [(
                 rig.home.join("meeting"),
                 folder.join(M4A),
-                Some(Language::Bn)
+                Some(Language::En)
             )]
         );
         let notice = rig.recorder.status().notice.unwrap();
@@ -585,7 +591,8 @@ mod tests {
         assert_eq!(status.notice.unwrap().kind, Kind::Saved);
         assert!(folder.join(M4A).is_file());
         assert!(!folder.join(WAV).exists());
-        assert_eq!(spawns_under(&folder).len(), 1);
+        // Sent in the language the recording was started in (`Rig::start` uses English).
+        assert_eq!(spawns_under(&folder)[0].2, Some(Language::En));
         assert_eq!(
             rig.recorder
                 .retry(folder.to_str().unwrap())

@@ -252,10 +252,13 @@ fn tick<R: Runtime>(tray: Arc<Tray<R>>) {
         .spawn(move || {
             loop {
                 thread::sleep(Duration::from_secs(1));
-                if let Some(secs) = tray.recorder.recording_elapsed_s() {
-                    let icon = tray.icon.clone();
+                if tray.recorder.recording_elapsed_s().is_some() {
+                    let queued = tray.clone();
                     let _ = tray.app.run_on_main_thread(move || {
-                        let _ = icon.set_title(Some(clock(secs)));
+                        // Read again here: a Stop or Pause handled first must keep its title.
+                        if let Some(secs) = queued.recorder.recording_elapsed_s() {
+                            let _ = queued.icon.set_title(Some(clock(secs)));
+                        }
                     });
                 }
             }
