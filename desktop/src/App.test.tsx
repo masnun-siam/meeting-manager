@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import * as api from './api';
 
 vi.mock('./api', async () => (await import('./api.mock')).mockApi());
 vi.mock('./calendar/Upcoming', () => ({
@@ -69,10 +70,11 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open earlier note' }));
     expect(entry('All notes')).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('heading', { name: 'Note 7' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: 'Weekly sync' })).toBeInTheDocument();
+    expect(api.noteGet).toHaveBeenCalledWith({ id: 7 });
 
     await user.click(screen.getByRole('button', { name: 'Back' }));
     expect(screen.getByRole('heading', { name: 'All notes' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Note 7' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Weekly sync' })).not.toBeInTheDocument();
   });
 });
