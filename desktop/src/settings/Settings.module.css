@@ -1,3 +1,70 @@
 .settings {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+}
+
+.section h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.plain {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.calendar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: #555;
+}
+
+.problem {
+  color: #a4161a;
+}
+
+.folders {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0 0 4px;
+}
+
+.folders dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+}
+
+.check {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.checkName {
+  font-weight: 600;
+}
+
+.fix {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .folders {
+    grid-template-columns: 1fr;
+  }
 }

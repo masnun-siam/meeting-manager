@@ -126,7 +126,12 @@ A file that can't be read counts as missing. After the folders, rows whose recor
 | `notes/list/useNotes.ts` | `notes_list` at once on a query change, every 3 s while `document.visibilityState` is `visible` and on becoming visible; the latest request wins and a reply asked before the current query is dropped |
 | `notes/list/useRescanProgress.ts` | `rescan_status` on mount and every 1 s while `running`, shown as "Loading meetings… N of M" (FR-14); the list is refetched once when a run stops |
 | `notes/list/format.ts` | Row labels: `recorded_at` read as local time, `H:MM:SS` / `M:SS`, Bengali / English, Browser / Import / Desktop, status word (the job stage while `processing`) |
-| `notes/view/NoteView.tsx`, `settings/Settings.tsx` | One placeholder per view; each UI issue owns its folder |
+| `notes/view/NoteView.tsx` | Placeholder; its UI issue owns the folder |
+| `settings/Settings.tsx`, `settings/useSettingsInfo.ts` | Settings (FR-20): Calendars, Meetings (Rescan folders), Folders and Health sections, each loading and failing on its own. `settings_info` on mount and again when a rescan finishes; the latest request wins |
+| `settings/CalendarsSection.tsx` | `calendar_status`, then `calendars` only when `granted`; the FR-8 denied text, a not-asked line, "No calendars found". A checked box is a shown calendar; a toggle shows at once and sends the full hidden id list through one promise chain (calls in order, the latest reply wins); a failed latest call (`store_unavailable` or a rejection, D42) returns to the last confirmed set with its message in a `role="status"` line |
+| `settings/RescanSection.tsx` | Rescan folders, disabled while `rescan_status.running` (reuses `notes/list/useRescanProgress.ts`), "Loading meetings… N of M" then "Rescan finished" in a `role="status"` line, errors in a `role="alert"`; with a broken store, "Notes database can't be opened: <message>" above the button (D33) |
+| `settings/FoldersSection.tsx` | Recordings directory and `vault_dir`/`vault_folder` as read-only text, "Change with `meeting install`"; a `not_configured` message instead |
+| `settings/HealthSection.tsx` | `health` on mount and on Check again (disabled in flight): a list labelled "Health checks", each check's name, "OK"/"Failing" and a failing one's fix |
 
 Conventions are the extension's: colocated `*.test.ts(x)`, CSS modules, Biome. No inline `style` attributes: the content security policy forbids them.
 
