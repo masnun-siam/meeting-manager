@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use anyhow::Context as _;
 use meeting::config::{Config, RECORDING_EXTENSIONS, check_recording};
-use meeting::jobs::{JobStore, Stage, now_utc};
+use meeting::jobs::{Job, JobStore, Stage, now_utc};
 use meeting::lock::{self, Lock};
 use meeting::meta::{Meta, recorded_at_for};
 use meeting::store::{self, OpenError, RunResult, Status, Store};
@@ -103,7 +103,7 @@ fn recording_in(folder: &Path) -> Option<PathBuf> {
 
 /// The row a folder's files describe. Never fails: a file that can't be read counts as
 /// missing, logged by its name only.
-pub fn read_folder(recording: &Path, jobs: &JobStore) -> RunResult {
+pub fn read_folder(recording: &Path, jobs: &[Job]) -> RunResult {
     let folder = recording.parent().unwrap_or(recording);
     let meta = Meta::load(&Meta::path_for(recording)).unwrap_or_else(|e| {
         tracing::warn!(kind = store::error_kind(&e), "meta.json ignored");
@@ -142,6 +142,7 @@ pub fn read_folder(recording: &Path, jobs: &JobStore) -> RunResult {
         result.title = meta
             .as_ref()
             .and_then(|m| m.title.clone())
+            .filter(|t| !t.is_empty())
             .or_else(|| heading(&summary))
             .filter(|t| !t.is_empty());
         result.body_md = Some(summary_md::body_without_title(&summary).to_string());
@@ -186,18 +187,13 @@ fn says_no_speech(transcript_md: &str) -> bool {
 
 /// Why a folder failed: its newest `meta.json` run with an error, else its newest job with
 /// one, else a fixed message.
-fn failure(recording: &Path, meta: Option<&Meta>, jobs: &JobStore) -> (Option<String>, String) {
+fn failure(recording: &Path, meta: Option<&Meta>, jobs: &[Job]) -> (Option<String>, String) {
     let from_meta = meta.and_then(|m| m.runs.iter().rev().find_map(|r| r.error.clone()));
+    // `jobs` is newest first.
     let from_job = || {
-        let listed = jobs.list(usize::MAX).unwrap_or_else(|e| {
-            tracing::warn!(kind = store::error_kind(&e), "cannot read the jobs");
-            Vec::new()
-        });
-        // `list` is newest first.
-        listed
-            .into_iter()
+        jobs.iter()
             .filter(|job| job.recording == recording)
-            .find_map(|job| job.error)
+            .find_map(|job| job.error.clone())
     };
     match from_meta.or_else(from_job) {
         Some(error) => split_failure(&error),
@@ -227,10 +223,15 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let found = candidates(&config.recordings_dir);
     progress.total.store(found.len(), Ordering::SeqCst);
+    // Listed once: `JobStore::list` reads every job file.
+    let jobs = jobs.list(usize::MAX).unwrap_or_else(|e| {
+        tracing::warn!(kind = store::error_kind(&e), "cannot read the jobs");
+        Vec::new()
+    });
     let mut first_error = None;
     for recording in &found {
         if !lock::is_held(&Lock::path_for(recording))
-            && let Err(e) = store.merge_run(recording, &read_folder(recording, jobs))
+            && let Err(e) = store.merge_run(recording, &read_folder(recording, &jobs))
         {
             tracing::warn!(
                 kind = store::error_kind(&e),
@@ -240,9 +241,15 @@ pub fn run(
         }
         progress.done.fetch_add(1, Ordering::SeqCst);
     }
-    // After the folder pass, so a folder moved by hand is found at its new path first.
+    // After the folder pass, so a folder moved by hand is found at its new path first. An
+    // unreadable recordings folder (an unmounted volume) would make every recording look gone,
+    // so nothing is removed then.
     let mut removed = 0;
-    for path in store.paths()? {
+    let readable = fs::read_dir(&config.recordings_dir).is_ok();
+    if !readable {
+        tracing::warn!("recordings folder unreadable: no rows removed");
+    }
+    for path in store.paths()?.into_iter().filter(|_| readable) {
         if !path.is_file() {
             store.removed(&path)?;
             removed += 1;
@@ -277,19 +284,22 @@ fn stamp(utc: &str) -> String {
     utc.replace(['-', ':'], "")
 }
 
-/// Renames `<path>`, `<path>-wal` and `<path>-shm` to `<path>.broken-<stamp>[-wal|-shm]`.
-/// Refuses to replace an existing file: a moved-aside store is never lost.
+/// Renames `<path>-wal`, `<path>-shm` and `<path>` to `<path>.broken-<stamp>[-wal|-shm]`.
+/// The database goes last: if a move fails it stays put, so the next rescan still sees it
+/// broken and no old WAL is left beside a fresh file. Refuses to replace an existing file: a
+/// moved-aside store is never lost.
 fn move_aside(path: &Path, stamp: &str) -> anyhow::Result<()> {
-    for side in ["", "-wal", "-shm"] {
+    let sides = ["-wal", "-shm", ""];
+    let target = |side: &str| suffixed(path, &format!(".broken-{stamp}{side}"));
+    if let Some(taken) = sides.iter().map(|side| target(side)).find(|to| to.exists()) {
+        anyhow::bail!(
+            "{} already exists; press Rescan folders again in a second",
+            taken.display()
+        );
+    }
+    for side in sides {
         let from = suffixed(path, side);
-        let to = suffixed(path, &format!(".broken-{stamp}{side}"));
-        if to.exists() {
-            anyhow::bail!(
-                "{} already exists; press Rescan folders again in a second",
-                to.display()
-            );
-        }
-        match fs::rename(&from, &to) {
+        match fs::rename(&from, target(side)) {
             Err(e) if e.kind() == ErrorKind::NotFound && !side.is_empty() => {}
             moved => moved.with_context(|| format!("cannot move {} aside", from.display()))?,
         }

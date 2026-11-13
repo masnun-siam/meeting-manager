@@ -93,13 +93,13 @@ Each command opens the store through `Env::store()`; an open or query failure is
 
 ## Admin commands (`admin/`)
 
-No command takes a path from the UI. Logs carry counts and error kinds only, never a title, transcript or name.
+No command takes a path from the UI. `health`, `note_archive` and `note_trash` are `async` and run on `spawn_blocking`, so a slow doctor or move never freezes the window. Logs carry counts and error kinds only, never a title, transcript or name.
 
 | Command | Behaviour |
 |---|---|
-| `rescan` | `not_configured` when `config.toml` can't be read; otherwise `{started: true}` at once, also when a run is already going (no second run). The run has its own thread and store connection: it opens the store, and a corrupt or newer one (`store::OpenError` only) is renamed with its `-wal`/`-shm` to `notes.sqlite.broken-<YYYYMMDDTHHMMSSZ>[-wal\|-shm]` and recreated (D33). A moved-aside file is never replaced or deleted; any other open error ends the run with nothing moved |
+| `rescan` | `not_configured` when `config.toml` can't be read; otherwise `{started: true}` at once, also when a run is already going (no second run). The run has its own thread and store connection: it opens the store, and a corrupt or newer one (`store::OpenError` only) is renamed (`-wal`, `-shm`, then the database, so a failed move leaves it broken for the next rescan) to `notes.sqlite.broken-<YYYYMMDDTHHMMSSZ>[-wal\|-shm]` and recreated (D33). A moved-aside file is never replaced or deleted; any other open error ends the run with nothing moved |
 | `rescan_status` | `{running, done, total}` from atomics; all `0` before the first run |
-| `health` | `<meeting_path> doctor` (argument list, null stdin and stderr, killed after 10 s), its `✓ <name>` / `✗ <name>: <fix>` lines parsed (D38). `meeting_path` unset or failing `spawn::check_tool` gives one failing `meeting_path` check without spawning; a timeout, spawn failure or output with no check line gives one failing `doctor` check |
+| `health` | `<meeting_path> doctor` (argument list, null stdin and stderr, killed after 10 s, also when it closed stdout but keeps running), its `✓ <name>` / `✗ <name>: <fix>` lines parsed (D38). `meeting_path` unset or failing `spawn::check_tool` gives one failing `meeting_path` check without spawning; a timeout, spawn failure or output with no check line gives one failing `doctor` check |
 | `settings_info` | `recordings_dir`, `vault_dir`, `vault_folder` from `config.toml` and `store: {ok}` or `{ok: false, message}` (the open error). Never moves the store |
 | `note_archive` / `note_trash` | Row id to `recording_path`, then `folders::archive` / `folders::trash` with the store; a `Refusal` passes through as `{code, message}` (D41). `unknown_note`, `store_unavailable`, and `not_configured` when the config can't be read |
 
@@ -110,7 +110,7 @@ No command takes a path from the UI. Logs carry counts and error kinds only, nev
 - otherwise `failed`: the newest `meta.json` run error, else the newest job's, split at `"<stage>: "`; with neither, a fixed "rerun the summary" message.
 - Every status: `language`, `duration_s` (rounded) and `recorded_at` from `meta.json` (`recorded_at_for` without it), `transcript` = `transcript::utterance_lines`, `source` and `event` from `context.json` by `pipeline::source_of` / `pipeline::event_link` (D40).
 
-A file that can't be read counts as missing. After the folders, rows whose recording is no longer a file are removed. `backfill_done` is set only when no row failed to store.
+A file that can't be read counts as missing. After the folders, rows whose recording is no longer a file are removed, unless the recordings directory itself can't be read (an unmounted volume would make every recording look gone). `backfill_done` is set only when no row failed to store.
 
 ## UI (`desktop/src`)
 

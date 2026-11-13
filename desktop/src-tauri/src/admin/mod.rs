@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use meeting::config::Config;
 use meeting::folders::{self, Refusal};
@@ -66,8 +66,9 @@ pub struct Check {
 
 /// Called once at startup: the first backfill, in the background, when it has never finished.
 pub fn on_launch<R: Runtime>(app: &AppHandle<R>) {
-    let state = app.state::<App>();
-    launch_backfill(&state.env, &state.admin);
+    if let Some(state) = app.try_state::<App>() {
+        launch_backfill(&state.env, &state.admin);
+    }
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -84,18 +85,29 @@ pub fn rescan_status(app: State<'_, App>) -> Value {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn health(app: State<'_, App>) -> Value {
-    health_of(&app.env, &app.admin)
+pub async fn health<R: Runtime>(app: AppHandle<R>) -> Value {
+    blocking(app, |state| health_of(&state.env, &state.admin)).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn note_archive(app: State<'_, App>, id: i64) -> Value {
-    archive(&app.env, id)
+pub async fn note_archive<R: Runtime>(app: AppHandle<R>, id: i64) -> Value {
+    blocking(app, move |state| archive(&state.env, id)).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn note_trash(app: State<'_, App>, id: i64) -> Value {
-    trash(&app.env, &app.admin, id)
+pub async fn note_trash<R: Runtime>(app: AppHandle<R>, id: i64) -> Value {
+    blocking(app, move |state| trash(&state.env, &state.admin, id)).await
+}
+
+/// Runs `f` off the main thread: `meeting doctor` may take seconds, and a folder move or the
+/// Trash may too, and a sync command would freeze every window meanwhile.
+async fn blocking<R: Runtime>(
+    app: AppHandle<R>,
+    f: impl FnOnce(&App) -> Value + Send + 'static,
+) -> Value {
+    // `launch` manages the state before it opens the window, so no command can run without it.
+    let ran = tauri::async_runtime::spawn_blocking(move || f(&app.state::<App>())).await;
+    ran.unwrap_or_else(|_| reply::err("failed", "the command stopped unexpectedly"))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -237,8 +249,13 @@ pub fn run_doctor(exe: &Path, timeout: Duration) -> Result<String, &'static str>
         let read = stdout.read_to_end(&mut out).map(|_| out);
         let _ = sender.send(read);
     });
+    let deadline = Instant::now() + timeout;
     let read = receiver.recv_timeout(timeout);
-    if read.is_err() {
+    // A doctor that closed its stdout but keeps running is still bound by the deadline.
+    while read.is_ok() && matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !matches!(child.try_wait(), Ok(Some(_))) {
         let _ = child.kill();
     }
     let _ = child.wait();
@@ -627,6 +644,26 @@ mod tests {
         assert_eq!(link.start, "2026-11-13T10:00:00+06:00");
         assert_eq!(link.end, "2026-11-13T11:00:00+06:00");
         assert_eq!(link.calendar.as_deref(), Some("Work"));
+    }
+
+    #[test]
+    fn an_empty_meta_title_falls_back_to_the_heading() {
+        let f = Fixture::new("empty-title");
+        let recording = f.meeting("m", "");
+        write_beside(&recording, "summary.md", "# Heading\n\nBody\n");
+        f.backfill().unwrap();
+        assert_eq!(f.row(&recording).title.as_deref(), Some("Heading"));
+    }
+
+    #[test]
+    fn an_unreadable_recordings_folder_removes_no_rows() {
+        let f = Fixture::new("unmounted");
+        f.meeting("m", "M");
+        f.backfill().unwrap();
+        // As if the volume holding the recordings were unmounted.
+        fs::rename(f.recordings(), f.env.home.join("Elsewhere")).unwrap();
+        f.backfill().unwrap();
+        assert_eq!(f.rows().len(), 1);
     }
 
     #[test]
@@ -1052,6 +1089,13 @@ mod tests {
             reply["checks"][1],
             json!({"name": "claude", "ok": false, "fix": "fix it"})
         );
+
+        // Closes stdout, then keeps running: still killed at the deadline.
+        fs::write(&tool, "#!/bin/sh\necho '✓ config'\nexec sleep 5 >&-\n").unwrap();
+        let started = std::time::Instant::now();
+        let out = run_doctor(&tool, Duration::from_millis(300)).unwrap();
+        assert_eq!(out, "✓ config\n");
+        assert!(started.elapsed() < Duration::from_secs(3));
 
         fs::write(&tool, "#!/bin/sh\nexec sleep 5\n").unwrap();
         let started = std::time::Instant::now();
