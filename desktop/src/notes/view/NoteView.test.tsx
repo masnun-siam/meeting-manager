@@ -435,7 +435,6 @@ describe('NoteView actions', () => {
     const { user } = setup();
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'n');
     noteUpdate.mockResolvedValueOnce({
       ok: true,
       note: testNote({ title: 'T', title_edited: true }),

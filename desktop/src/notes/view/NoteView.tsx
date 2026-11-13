@@ -30,8 +30,6 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
   const reloadQuietly = useCallback(() => void reload(), [reload]);
   const autosave = useAutosave({ id, note, apply, reload: reloadQuietly });
   saving.current = autosave;
-  const latest = useRef(note);
-  latest.current = note;
   const [message, setMessage] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const back = useRef<HTMLButtonElement>(null);
@@ -79,7 +77,7 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
           </div>
           <Actions
             note={note}
-            latest={() => latest.current ?? note}
+            latest={() => autosave.latest() ?? note}
             flushAll={autosave.flushAll}
             reload={reload}
             markRerun={markRerun}

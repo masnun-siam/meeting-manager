@@ -175,6 +175,18 @@ describe('useAutosave', () => {
     ]);
   });
 
+  it('sends a rename after fields typed later than it', async () => {
+    const { now } = setup();
+    act(() => now().change('speaker:Speaker 1', 'Rahim Uddin'));
+    act(() => now().change('body_md', 'Rahim sends the deck'));
+    await act(() => now().flushAll());
+
+    expect(noteUpdate.mock.calls.map(([req]) => Object.keys(req))).toEqual([
+      ['id', 'body_md'],
+      ['id', 'speaker'],
+    ]);
+  });
+
   it('never sends an empty speaker name and shows the stored name again on blur', async () => {
     const { now } = setup();
     act(() => now().change('speaker:Speaker 1', '  '));

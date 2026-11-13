@@ -20,6 +20,8 @@ export type Autosave = {
   flushAll: () => Promise<void>;
   /** Whether the focused field holds text not yet stored (the poll then skips a tick). */
   focusedDirty: () => boolean;
+  /** The stored note as of the last reply, ahead of the next render. */
+  latest: () => Note | null;
   /** Re-sends a save with no field, which rewrites the vault note of a `done` note. */
   retryVault: () => void;
   saveState: SaveState;
@@ -136,7 +138,10 @@ export function useAutosave(opts: {
   );
 
   const flushAll = useCallback(() => {
-    for (const key of [...drafts.current.keys()]) flush(key);
+    // Renames go last: the Rust side rewrites the title and body with the new name.
+    const keys = [...drafts.current.keys()];
+    for (const key of keys) if (speakerLabel(key) === null) flush(key);
+    for (const key of keys) if (speakerLabel(key) !== null) flush(key);
     return chain.current;
   }, [flush]);
 
@@ -201,5 +206,7 @@ export function useAutosave(opts: {
     };
   }, [flushAll]);
 
-  return { value, change, focus, blur, flushAll, focusedDirty, retryVault, saveState, vaultError, problem };
+  const latest = useCallback(() => note.current, []);
+
+  return { value, change, focus, blur, flushAll, focusedDirty, latest, retryVault, saveState, vaultError, problem };
 }
