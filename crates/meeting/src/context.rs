@@ -288,7 +288,8 @@ fn meeting_id_ok(platform: Platform, id: &str) -> bool {
     }
 }
 
-fn time_zone_ok(z: &str) -> bool {
+/// An IANA-shaped zone name `check` accepts; the desktop app tests its own before writing.
+pub fn time_zone_ok(z: &str) -> bool {
     !z.is_empty()
         && z.chars().count() <= 64
         && z.chars()
