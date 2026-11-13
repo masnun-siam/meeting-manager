@@ -68,7 +68,7 @@ Three path-filtered workflows run on pull requests and pushes to `main`.
 |---|---|---|---|
 | `.github/workflows/tool.yml` | `macos-latest`, Node 24 | `Cargo.*`, `crates/**`, `desktop/src-tauri/**` | install ffmpeg → `npm ci` and `npm run build` in `desktop/` → `cargo fmt --all --check` → `cargo clippy --all-targets -- -D warnings` → `cargo test` |
 | `.github/workflows/extension.yml` | `ubuntu-latest`, Node 24 | `extension/**` | `npm ci` → `npm run build` → `npx tsc --noEmit` → `npx biome ci .` → `npx vitest run` |
-| `.github/workflows/desktop.yml` | `ubuntu-latest`, Node 24 | `desktop/**` | `npm ci` → `npm run build` → `npx tsc --noEmit` → `npx biome ci .` → `npx vitest run` |
+| `.github/workflows/desktop.yml` | `ubuntu-latest`, Node 24 | `desktop/**` | `npm ci` → `npm run build` → `npm run typecheck` → `npx biome ci .` → `npm test` |
 
 - No git hooks are configured; run the matching gate commands locally before pushing.
 - Formatting rules: [extension.md](extension.md#conventions) (biome), `cargo fmt` defaults (Rust).

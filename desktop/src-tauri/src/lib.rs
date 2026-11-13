@@ -140,11 +140,12 @@ pub fn run() {
         }));
     }
     match configure(builder, mode).build(tauri::generate_context!()) {
-        Ok(app) => app.run(|app, event| {
-            if let RunEvent::ExitRequested { api, .. } = event
-                && !recorder::on_exit_requested(app)
-            {
-                api.prevent_exit();
+        Ok(app) => app.run(move |app, event| {
+            if let RunEvent::ExitRequested { api, .. } = event {
+                // Built off, no hook runs: quitting is never held back.
+                if mode == Mode::On && !recorder::on_exit_requested(app) {
+                    api.prevent_exit();
+                }
             }
         }),
         Err(e) => {
