@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CalendarDay } from '../api';
+import { CalendarIcon, LockIcon } from '../icons';
 import { EventView } from './EventView';
-import { CALENDAR_DENIED, dayLabel, timeRange } from './format';
+import { CALENDAR_DENIED, dayLabel, isToday, localDate, timeOf } from './format';
 import styles from './Upcoming.module.css';
 import { type UpcomingView, useUpcoming } from './useUpcoming';
 
@@ -34,14 +35,36 @@ export function Upcoming({ onOpenNote }: { onOpenNote: (id: number) => void }) {
 
   return (
     <section className={styles.upcoming} aria-labelledby="upcoming-heading">
-      <h2 id="upcoming-heading">Upcoming</h2>
+      <div className={styles.head}>
+        <h2 id="upcoming-heading">Upcoming</h2>
+        <p className={styles.sub}>Your next 7 days. Open a meeting to record it with its details.</p>
+      </div>
       {/* Always mounted: screen readers skip a live region that appears already filled. */}
-      <div role="status" className={view.kind === 'loading' ? undefined : styles.problem}>
+      <div role="status" className={statusClass(view)}>
+        {view.kind === 'denied' ? <LockIcon size={18} /> : null}
         {statusText(view)}
       </div>
       {view.kind === 'ready' ? <Days days={view.days} rows={rows.current} onOpen={open} /> : null}
     </section>
   );
+}
+
+function statusClass(view: UpcomingView): string {
+  if (view.kind === 'loading') return styles.loading;
+  if (view.kind === 'denied') return styles.denied;
+  if (view.kind === 'error' || (view.kind === 'ready' && view.error)) return styles.problem;
+  return styles.quiet;
+}
+
+/** Today's meeting under way, else today's next one: the row that gets a badge. */
+function highlight(days: CalendarDay[], now: Date): { id: string; label: string } | null {
+  const today = days.find((day) => isToday(localDate(day.date), now));
+  if (!today) return null;
+  const t = now.getTime();
+  const current = today.events.find((e) => new Date(e.start).getTime() <= t && new Date(e.end).getTime() > t);
+  if (current) return { id: current.occurrence_id, label: 'Now' };
+  const next = today.events.find((e) => new Date(e.start).getTime() > t);
+  return next ? { id: next.occurrence_id, label: 'Up next' } : null;
 }
 
 function statusText(view: UpcomingView): string | null {
@@ -59,7 +82,16 @@ function statusText(view: UpcomingView): string | null {
 
 function Days(props: { days: CalendarDay[]; rows: Map<string, HTMLButtonElement>; onOpen: (id: string) => void }) {
   const days = props.days.filter((day) => day.events.length > 0);
-  if (days.length === 0) return <p>{EMPTY}</p>;
+  if (days.length === 0)
+    return (
+      <div className={styles.empty}>
+        <CalendarIcon size={28} />
+        <p>{EMPTY}</p>
+      </div>
+    );
+
+  const now = new Date();
+  const badge = highlight(days, now);
 
   return days.map((day) => (
     <section key={day.date} className={styles.day} aria-labelledby={`day-${day.date}`}>
@@ -72,18 +104,27 @@ function Days(props: { days: CalendarDay[]; rows: Map<string, HTMLButtonElement>
             <button
               type="button"
               className={styles.row}
+              data-past={new Date(event.end).getTime() < now.getTime() || undefined}
+              data-badge={badge?.id === event.occurrence_id || undefined}
               onClick={() => props.onOpen(event.occurrence_id)}
               ref={(node) => {
                 if (node) props.rows.set(event.occurrence_id, node);
                 else props.rows.delete(event.occurrence_id);
               }}
             >
-              <span className={styles.eventTitle}>{event.title}</span>
-              <span className={styles.meta}>
-                {timeRange(event.start, event.end)}
-                {event.calendar ? ` · ${event.calendar}` : ''}
+              <span className={styles.time}>
+                <span>{timeOf(event.start)}</span>
+                <span className={styles.end}>{timeOf(event.end)}</span>
               </span>
+              <span className={styles.main}>
+                <span className={styles.eventTitle}>{event.title}</span>
+                {event.calendar ? <span className={styles.meta}>{event.calendar}</span> : null}
+              </span>
+              {badge?.id === event.occurrence_id ? <span className={styles.badge}>{badge.label}</span> : null}
               {event.has_notes ? <span className={styles.marker}>notes</span> : null}
+              <span className={styles.chevron} aria-hidden="true">
+                ›
+              </span>
             </button>
           </li>
         ))}

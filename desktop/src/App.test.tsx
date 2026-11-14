@@ -47,13 +47,9 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // The recording bar comes first: its Language select and Start button, then the sidebar.
+    // The sidebar comes first, as in a Mac app; then the recording bar's Language select and Start button.
     const start = screen.getByRole('button', { name: 'Start recording' });
     await waitFor(() => expect(start).toBeEnabled());
-    await user.tab();
-    expect(screen.getByRole('combobox', { name: 'Language' })).toHaveFocus();
-    await user.tab();
-    expect(start).toHaveFocus();
     await user.tab();
     expect(entry('Upcoming')).toHaveFocus();
     await user.tab();
@@ -62,6 +58,20 @@ describe('App', () => {
     expect(entry('All notes')).toHaveAttribute('aria-current', 'page');
     await user.tab();
     expect(entry('Settings')).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('combobox', { name: 'Language' })).toHaveFocus();
+    await user.tab();
+    expect(start).toHaveFocus();
+  });
+
+  it('goes back to the list when All notes is chosen while a note is open', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Open earlier note' }));
+    expect(await screen.findByRole('heading', { level: 2, name: 'Weekly sync' })).toBeInTheDocument();
+    await user.click(entry('All notes'));
+    expect(await screen.findByRole('heading', { name: 'All notes' })).toBeInTheDocument();
   });
 
   it('opens a note from Upcoming in All notes and goes back to the list', async () => {

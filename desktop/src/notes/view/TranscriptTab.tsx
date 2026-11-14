@@ -70,8 +70,42 @@ export function Tabs({ summary, transcript }: { summary: ReactNode; transcript: 
         aria-labelledby={`${base}-transcript-tab`}
         hidden={selected !== 'transcript'}
       >
-        {transcript ? <pre className={styles.transcript}>{transcript}</pre> : <p>No transcript.</p>}
+        {transcript ? <Transcript text={transcript} /> : <p>No transcript.</p>}
       </div>
+    </div>
+  );
+}
+
+const LINE = /^(\[\d{2}:\d{2}:\d{2}\]) ([^:]+): (.*)$/;
+const COLOURS = 6;
+
+/**
+ * One row per `[hh:mm:ss] Name: text` line, each speaker in their own colour (by order of first
+ * appearance). Other lines are shown as they are. The text stays text: nothing is parsed as HTML.
+ */
+function Transcript({ text }: { text: string }) {
+  const speakers = new Map<string, number>();
+  const lines = text.split('\n').filter((line) => line.trim() !== '');
+  return (
+    <div className={styles.transcript}>
+      {lines.map((line, i) => {
+        const parts = LINE.exec(line);
+        const key = `${i}:${line.slice(0, 24)}`;
+        if (!parts) return <p key={key}>{line}</p>;
+        const [, stamp, who, said] = parts;
+        if (!speakers.has(who)) speakers.set(who, speakers.size % COLOURS);
+        return (
+          <p key={key} className={styles.utterance}>
+            <span className={styles.stamp}>{stamp} </span>
+            <span>
+              <span className={styles.who} data-speaker={speakers.get(who)}>
+                {who}:{' '}
+              </span>
+              {said}
+            </span>
+          </p>
+        );
+      })}
     </div>
   );
 }

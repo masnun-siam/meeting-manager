@@ -1,65 +1,154 @@
 .settings {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
   max-width: 720px;
 }
 
-.section h3 {
-  margin: 0 0 8px;
-  font-size: 15px;
+.section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.section > * {
+  max-width: 100%;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  align-self: stretch;
+  gap: var(--space-3);
+}
+
+.lead {
+  margin-top: calc(-1 * var(--space-2));
+  color: var(--ink-soft);
+}
+
+.muted {
+  color: var(--ink-faint);
+}
+
+.muted:empty,
+.problem:empty {
+  display: none;
+}
+
+.problem {
+  color: var(--record-text);
+}
+
+.callout {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  align-self: stretch;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.actionRow {
+  display: flex;
+  gap: var(--space-2);
 }
 
 .plain {
-  margin: 0 0 8px;
+  align-self: stretch;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
+.plain li + li {
+  border-top: 1px solid var(--line);
+}
+
 .calendar {
-  display: inline-flex;
+  display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 8px;
-  padding: 4px 0;
+  align-items: center;
+  gap: 4px 10px;
+  padding: var(--space-2) 0;
   overflow-wrap: anywhere;
+  cursor: pointer;
 }
 
-.muted {
-  color: #555;
-}
-
-.problem {
-  color: #a4161a;
+.calendarTitle {
+  font-weight: 500;
 }
 
 .folders {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 4px 12px;
-  margin: 0 0 4px;
+  gap: var(--space-2) var(--space-4);
+  align-self: stretch;
+  margin: 0;
+}
+
+.folders dt {
+  color: var(--ink-faint);
 }
 
 .folders dd {
   margin: 0;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
-  font-family: ui-monospace, monospace;
 }
 
 .check {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 8px;
-  padding: 4px 0;
-  border-bottom: 1px solid #e0e0e0;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 2px var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+.checkIcon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.check[data-ok="false"] .checkIcon {
+  background: var(--record-soft);
+  color: var(--record-text);
 }
 
 .checkName {
-  font-weight: 600;
+  font-weight: 500;
+}
+
+.okText {
+  color: var(--ok);
+  font-size: var(--text-sm);
+}
+
+.check .problem {
+  font-size: var(--text-sm);
 }
 
 .fix {
-  flex-basis: 100%;
+  grid-column: 2 / -1;
+  color: var(--ink-soft);
   overflow-wrap: anywhere;
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { type Note, noteArchive, noteOpen, noteRerun, noteTrash } from '../../api';
+import { ArchiveIcon, FolderIcon, SparkIcon, TrashIcon, VaultIcon } from '../../icons';
 import { attempt } from '../../recording/attempt';
 import { hasEdits, NOT_WHILE_PROCESSING, problemText, RECORDING_MISSING } from './format';
 import styles from './NoteView.module.css';
@@ -106,8 +107,9 @@ export function Actions(props: Props) {
 
   return (
     <div className={styles.actions}>
-      <div className={styles.row}>
+      <div className={styles.toolbar}>
         <button type="button" onClick={() => open('obsidian')}>
+          <VaultIcon size={14} />
           Open in Obsidian
         </button>
         <button
@@ -116,6 +118,7 @@ export function Actions(props: Props) {
           aria-describedby={missing ? 'note-missing' : undefined}
           onClick={() => open('folder')}
         >
+          <FolderIcon size={14} />
           Open folder
         </button>
         <button
@@ -125,6 +128,7 @@ export function Actions(props: Props) {
           aria-describedby={missing ? 'note-missing' : undefined}
           onClick={askRerun}
         >
+          <SparkIcon size={14} />
           Rerun summary
         </button>
         <button
@@ -133,14 +137,18 @@ export function Actions(props: Props) {
           aria-describedby={processing ? 'note-processing' : undefined}
           onClick={archive}
         >
+          <ArchiveIcon size={14} />
           Archive
         </button>
         <button
           type="button"
+          data-variant="danger"
+          data-armed={armed}
           disabled={processing || busy}
           aria-describedby={processing ? 'note-processing' : undefined}
           onClick={trash}
         >
+          <TrashIcon size={14} />
           {armed ? 'Confirm trash' : 'Trash'}
         </button>
       </div>

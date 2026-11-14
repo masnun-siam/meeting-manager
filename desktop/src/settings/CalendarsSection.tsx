@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type CalendarInfo, calendarStatus, calendars, setHiddenCalendars } from '../api';
+import { type CalendarInfo, calendarEvents, calendarStatus, calendars, setHiddenCalendars } from '../api';
 import { attempt } from '../recording/attempt';
 import styles from './Settings.module.css';
 
@@ -41,22 +41,35 @@ export function CalendarsSection() {
     [show],
   );
 
+  const load = useCallback(async () => {
+    const status = await attempt(calendarStatus);
+    if (!active.current) return;
+    if (!status.ok) return setView({ kind: 'failed', message: status.text });
+    if (status.reply.access !== 'granted') return setView({ kind: status.reply.access });
+    const reply = await attempt(calendars);
+    if (!active.current) return;
+    if (reply.ok) apply(reply.reply.calendars);
+    else setView({ kind: 'failed', message: reply.text });
+  }, [apply]);
+
   useEffect(() => {
     active.current = true;
-    (async () => {
-      const status = await attempt(calendarStatus);
-      if (!active.current) return;
-      if (!status.ok) return setView({ kind: 'failed', message: status.text });
-      if (status.reply.access !== 'granted') return setView({ kind: status.reply.access });
-      const reply = await attempt(calendars);
-      if (!active.current) return;
-      if (reply.ok) apply(reply.reply.calendars);
-      else setView({ kind: 'failed', message: reply.text });
-    })();
+    void load();
     return () => {
       active.current = false;
     };
-  }, [apply]);
+  }, [load]);
+
+  // `calendar_events` shows the macOS prompt when access was never asked, and waits for the answer.
+  const [asking, setAsking] = useState(false);
+  async function allow() {
+    setAsking(true);
+    setProblem(null);
+    await attempt(calendarEvents);
+    if (!active.current) return;
+    setAsking(false);
+    await load();
+  }
 
   function toggle(id: string) {
     const next = new Set(wanted.current);
@@ -85,9 +98,17 @@ export function CalendarsSection() {
   return (
     <section aria-labelledby="settings-calendars" className={styles.section}>
       <h3 id="settings-calendars">Calendars</h3>
-      {view.kind === 'loading' && <p>Loading calendars…</p>}
-      {view.kind === 'denied' && <p>{CALENDAR_DENIED}</p>}
-      {view.kind === 'not_asked' && <p>Calendars appear here once you allow access in Upcoming.</p>}
+      <p className={styles.lead}>Checked calendars show their events in Upcoming.</p>
+      {view.kind === 'loading' && <p className={styles.muted}>Loading calendars…</p>}
+      {view.kind === 'denied' && <p className={styles.callout}>{CALENDAR_DENIED}</p>}
+      {view.kind === 'not_asked' && (
+        <div className={styles.callout}>
+          <p>Meeting needs access to your calendars to list upcoming meetings and link recordings to them.</p>
+          <button type="button" data-variant="primary" disabled={asking} onClick={allow}>
+            Allow calendar access
+          </button>
+        </div>
+      )}
       {view.kind === 'failed' && (
         <p role="alert" className={styles.problem}>
           {view.message}
@@ -100,7 +121,8 @@ export function CalendarsSection() {
             <li key={calendar.id}>
               <label className={styles.calendar}>
                 <input type="checkbox" checked={!hidden.has(calendar.id)} onChange={() => toggle(calendar.id)} />{' '}
-                {calendar.title} <span className={styles.muted}>{calendar.account}</span>
+                <span className={styles.calendarTitle}>{calendar.title}</span>{' '}
+                <span className={styles.muted}>{calendar.account}</span>
               </label>
             </li>
           ))}

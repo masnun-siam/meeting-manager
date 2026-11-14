@@ -104,7 +104,8 @@ describe('NotesList', () => {
     setup();
 
     const rows = await within(await screen.findByRole('list', { name: 'Notes' })).findAllByRole('button');
-    expect(rows.map((r) => r.querySelector('span')?.textContent)).toEqual([
+    // The row's first line of text is its title.
+    expect(rows.map((r) => r.querySelector('span span')?.textContent)).toEqual([
       'Weekly sync',
       'meeting-2026-11-12_1000',
       'Older',

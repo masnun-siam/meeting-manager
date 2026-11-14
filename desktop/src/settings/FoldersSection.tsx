@@ -8,7 +8,8 @@ export function FoldersSection({ view }: { view: InfoView }) {
   return (
     <section aria-labelledby="settings-folders" className={styles.section}>
       <h3 id="settings-folders">Folders</h3>
-      {view.kind === 'loading' && <p>Loading folders…</p>}
+      <p className={styles.lead}>Where recordings are kept and where notes are written.</p>
+      {view.kind === 'loading' && <p className={styles.muted}>Loading folders…</p>}
       {view.kind === 'failed' && (
         <p role="alert" className={styles.problem}>
           {view.message}

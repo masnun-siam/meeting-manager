@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type HealthCheck, health } from '../api';
+import { AlertIcon, CheckIcon, RetryIcon } from '../icons';
 import { attempt } from '../recording/attempt';
 import styles from './Settings.module.css';
 
@@ -29,8 +30,15 @@ export function HealthSection() {
 
   return (
     <section aria-labelledby="settings-health" className={styles.section}>
-      <h3 id="settings-health">Health</h3>
-      {view.kind === 'loading' && <p>Checking…</p>}
+      <div className={styles.titleRow}>
+        <h3 id="settings-health">Health</h3>
+        <button type="button" disabled={checking} onClick={check}>
+          <RetryIcon size={14} />
+          Check again
+        </button>
+      </div>
+      <p className={styles.lead}>Whether the tools Meeting uses to transcribe and summarise are set up.</p>
+      {view.kind === 'loading' && <p className={styles.muted}>Checking…</p>}
       {view.kind === 'failed' && (
         <p role="alert" className={styles.problem}>
           {view.message}
@@ -40,17 +48,17 @@ export function HealthSection() {
       {view.kind === 'checks' && view.checks.length > 0 && (
         <ul aria-label="Health checks" className={styles.plain}>
           {view.checks.map((item) => (
-            <li key={item.name} className={styles.check}>
+            <li key={item.name} className={styles.check} data-ok={item.ok}>
+              <span className={styles.checkIcon} aria-hidden="true">
+                {item.ok ? <CheckIcon size={12} /> : <AlertIcon size={12} />}
+              </span>
               <span className={styles.checkName}>{item.name}</span>{' '}
-              <span className={item.ok ? undefined : styles.problem}>{item.ok ? 'OK' : 'Failing'}</span>
+              <span className={item.ok ? styles.okText : styles.problem}>{item.ok ? 'OK' : 'Failing'}</span>
               {!item.ok && item.fix && <span className={styles.fix}> {item.fix}</span>}
             </li>
           ))}
         </ul>
       )}
-      <button type="button" disabled={checking} onClick={check}>
-        Check again
-      </button>
     </section>
   );
 }

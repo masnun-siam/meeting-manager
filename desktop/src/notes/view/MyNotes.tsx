@@ -4,9 +4,12 @@ import type { Autosave } from './useAutosave';
 /** "My notes": editable whatever the note's status (FR-18). */
 export function MyNotes({ autosave }: { autosave: Autosave }) {
   return (
-    <section aria-labelledby="note-my-notes" className={styles.section}>
-      <h3 id="note-my-notes">My notes</h3>
+    <section aria-labelledby="note-my-notes" className={`${styles.section} ${styles.card}`}>
+      <h3 id="note-my-notes" className={styles.cardTitle}>
+        My notes
+      </h3>
       <textarea
+        placeholder="Your own notes. Saved as you type and kept when the summary is rerun."
         aria-labelledby="note-my-notes"
         className={styles.markdown}
         value={autosave.value('my_notes')}

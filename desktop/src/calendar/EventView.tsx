@@ -7,6 +7,7 @@ import {
   type Language,
   recorderStart,
 } from '../api';
+import { BackIcon, CalendarIcon, ClockIcon, MicIcon, NotesIcon, PeopleIcon, RecordIcon } from '../icons';
 import { attempt } from '../recording/attempt';
 import { LanguageSelect } from '../recording/LanguageSelect';
 import { useRecorderStatus } from '../recording/useRecorderStatus';
@@ -65,7 +66,8 @@ export function EventView(props: { occurrenceId: string; onBack: () => void; onO
 
   return (
     <article className={styles.event}>
-      <button ref={back} type="button" onClick={props.onBack}>
+      <button ref={back} type="button" data-variant="plain" className={styles.back} onClick={props.onBack}>
+        <BackIcon size={14} />
         Back
       </button>
       {/* Always mounted: screen readers skip a live region that appears already filled. */}
@@ -78,9 +80,11 @@ export function EventView(props: { occurrenceId: string; onBack: () => void; onO
           <h2 ref={heading} tabIndex={-1} className={styles.title}>
             {loaded.event.title}
           </h2>
-          <Details event={loaded.event} />
           <StartFromEvent event={loaded.event} />
-          <Earlier earlier={loaded.earlier} onOpenNote={props.onOpenNote} />
+          <div className={styles.columns}>
+            <Details event={loaded.event} />
+            <Earlier earlier={loaded.earlier} onOpenNote={props.onOpenNote} />
+          </div>
         </>
       ) : null}
     </article>
@@ -99,30 +103,45 @@ function keyed(attendees: CalendarEventDetail['attendees']) {
 
 function Details({ event }: { event: CalendarEventDetail }) {
   return (
-    <>
+    <div className={styles.details}>
       <dl className={styles.facts}>
-        <dt>Time</dt>
+        <dt>
+          <ClockIcon size={14} />
+          Time
+        </dt>
         <dd>{when(event)}</dd>
         {event.calendar ? (
           <>
-            <dt>Calendar</dt>
+            <dt>
+              <CalendarIcon size={14} />
+              Calendar
+            </dt>
             <dd>{event.calendar}</dd>
           </>
         ) : null}
         {event.organizer ? (
           <>
-            <dt>Organizer</dt>
+            <dt>
+              <PeopleIcon size={14} />
+              Organizer
+            </dt>
             <dd>{event.organizer}</dd>
           </>
         ) : null}
       </dl>
       {event.attendees.length > 0 ? (
         <>
-          <h3>Attendees</h3>
+          <h3 className={styles.subhead}>Attendees</h3>
           <ul className={styles.attendees}>
             {keyed(event.attendees).map(({ key, attendee }) => (
-              <li key={key}>
-                {attendee.name} <span className={styles.response}>({RESPONSES[attendee.response]})</span>
+              <li key={key} className={styles.attendee}>
+                <span className={styles.avatar} data-initials={initials(attendee.name)} aria-hidden="true" />
+                <span className={styles.name}>{attendee.name}</span>
+                <span className="sr-only"> (</span>
+                <span className={styles.response} data-response={attendee.response}>
+                  {RESPONSES[attendee.response]}
+                </span>
+                <span className="sr-only">)</span>
               </li>
             ))}
           </ul>
@@ -130,12 +149,21 @@ function Details({ event }: { event: CalendarEventDetail }) {
       ) : null}
       {event.description ? (
         <>
-          <h3>Notes</h3>
+          <h3 className={styles.subhead}>Notes</h3>
           <p className={styles.notes}>{event.description}</p>
         </>
       ) : null}
-    </>
+    </div>
   );
+}
+
+/** Up to two initials for the attendee's avatar circle. */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('');
 }
 
 function StartFromEvent({ event }: { event: CalendarEventDetail }) {
@@ -160,8 +188,24 @@ function StartFromEvent({ event }: { event: CalendarEventDetail }) {
 
   return (
     <div className={styles.start}>
+      <div className={styles.startText}>
+        <span className={styles.startIcon} aria-hidden="true">
+          <MicIcon size={18} />
+        </span>
+        <span>
+          <strong>Record this meeting</strong>
+          <span className={styles.startHint}>The note is linked to this event and its attendees.</span>
+        </span>
+      </div>
       <LanguageSelect className={styles.field} value={language} disabled={status === null} onChange={setChosen} />
-      <button type="button" onClick={start} disabled={!idle || far || busy}>
+      <button
+        type="button"
+        data-variant="record"
+        className={styles.startButton}
+        onClick={start}
+        disabled={!idle || far || busy}
+      >
+        <RecordIcon />
         Start recording
       </button>
       <div role="status" className={styles.problem}>
@@ -176,12 +220,13 @@ function StartFromEvent({ event }: { event: CalendarEventDetail }) {
 function Earlier(props: { earlier: EarlierNote[]; onOpenNote: (id: number) => void }) {
   if (props.earlier.length === 0) return null;
   return (
-    <>
-      <h3>Earlier notes</h3>
+    <div className={styles.earlierBox}>
+      <h3 className={styles.subhead}>Earlier notes</h3>
       <ul className={styles.earlier}>
         {props.earlier.slice(0, EARLIER_LIMIT).map((note) => (
           <li key={note.id}>
-            <button type="button" onClick={() => props.onOpenNote(note.id)}>
+            <button type="button" className={styles.earlierRow} onClick={() => props.onOpenNote(note.id)}>
+              <NotesIcon size={14} />
               {localDate(note.recorded_at).toLocaleDateString(undefined, {
                 year: 'numeric',
                 month: 'short',
@@ -192,6 +237,6 @@ function Earlier(props: { earlier: EarlierNote[]; onOpenNote: (id: number) => vo
           </li>
         ))}
       </ul>
-    </>
+    </div>
   );
 }

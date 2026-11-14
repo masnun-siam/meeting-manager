@@ -117,6 +117,8 @@ fn launch_in<R: Runtime>(
         WebviewUrl::App(mode.window_page().into()),
     )
     .title("Meeting")
+    .inner_size(1120.0, 760.0)
+    .min_inner_size(720.0, 520.0)
     .build()?;
     if mode == Mode::On {
         tray::setup(app);

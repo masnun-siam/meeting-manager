@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { rescan } from '../api';
+import { RetryIcon } from '../icons';
 import { useRescanProgress } from '../notes/list/useRescanProgress';
 import { attempt } from '../recording/attempt';
 import styles from './Settings.module.css';
@@ -42,11 +43,21 @@ export function RescanSection({ storeProblem, onFinished }: { storeProblem: stri
   return (
     <section aria-labelledby="settings-rescan" className={styles.section}>
       <h3 id="settings-rescan">Meetings</h3>
-      {storeProblem !== null && <p role="alert">Notes database can't be opened: {storeProblem}</p>}
-      <button type="button" disabled={running || starting} onClick={rescanFolders}>
-        Rescan folders
-      </button>
-      <p role="status">
+      <p className={styles.lead}>
+        Rebuild the list from the recordings folder, for example after moving or importing recordings by hand.
+      </p>
+      {storeProblem !== null && (
+        <p role="alert" className={styles.callout}>
+          Notes database can't be opened: {storeProblem}
+        </p>
+      )}
+      <div className={styles.actionRow}>
+        <button type="button" disabled={running || starting} onClick={rescanFolders}>
+          <RetryIcon size={14} />
+          Rescan folders
+        </button>
+      </div>
+      <p role="status" className={styles.muted}>
         {progress?.running ? `Loading meetings… ${progress.done} of ${progress.total}` : finished && 'Rescan finished'}
       </p>
       {problem !== null && (
