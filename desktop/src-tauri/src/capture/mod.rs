@@ -243,8 +243,14 @@ mod tests {
     #[test]
     fn real_wires_the_permission_functions() {
         let capture = real();
-        assert_eq!(capture.check as usize, permission::check as usize);
-        assert_eq!(capture.request as usize, permission::request as usize);
+        assert_eq!(
+            capture.check as usize,
+            permission::check as *const () as usize
+        );
+        assert_eq!(
+            capture.request as usize,
+            permission::request as *const () as usize
+        );
     }
 
     #[test]

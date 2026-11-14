@@ -1211,8 +1211,11 @@ mod tests {
     fn the_real_dependencies_are_the_tools() {
         let f = Fixture::new("real");
         let admin = Admin::new(&f.env);
-        assert_eq!(admin.trash as usize, native::trash_with_system as usize);
-        assert_eq!(admin.doctor as usize, run_doctor as usize);
+        assert_eq!(
+            admin.trash as usize,
+            native::trash_with_system as *const () as usize
+        );
+        assert_eq!(admin.doctor as usize, run_doctor as *const () as usize);
         assert_eq!(admin.doctor_timeout, Duration::from_secs(10));
     }
 }

@@ -1112,8 +1112,14 @@ mod tests {
     fn the_real_dependencies_are_the_tools() {
         let f = Fixture::new("real");
         let notes = Notes::new(&f.env);
-        assert_eq!(notes.open as usize, native::open_with_system as usize);
-        assert_eq!(notes.spawn as usize, spawn::process_detached as usize);
+        assert_eq!(
+            notes.open as usize,
+            native::open_with_system as *const () as usize
+        );
+        assert_eq!(
+            notes.spawn as usize,
+            spawn::process_detached as *const () as usize
+        );
     }
 
     #[test]
