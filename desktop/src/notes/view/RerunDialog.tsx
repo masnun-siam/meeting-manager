@@ -42,14 +42,14 @@ export function RerunDialog(props: { onChoose: (replaceEdits: boolean) => void; 
       >
         <h3 id="rerun-title">Rerun summary</h3>
         <p id="rerun-text">You edited this note. Keep your edits in the new summary, or replace them?</p>
-        <div className={styles.row}>
-          <button ref={first} type="button" onClick={() => props.onChoose(false)}>
+        <div className={styles.dialogButtons}>
+          <button ref={first} type="button" data-variant="primary" onClick={() => props.onChoose(false)}>
             Keep my edits
           </button>
           <button type="button" onClick={() => props.onChoose(true)}>
             Replace with new summary
           </button>
-          <button type="button" onClick={props.onCancel}>
+          <button type="button" data-variant="plain" onClick={props.onCancel}>
             Cancel
           </button>
         </div>

@@ -1,0 +1,323 @@
+/*
+ * Design tokens and base element styles for the whole app. Components keep their layout in CSS
+ * modules and read colours, type and spacing from these variables. Light and dark follow macOS.
+ */
+:root {
+  color-scheme: light dark;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-title: ui-serif, "New York", Georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 14px;
+
+  /* Light */
+  --canvas: #f6f7f9;
+  --surface: #ffffff;
+  --surface-sunken: #eef0f4;
+  --sidebar: #eceef2;
+  --line: #dfe2e8;
+  --line-strong: #c6cbd4;
+  --ink: #1b2130;
+  --ink-soft: #4a5468;
+  --ink-faint: #7a8396;
+  --accent: #2563eb;
+  --accent-ink: #ffffff;
+  --accent-soft: #e3ebfd;
+  --accent-text: #1d4fd0;
+  --record: #e5484d;
+  --record-soft: #fde8e8;
+  --record-text: #c42b30;
+  --ok: #18794e;
+  --ok-soft: #e1f4ea;
+  --warn: #9a5b00;
+  --warn-soft: #fdf1dc;
+  --shadow-pop: 0 1px 2px rgb(16 24 40 / 6%), 0 8px 24px rgb(16 24 40 / 10%);
+  --focus: 0 0 0 3px rgb(37 99 235 / 35%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #16181d;
+    --surface: #1e2128;
+    --surface-sunken: #262a33;
+    --sidebar: #1a1d23;
+    --line: #2e333d;
+    --line-strong: #414856;
+    --ink: #e8ebf1;
+    --ink-soft: #aab2c2;
+    --ink-faint: #7d8697;
+    --accent: #4f8bff;
+    --accent-ink: #ffffff;
+    --accent-soft: #1f2e4d;
+    --accent-text: #8db3ff;
+    --record: #ff5c61;
+    --record-soft: #3d1f22;
+    --record-text: #ff8a8e;
+    --ok: #4cc38a;
+    --ok-soft: #173a2a;
+    --warn: #f0b350;
+    --warn-soft: #3a2c14;
+    --shadow-pop: 0 1px 2px rgb(0 0 0 / 30%), 0 12px 32px rgb(0 0 0 / 45%);
+    --focus: 0 0 0 3px rgb(79 139 255 / 45%);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+/* Reading and writing surfaces stay selectable. */
+input,
+textarea,
+pre,
+p,
+dd,
+li,
+[contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+/* Buttons: a quiet default, `data-variant` for primary, record, danger and plain. */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 80ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button svg {
+  flex: none;
+}
+
+button[data-variant="primary"] {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+button[data-variant="primary"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, black);
+}
+
+button[data-variant="record"] {
+  border-color: transparent;
+  background: var(--record);
+  color: #fff;
+}
+
+button[data-variant="record"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--record) 88%, black);
+}
+
+button[data-variant="danger"] {
+  border-color: color-mix(in srgb, var(--record) 45%, var(--line-strong));
+  color: var(--record-text);
+}
+
+button[data-variant="danger"][data-armed="true"] {
+  border-color: transparent;
+  background: var(--record);
+  color: #fff;
+}
+
+button[data-variant="plain"] {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+button[data-variant="plain"]:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+input[type="text"],
+input[type="search"],
+select,
+textarea {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+input[type="text"]:focus,
+input[type="search"]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+select {
+  padding-right: 8px;
+  cursor: pointer;
+}
+
+select:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+textarea {
+  line-height: 1.55;
+  resize: vertical;
+}
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+::placeholder {
+  color: var(--ink-faint);
+}
+
+/* Visually hidden, still read by screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 10px;
+  background: var(--line-strong);
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must win over every component's animation. */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: as above. */
+    animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: as above. */
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -7,18 +7,20 @@ import type { Autosave } from './useAutosave';
 export function SpeakersPanel({ note, autosave, editable }: { note: Note; autosave: Autosave; editable: boolean }) {
   if (note.speakers.length === 0) return null;
   return (
-    <section aria-labelledby="note-speakers" className={styles.section}>
-      <h3 id="note-speakers">Speakers</h3>
+    <section aria-labelledby="note-speakers" className={`${styles.section} ${styles.card}`}>
+      <h3 id="note-speakers" className={styles.cardTitle}>
+        Speakers
+      </h3>
       <ul className={styles.speakers}>
         {note.speakers.map((speaker) => {
           const key = `speaker:${speaker.label}` as const;
           return (
             <li key={speaker.label} className={styles.speaker}>
               <span className={styles.label}>{speaker.label}</span>
-              <span>{shownName(speaker)}</span>
+              <span className={styles.shown}>{shownName(speaker)}</span>
               {editable ? (
                 <label className={styles.field}>
-                  <span>Name for {speaker.label}</span>
+                  <span className="sr-only">Name for {speaker.label}</span>
                   <input
                     type="text"
                     value={autosave.value(key)}

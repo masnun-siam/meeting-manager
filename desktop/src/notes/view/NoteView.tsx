@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Note } from '../../api';
+import { BackIcon } from '../../icons';
 import { formatDuration, formatRecorded, languageLabel, sourceLabel } from '../list/format';
 import { Actions } from './Actions';
 import { calendarName, eventStart } from './format';
@@ -55,7 +56,8 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
 
   return (
     <article className={styles.note}>
-      <button ref={back} type="button" onClick={leave}>
+      <button ref={back} type="button" data-variant="plain" className={styles.back} onClick={leave}>
+        <BackIcon size={14} />
         Back
       </button>
       {/* Always mounted: screen readers skip a live region that appears already filled. */}
@@ -66,14 +68,16 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
       </div>
       {note ? (
         <>
-          <h2 ref={heading} tabIndex={-1} className={styles.heading}>
-            {note.title ?? UNTITLED}
-          </h2>
+          <div className={styles.header}>
+            <h2 ref={heading} tabIndex={-1} className={styles.heading}>
+              {note.title ?? UNTITLED}
+            </h2>
+            <div role="status" className={styles.saveLine} data-state={autosave.saveState}>
+              {autosave.saveState === 'error' ? autosave.problem : SAVE_TEXT[autosave.saveState]}
+            </div>
+          </div>
           <Facts note={note} />
           <Status note={note} />
-          <div role="status" className={styles.saveLine}>
-            {autosave.saveState === 'error' ? autosave.problem : SAVE_TEXT[autosave.saveState]}
-          </div>
           <div role="alert" className={styles.banner}>
             {autosave.vaultError !== null ? (
               <>
@@ -106,30 +110,34 @@ function Facts({ note }: { note: Note }) {
   const calendar = note.event ? calendarName(note.event.calendar) : null;
   return (
     <dl className={styles.facts}>
-      <dt>Recorded</dt>
-      <dd>{formatRecorded(note.recorded_at)}</dd>
+      <div>
+        <dt>Recorded</dt>
+        <dd>{formatRecorded(note.recorded_at)}</dd>
+      </div>
       {length !== null ? (
-        <>
+        <div>
           <dt>Duration</dt>
           <dd>{length}</dd>
-        </>
+        </div>
       ) : null}
       {language ? (
-        <>
+        <div>
           <dt>Language</dt>
           <dd>{language}</dd>
-        </>
+        </div>
       ) : null}
-      <dt>Source</dt>
-      <dd>{sourceLabel(note.source)}</dd>
+      <div>
+        <dt>Source</dt>
+        <dd>{sourceLabel(note.source)}</dd>
+      </div>
       {note.event ? (
-        <>
+        <div className={styles.eventFact}>
           <dt>Event</dt>
           <dd>
             {note.event.title} · {eventStart(note.event.start)}
             {calendar ? ` · ${calendar}` : null}
           </dd>
-        </>
+        </div>
       ) : null}
     </dl>
   );
@@ -137,10 +145,21 @@ function Facts({ note }: { note: Note }) {
 
 function Status({ note }: { note: Note }) {
   if (note.status === 'done') return null;
-  if (note.status === 'processing') return <p className={styles.state}>Processing…</p>;
-  if (note.status === 'no_speech') return <p className={styles.state}>No speech detected</p>;
+  if (note.status === 'processing')
+    return (
+      <p className={styles.state} data-status="processing">
+        <span className={styles.spinner} aria-hidden="true" />
+        Processing…
+      </p>
+    );
+  if (note.status === 'no_speech')
+    return (
+      <p className={styles.state} data-status="no_speech">
+        No speech detected
+      </p>
+    );
   return (
-    <p className={styles.state}>
+    <p className={styles.state} data-status="failed">
       Failed{note.failed_stage ? ` at ${note.failed_stage}` : ''}
       {note.error ? `: ${note.error}` : ''}
     </p>
@@ -151,22 +170,26 @@ function Status({ note }: { note: Note }) {
 function Editors({ note, autosave }: { note: Note; autosave: Autosave }) {
   const editable = note.status === 'done';
   return (
-    <>
-      {editable ? (
-        <label className={styles.stacked}>
-          <span>Title</span>
-          <input
-            type="text"
-            value={autosave.value('title')}
-            onChange={(e) => autosave.change('title', e.target.value)}
-            onFocus={() => autosave.focus('title')}
-            onBlur={() => autosave.blur('title')}
-          />
-        </label>
-      ) : null}
-      <Tabs summary={<Summary note={note} autosave={autosave} editable={editable} />} transcript={note.transcript} />
-      <SpeakersPanel note={note} autosave={autosave} editable={editable} />
-      <MyNotes autosave={autosave} />
-    </>
+    <div className={styles.layout}>
+      <div className={styles.primary}>
+        <Tabs summary={<Summary note={note} autosave={autosave} editable={editable} />} transcript={note.transcript} />
+      </div>
+      <div className={styles.aside}>
+        {editable ? (
+          <label className={`${styles.stacked} ${styles.card}`}>
+            <span className={styles.cardTitle}>Title</span>
+            <input
+              type="text"
+              value={autosave.value('title')}
+              onChange={(e) => autosave.change('title', e.target.value)}
+              onFocus={() => autosave.focus('title')}
+              onBlur={() => autosave.blur('title')}
+            />
+          </label>
+        ) : null}
+        <SpeakersPanel note={note} autosave={autosave} editable={editable} />
+        <MyNotes autosave={autosave} />
+      </div>
+    </div>
   );
 }

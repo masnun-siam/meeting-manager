@@ -117,6 +117,8 @@ fn launch_in<R: Runtime>(
         WebviewUrl::App(mode.window_page().into()),
     )
     .title("Meeting")
+    .inner_size(1120.0, 760.0)
+    .min_inner_size(720.0, 520.0)
     .build()?;
     if mode == Mode::On {
         tray::setup(app);
@@ -477,6 +479,30 @@ mod tests {
             let (_, value) = after.split_once("<string>").unwrap();
             let (value, _) = value.split_once("</string>").unwrap();
             assert!(value.trim().len() > 20, "{key}: {value:?}");
+        }
+    }
+
+    /// The bundle is signed with the hardened runtime, under which macOS refuses the
+    /// microphone and calendar without a prompt unless these entitlements are present.
+    #[test]
+    fn the_hardened_runtime_entitlements_are_set() {
+        let conf = json_file("tauri.conf.json");
+        assert_eq!(
+            conf["bundle"]["macOS"]["entitlements"],
+            "./Entitlements.plist"
+        );
+        let plist = manifest_file("Entitlements.plist");
+        for key in [
+            "com.apple.security.device.audio-input",
+            "com.apple.security.personal-information.calendars",
+        ] {
+            let (_, after) = plist
+                .split_once(&format!("<key>{key}</key>"))
+                .unwrap_or_else(|| panic!("{key} is missing"));
+            assert!(
+                after.trim_start().starts_with("<true/>"),
+                "{key} is not true"
+            );
         }
     }
 }

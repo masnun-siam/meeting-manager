@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { type NotesListRow, rescan } from '../../api';
+import { SearchIcon } from '../../icons';
 import { formatDuration, formatRecorded, languageLabel, sourceLabel, statusText } from './format';
 import styles from './NotesList.module.css';
 import { errorMessage, useNotes } from './useNotes';
@@ -36,27 +37,41 @@ export function NotesList({ onOpen }: { onOpen: (id: number) => void }) {
 
   return (
     <section className={styles.notes}>
-      <h2>All notes</h2>
-      <input
-        type="search"
-        aria-label="Search meetings"
-        placeholder="Search"
-        className={styles.search}
-        value={input}
-        onChange={(event) => setInput(event.target.value)}
-      />
-      <p role="status">{progress?.running && `Loading meetings… ${progress.done} of ${progress.total}`}</p>
-      {view.kind === 'loading' && <p>Loading meetings…</p>}
+      <div className={styles.head}>
+        <div>
+          <h2>All notes</h2>
+          <p className={styles.sub}>
+            {view.kind === 'list' && view.notes.length > 0
+              ? `${view.notes.length} ${view.notes.length === 1 ? 'meeting' : 'meetings'}${view.query === null ? '' : ' found'}`
+              : 'Every recorded meeting, newest first.'}
+          </p>
+        </div>
+        <label className={styles.searchBox}>
+          <SearchIcon size={14} />
+          <input
+            type="search"
+            aria-label="Search meetings"
+            placeholder="Search meetings"
+            className={styles.search}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+          />
+        </label>
+      </div>
+      <p role="status" className={styles.progress}>
+        {progress?.running && `Loading meetings… ${progress.done} of ${progress.total}`}
+      </p>
+      {view.kind === 'loading' && <p className={styles.quiet}>Loading meetings…</p>}
       {view.kind === 'unavailable' && (
         <div role="alert" className={styles.problem}>
           <p>Notes database can't be opened: {view.message}</p>
-          <button type="button" onClick={rescanFolders}>
+          <button type="button" data-variant="primary" onClick={rescanFolders}>
             Rescan folders
           </button>
         </div>
       )}
       {view.kind === 'list' && view.notes.length === 0 && (
-        <p>
+        <p className={styles.empty}>
           {view.query === null ? (
             <>
               No meetings yet — start a recording or run <code>meeting import</code>.
@@ -90,13 +105,29 @@ function NoteRow({ note, onOpen }: { note: NotesListRow; onOpen: (id: number) =>
 
   return (
     <li>
-      <button type="button" className={styles.row} onClick={() => onOpen(note.id)}>
-        <span className={styles.title}>{note.title ?? note.folder_name}</span>
-        <span className={styles.meta}>{meta.join(' · ')}</span>
+      <button type="button" className={styles.row} data-status={note.status} onClick={() => onOpen(note.id)}>
+        <i className={styles.mark} aria-hidden="true" />
+        <span className={styles.main}>
+          <span className={styles.title}>{note.title ?? note.folder_name}</span>
+          <span className={styles.meta}>{meta.join(' · ')}</span>
+        </span>
         <span className={styles.status}>
-          {statusText(note)}
-          {note.status === 'failed' && note.error && <span className={styles.problem}> — {note.error}</span>}
-          {note.recording_missing && <span className={styles.problem}> · Recording missing</span>}
+          <span className={styles.chip}>{statusText(note)}</span>
+          {note.status === 'failed' && note.error && (
+            <span className={styles.problem}>
+              <span className={styles.sep}> — </span>
+              {note.error}
+            </span>
+          )}
+          {note.recording_missing && (
+            <span className={styles.problem}>
+              <span className={styles.sep}> · </span>
+              Recording missing
+            </span>
+          )}
+        </span>
+        <span className={styles.chevron} aria-hidden="true">
+          ›
         </span>
       </button>
     </li>

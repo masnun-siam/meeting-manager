@@ -37,9 +37,11 @@ export function Summary({ note, autosave, editable }: { note: Note; autosave: Au
   return (
     <section aria-labelledby={`${textarea}-heading`} className={styles.section}>
       <div className={styles.sectionHead}>
-        <h3 id={`${textarea}-heading`}>Summary</h3>
+        <h3 id={`${textarea}-heading`} className="sr-only">
+          Summary
+        </h3>
         {editable ? (
-          <button type="button" onClick={toggle} aria-pressed={editing}>
+          <button type="button" data-variant={editing ? 'primary' : undefined} onClick={toggle} aria-pressed={editing}>
             {editing ? 'Done' : 'Edit'}
           </button>
         ) : null}
@@ -61,7 +63,7 @@ export function Summary({ note, autosave, editable }: { note: Note; autosave: Au
       ) : (
         <div
           ref={body}
-          className={styles.body}
+          className={styles.prose}
           // biome-ignore lint/security/noDangerouslySetInnerHtml: body_html is rendered by pulldown-cmark on the Rust side with raw HTML shown as text and unsafe link targets dropped (#143, D25); the CSP blocks inline script.
           dangerouslySetInnerHTML={{ __html: note.body_html }}
         />

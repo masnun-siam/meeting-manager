@@ -6,6 +6,7 @@ import type { Api } from '../api.mock';
 
 const api = vi.hoisted(() => ({
   calendarStatus: vi.fn(),
+  calendarEvents: vi.fn(),
   calendars: vi.fn(),
   setHiddenCalendars: vi.fn(),
 }));
@@ -13,6 +14,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../api', async () =>
   (await import('../api.mock')).mockApi({
     calendarStatus: () => api.calendarStatus(),
+    calendarEvents: () => api.calendarEvents(),
     calendars: () => api.calendars(),
     setHiddenCalendars: (req) => api.setHiddenCalendars(req),
   } satisfies Partial<Api>),
@@ -45,6 +47,7 @@ const deferred = <T,>() => {
 beforeEach(() => {
   api.calendarStatus.mockReset().mockResolvedValue({ ok: true, access: 'granted' });
   api.calendars.mockReset();
+  api.calendarEvents.mockReset();
   api.setHiddenCalendars.mockReset();
   storeOf(work, { ...home, hidden: true });
 });
@@ -156,12 +159,35 @@ describe('CalendarsSection', () => {
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
 
-  it('explains where access is asked when it never was', async () => {
+  it('offers Allow calendar access when it was never asked, without asking for calendars', async () => {
     api.calendarStatus.mockResolvedValue({ ok: true, access: 'not_asked' });
     setup();
 
-    expect(await screen.findByText(/once you allow access in Upcoming/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Allow calendar access' })).toBeEnabled();
     expect(api.calendars).not.toHaveBeenCalled();
+    expect(api.calendarEvents).not.toHaveBeenCalled();
+  });
+
+  it('Allow calendar access asks through calendar_events, then lists the calendars once granted', async () => {
+    api.calendarStatus.mockResolvedValueOnce({ ok: true, access: 'not_asked' });
+    api.calendarEvents.mockResolvedValue({ ok: true, days: [] });
+    const { user } = setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Allow calendar access' }));
+    expect(api.calendarEvents).toHaveBeenCalledOnce();
+    expect(await screen.findByRole('checkbox', { name: /Work/ })).toBeChecked();
+  });
+
+  it('shows the FR-8 text when the prompt is refused', async () => {
+    api.calendarStatus
+      .mockResolvedValueOnce({ ok: true, access: 'not_asked' })
+      .mockResolvedValueOnce({ ok: true, access: 'denied' });
+    api.calendarEvents.mockResolvedValue({ ok: false, code: 'calendar_denied', message: 'denied' });
+    const { user } = setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Allow calendar access' }));
+    expect(await screen.findByText(CALENDAR_DENIED)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Allow calendar access' })).not.toBeInTheDocument();
   });
 
   it('says No calendars found for an empty list', async () => {

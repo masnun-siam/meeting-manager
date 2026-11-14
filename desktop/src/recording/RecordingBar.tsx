@@ -9,6 +9,7 @@ import {
   recorderStart,
   recorderStop,
 } from '../api';
+import { MicIcon, PauseIcon, PlayIcon, RecordIcon, RetryIcon, StopIcon } from '../icons';
 import { attempt } from './attempt';
 import { LanguageSelect } from './LanguageSelect';
 import { canRetry, noticeText } from './notices';
@@ -65,65 +66,103 @@ export function RecordingBar() {
   const control = (call: () => Promise<Reply<StateReply>>) => run(call, follow);
   const retry = (folder: string) => run(() => recorderRetry({ folder }), follow);
 
+  const noticeIsProblem = notice !== null && (notice.kind === 'error' || notice.kind === 'setup');
+
   return (
-    <header className={styles.bar}>
-      <h1 className={styles.title}>Meeting</h1>
+    <header className={styles.bar} data-state={state}>
+      <h1 className="sr-only">Meeting</h1>
 
-      <LanguageSelect
-        className={styles.field}
-        value={language}
-        disabled={!idle || status === null}
-        onChange={setChosen}
-      />
+      <div className={styles.deck}>
+        <div className={styles.readout}>
+          {running ? (
+            <>
+              <span className={state === 'recording' ? styles.rec : styles.paused}>
+                {state === 'recording' ? '● REC' : 'II Paused'}
+              </span>
+              <span role="timer" aria-label="Recorded time" className={styles.timer}>
+                {formatElapsed(status?.elapsed_s ?? 0)}
+              </span>
+              <Wave live={state === 'recording'} />
+            </>
+          ) : (
+            <span className={styles.idle}>
+              <MicIcon />
+              {state === 'saving' ? 'Saving…' : 'Ready to record'}
+            </span>
+          )}
+        </div>
 
-      {running ? (
-        <p className={styles.timer}>
-          <span className={state === 'recording' ? styles.rec : styles.paused}>
-            {state === 'recording' ? '● REC' : 'II Paused'}
-          </span>{' '}
-          <span role="timer" aria-label="Recorded time">
-            {formatElapsed(status?.elapsed_s ?? 0)}
-          </span>
-        </p>
-      ) : null}
-
-      <div className={styles.controls}>
-        <button type="button" onClick={start} disabled={!idle || status === null || busy}>
-          Start recording
-        </button>
-        {idle ? null : (
-          <>
-            {state === 'paused' ? (
-              <button type="button" onClick={() => control(recorderResume)} disabled={busy}>
-                Resume
-              </button>
-            ) : (
-              <button type="button" onClick={() => control(recorderPause)} disabled={!running || busy}>
-                Pause
-              </button>
-            )}
-            <button type="button" onClick={() => control(recorderStop)} disabled={!running || busy}>
-              Stop
-            </button>
-          </>
-        )}
-        {canRetry(notice) ? (
-          <button type="button" onClick={() => retry(notice.folder)} disabled={busy}>
-            Retry
+        <div className={styles.controls}>
+          <LanguageSelect
+            className={styles.field}
+            value={language}
+            disabled={!idle || status === null}
+            onChange={setChosen}
+          />
+          {/* Kept while recording, disabled and visually hidden, so it is never pressed twice. */}
+          <button
+            type="button"
+            data-variant="record"
+            className={idle ? styles.start : 'sr-only'}
+            onClick={start}
+            disabled={!idle || status === null || busy}
+          >
+            <RecordIcon />
+            Start recording
           </button>
-        ) : null}
+          {idle ? null : (
+            <>
+              {state === 'paused' ? (
+                <button type="button" onClick={() => control(recorderResume)} disabled={busy}>
+                  <PlayIcon size={14} />
+                  Resume
+                </button>
+              ) : (
+                <button type="button" onClick={() => control(recorderPause)} disabled={!running || busy}>
+                  <PauseIcon size={14} />
+                  Pause
+                </button>
+              )}
+              <button
+                type="button"
+                data-variant="record"
+                onClick={() => control(recorderStop)}
+                disabled={!running || busy}
+              >
+                <StopIcon size={14} />
+                Stop
+              </button>
+            </>
+          )}
+          {canRetry(notice) ? (
+            <button type="button" onClick={() => retry(notice.folder)} disabled={busy}>
+              <RetryIcon size={14} />
+              Retry
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div role="status" className={styles.messages}>
-        {state === 'saving' ? <p>Saving the recording…</p> : null}
-        {message ? <p className={styles.problem}>{message}</p> : null}
-        {error ? <p className={styles.problem}>{error}</p> : null}
+        {state === 'saving' ? <p className={styles.line}>Saving the recording…</p> : null}
+        {message ? <p className={`${styles.line} ${styles.problem}`}>{message}</p> : null}
+        {error ? <p className={`${styles.line} ${styles.problem}`}>{error}</p> : null}
         {notice ? (
-          <p className={notice.kind === 'error' || notice.kind === 'setup' ? styles.problem : undefined}>
-            {noticeText(notice)}
-          </p>
+          <p className={`${styles.line} ${noticeIsProblem ? styles.problem : styles.info}`}>{noticeText(notice)}</p>
         ) : null}
       </div>
     </header>
+  );
+}
+
+/** A level-meter look while recording; still when paused. Decorative only. */
+function Wave({ live }: { live: boolean }) {
+  return (
+    <span className={live ? `${styles.wave} ${styles.live}` : styles.wave} aria-hidden="true">
+      {Array.from({ length: 14 }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: a fixed row of identical bars.
+        <i key={i} />
+      ))}
+    </span>
   );
 }
