@@ -146,7 +146,7 @@ Conventions are the extension's: colocated `*.test.ts(x)`, CSS modules, Biome. N
 - **CSP** (`tauri.conf.json`): `default-src 'self'`, IPC only in `connect-src`, no remote origin, no `unsafe-inline`, no `unsafe-eval`. `devCsp` adds only the dev server's websocket.
 - **Capability** (`capabilities/default.json`): window `main`, no permission. The app's own commands need none; no plugin is exposed to the webview, so no shell, file-system or HTTP access from the UI.
 - `withGlobalTauri` is off, no asset protocol, no window in the config (windows are created in code).
-- `Info.plist` holds the Microphone, Audio Capture and Calendar usage strings.
+- `Info.plist` holds the Microphone, Audio Capture and Calendar usage strings. `Entitlements.plist` (`bundle.macOS.entitlements`) grants `device.audio-input` and `personal-information.calendars`: the bundle is signed with the hardened runtime, which otherwise refuses both without a prompt.
 - Tests in `lib.rs` read these files and fail if they loosen.
 
 ## Dependencies

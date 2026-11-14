@@ -479,4 +479,28 @@ mod tests {
             assert!(value.trim().len() > 20, "{key}: {value:?}");
         }
     }
+
+    /// The bundle is signed with the hardened runtime, under which macOS refuses the
+    /// microphone and calendar without a prompt unless these entitlements are present.
+    #[test]
+    fn the_hardened_runtime_entitlements_are_set() {
+        let conf = json_file("tauri.conf.json");
+        assert_eq!(
+            conf["bundle"]["macOS"]["entitlements"],
+            "./Entitlements.plist"
+        );
+        let plist = manifest_file("Entitlements.plist");
+        for key in [
+            "com.apple.security.device.audio-input",
+            "com.apple.security.personal-information.calendars",
+        ] {
+            let (_, after) = plist
+                .split_once(&format!("<key>{key}</key>"))
+                .unwrap_or_else(|| panic!("{key} is missing"));
+            assert!(
+                after.trim_start().starts_with("<true/>"),
+                "{key} is not true"
+            );
+        }
+    }
 }
