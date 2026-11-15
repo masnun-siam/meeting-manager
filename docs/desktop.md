@@ -11,7 +11,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | Built | Window | Registered |
 |---|---|---|
 | Off (default) | label `off`, page `off.html` ("Built without FEATURE_DESKTOP_APP"), no capability | Nothing: no state, no command, no plugin, no hook |
-| On | label `main`, page `index.html` | The single-instance plugin, the `App` state, the 22 commands, the launch hooks |
+| On | label `main`, page `index.html` | The single-instance and updater plugins, the `App` state, the 22 commands, the launch hooks |
 
 ## Rust side (`desktop/src-tauri/src`)
 
@@ -32,6 +32,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 
 - **Startup order** (`launch`, flag on): manage `App`, open the window, then `tray::setup`, `recorder::on_launch`, `admin::on_launch`, `calendar::on_launch`, `recorder::on_sleep`. Hooks take `&AppHandle<R>` for any runtime so tests run them on Tauri's mock runtime.
 - **Single instance:** `tauri-plugin-single-instance` is added in `run()`, before everything else, and only there: on macOS a second instance in one process exits it, which would end the test process. A second launch focuses the `main` window.
+- **Updater:** `tauri-plugin-updater` is added in `run()` right after single instance, flag on only. Its endpoint (the `latest.json` of this repo's latest GitHub Release) and public key are `plugins.updater` in `tauri.conf.json`; release builds come from `release.yml` ([development.md](development.md#releasing)).
 - **Quit:** with the flag on, `run()` calls `recorder::on_exit_requested` on `RunEvent::ExitRequested` and prevents the exit when it returns `false`. Built off, it is not called.
 - **Closing the window** (flag on, D15) hides it instead: the app and its menu-bar item keep running until Quit. The menu's Open Meeting, a second launch or a click on the Dock icon (`RunEvent::Reopen`) shows it again (`focus_main`).
 - **Logging:** `meeting::logging::init()`, the same log file and rules as the tool. Stubs log nothing.
@@ -146,14 +147,14 @@ Conventions are the extension's: colocated `*.test.ts(x)`, CSS modules, Biome. N
 ## Security
 
 - **CSP** (`tauri.conf.json`): `default-src 'self'`, IPC only in `connect-src`, no remote origin, no `unsafe-inline`, no `unsafe-eval`. `devCsp` adds only the dev server's websocket.
-- **Capability** (`capabilities/default.json`): window `main`, no permission. The app's own commands need none; no plugin is exposed to the webview, so no shell, file-system or HTTP access from the UI.
+- **Capability** (`capabilities/default.json`): window `main`, no permission. The app's own commands need none; no plugin is exposed to the webview, so no shell, file-system or HTTP access from the UI. The updater plugin is Rust side only (D47): no capability lists it.
 - `withGlobalTauri` is off, no asset protocol, no window in the config (windows are created in code).
 - `Info.plist` holds the Microphone, Audio Capture and Calendar usage strings. `Entitlements.plist` (`bundle.macOS.entitlements`) grants `device.audio-input` and `personal-information.calendars`: the bundle is signed with the hardened runtime, which otherwise refuses both without a prompt.
 - Tests in `lib.rs` read these files and fail if they loosen.
 
 ## Dependencies
 
-`desktop/src-tauri/Cargo.toml` lists every crate the PRD approves (D22, D25, D32). The `objc2-*` framework crates start with no framework feature on; an issue that needs a class turns its cargo feature on and adds no crate. `@tauri-apps/api` and `@tauri-apps/cli` stay on the `tauri` crate's minor version (2.11): the Tauri CLI refuses to build when they differ.
+`desktop/src-tauri/Cargo.toml` lists every crate the PRD approves (D22, D25, D32, and `tauri-plugin-updater` by D47). The `objc2-*` framework crates start with no framework feature on; an issue that needs a class turns its cargo feature on and adds no crate. `@tauri-apps/api` and `@tauri-apps/cli` stay on the `tauri` crate's minor version (2.11): the Tauri CLI refuses to build when they differ.
 
 ## Gates
 

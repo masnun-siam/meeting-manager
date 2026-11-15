@@ -63,7 +63,18 @@ Every line must show `✓`. A `✗` line names its fix. The popup's Jobs tab sho
 
 ## 6. Install the desktop app (optional)
 
-The desktop app is behind the build-time flag `FEATURE_DESKTOP_APP`. It records calls with the microphone and system audio, lists upcoming calendar events and lets you browse and edit notes. It needs macOS 14.4 or later on Apple silicon. Build the tool and the app with the flag on:
+The desktop app records calls with the microphone and system audio, lists upcoming calendar events and lets you browse and edit notes. It needs macOS 14.4 or later on Apple silicon.
+
+Download `Meeting.app.tar.gz` from the [latest release](https://github.com/masnun-siam/meeting-manager/releases/latest) and unpack it into `/Applications`:
+
+```sh
+cd /Applications
+curl -fL https://github.com/masnun-siam/meeting-manager/releases/latest/download/Meeting.app.tar.gz | tar xz
+```
+
+The app carries a matching `meeting` binary in `Meeting.app/Contents/Resources/`; until the app installs it for you, keep the tool from section 2 built with the flag on (`FEATURE_DESKTOP_APP=1 cargo install --path crates/meeting`).
+
+To build it yourself instead: the app is behind the build-time flag `FEATURE_DESKTOP_APP`. Build the tool and the app with the flag on:
 
 ```sh
 FEATURE_DESKTOP_APP=1 cargo install --path crates/meeting
