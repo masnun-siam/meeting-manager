@@ -1,6 +1,6 @@
 # PRD — Meeting desktop app
 
-**Status:** Approved · **Date:** 2026-11-13 · **Slug:** `desktop-app` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager (private)
+**Status:** Approved · **Date:** 2026-11-13 · **Slug:** `desktop-app` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager (public from the first release, D44)
 
 This document is the source of truth for the feature: every issue is derived from it, and a decision that is not written here has not been made. It adds to [meeting-recorder.md](meeting-recorder.md), [recording-folders.md](recording-folders.md), [recording-import.md](recording-import.md) and [meeting-context.md](meeting-context.md) without changing their behaviour while `FEATURE_DESKTOP_APP` is off; with it on, the changes listed under "Changes to existing behaviour" apply and win over those PRDs.
 
@@ -31,6 +31,7 @@ The single owner, on their own Mac (macOS 14.4 or later, for Core Audio process 
 - Find any past meeting, from any source, by searching its title, summary, transcript or own notes.
 - Fix a note once (title, summary, speaker names, own notes) and have the vault note follow.
 - See earlier notes of the same recurring meeting when opening an event.
+- Get new versions of the app and the `meeting` tool from Settings, or automatically when idle, without rebuilding by hand.
 
 ## Non-goals
 
@@ -43,7 +44,8 @@ The single owner, on their own Mac (macOS 14.4 or later, for Core Audio process 
 - Sending earlier notes of the same series to Claude (D19).
 - Editing transcript text; editing in Obsidian flowing back into the app (D5, D9).
 - Changes to the Chrome extension or the native-messaging protocol (D8).
-- Signed or notarized builds, a DMG, auto-update, or running on someone else's Mac (D12).
+- A Developer ID signature, notarization, a DMG, or running on someone else's Mac (D12, D45).
+- Updating the Chrome extension, downgrading, or choosing which version to install; release channels (D48).
 - Windows, Linux, Intel-only code paths beyond what Tauri gives by default, macOS earlier than 14.4.
 - Live or streaming transcription, chunked summarisation, meetings over 3 hours (unchanged from meeting-recorder).
 - Several recordings at once in the app.
@@ -110,7 +112,18 @@ The single owner, on their own Mac (macOS 14.4 or later, for Core Audio process 
 - **FR-22 Install records the tool path.** `meeting install` stores its own absolute, canonical path as `meeting_path` in `config.toml`, and `meeting doctor` gains a check that `meeting_path` exists and is executable (fails when the key is absent or not executable, with the fix "run `meeting install`"; D30). Existing configs without the key keep working for the extension.
   - Acceptance: after `meeting install`, `config.toml` has `meeting_path` pointing at the installed binary. Deleting the key makes the app's Stop show FR-6's message and `doctor` show the fix.
 - **FR-23 Feature flag.** Everything above sits behind the build-time flag `FEATURE_DESKTOP_APP`, default off, added to `FLAGS.md`. The code is always compiled, linted and tested; the flag decides reachability. Tool built off: no store is opened or written, `meeting_path` is not written and its doctor check is absent; behaviour is byte-identical to today. App built off: it opens one window saying "Built without FEATURE_DESKTOP_APP" and does nothing else. FR-12's use of the event for Claude also needs `FEATURE_MEETING_CONTEXT` on.
-  - Acceptance: with the flag unset, `meeting process` writes no store file and `config.toml` gains no key; the existing Rust and extension tests pass unchanged. With the flag on in both builds, FR-1 to FR-22 hold.
+  - Acceptance: with the flag unset, `meeting process` writes no store file and `config.toml` gains no key; the existing Rust and extension tests pass unchanged. With the flag on in both builds, FR-1 to FR-22 and FR-24 to FR-27 hold.
+
+### Updates (E2)
+
+- **FR-24 Releases.** Pushing a tag `vX.Y.Z` builds a release on a macOS Apple-silicon CI runner and publishes a GitHub Release in this repo with the updater bundle of `Meeting.app` (which carries the matching `meeting` binary), its updater signature and `latest.json` (version, publish date, release notes from the tag message, bundle URL, signature). The app, the `meeting` tool and both crates share one version `X.Y.Z`; the workflow fails when the tag and any of the three versions differ (D46). Builds are ad-hoc signed and built with `FEATURE_DESKTOP_APP` on.
+  - Acceptance: pushing `v0.2.0` with all versions at `0.2.0` publishes a release whose `latest.json` names `0.2.0` and whose bundle verifies against the app's updater public key; pushing `v0.2.1` while a version says `0.2.0` fails the workflow and publishes nothing.
+- **FR-25 Update settings.** Settings shows "Version X.Y.Z", a "Check for updates" button and an "Install updates automatically" checkbox (default off, kept in the store setting `auto_update`; D49). Check shows "Checking…", then "Meeting is up to date", or "Version A.B.C is available" with its release notes and an "Install and relaunch" button, or the failure ("Couldn't check for updates: <reason>"). Install shows "Downloading… N%", then installs and relaunches. While a recording is running or saving, Install is disabled with "Finish the recording to install".
+  - Acceptance: with a newer release published, Check shows its version and notes; Install downloads, relaunches, and Settings then shows the new version. While recording, Install is disabled and nothing is downloaded.
+- **FR-26 Automatic install.** With "Install updates automatically" on, the app checks at launch and then every 6 hours while open; a newer version is downloaded in the background and installed with a relaunch as soon as the recorder is idle (immediately, or right after the current recording finishes saving). A relaunch never interrupts a recording or its conversion; detached `meeting process` jobs keep running. With it off, the app never checks on its own.
+  - Acceptance: with the box on and a newer release, launching the app while idle ends with the new version running and no click. Starting a recording before the download finishes delays the relaunch until that recording is saved.
+- **FR-27 The tool follows the app.** On every launch, before the recorder, recovery (FR-7) or any spawn can start a job, the app compares its bundled `meeting` binary with the file at `meeting_path`; when they differ it writes the bundled one to a temporary file in the same directory (mode 0755) and renames it over `meeting_path` (D47). Running jobs and the native host keep the old file open until they exit; the next job and the next native-host start use the new one; the Chrome host manifest is unchanged (same path). With `meeting_path` missing, nothing is written and FR-6's message stands. A failed write leaves the old tool in place and Settings shows "The meeting tool wasn't updated: <reason>" with the fix (for example "make <dir> writable or run `meeting install` from a writable location"); the next launch tries again.
+  - Acceptance: after an update, `<meeting_path> --version` prints the app's version, and a job started before the update finishes normally. With `meeting_path`'s directory read-only, the app starts, the old tool stays, and Settings shows the message.
 
 ## Flows
 
@@ -184,6 +197,8 @@ Only with `FEATURE_DESKTOP_APP` on in the tool build:
 
 ## Edge cases
 
+- **Updates (FR-24 to FR-27).** A failed check, download, signature check or install leaves the running app and tool unchanged, shows the reason in Settings and is tried again at the next launch or check (D48). Two checks never run at once; Check while a download runs shows its progress. No network: "Couldn't check for updates: offline". An older or equal `latest.json` version is never installed. The macOS permissions (Microphone, System Audio Recording, Calendars) may be asked again after an update, because ad-hoc signatures change per build (D45); a denied permission after an update behaves as FR-2 and FR-8. The update replaces `/Applications/Meeting.app` in place; if the app lives elsewhere it is replaced where it is.
+
 - **Concurrency.** One app recording at a time (FR-1). An extension recording may run at the same time; the app then also captures the browser's audio, which is allowed and not detected. The store is opened in WAL mode with a 5-second busy timeout by every writer (several `meeting process` jobs, the native host, the app); each write is one short transaction. A pipeline merge and an app edit of the same row are ordered by the database: the pipeline reads the edited marks inside the transaction that writes, so an edit saved before that transaction is kept, and an edit saved after it is applied on top. Two app windows are not possible (single instance; a second launch focuses the first).
 - **Empty states.** No events in range: "Nothing on your calendar for the next 7 days." No meetings: FR-15's empty text. No search results: "No meetings match." Calendar access denied: FR-8. No speech: the row shows `no_speech` with the title "No speech detected" (as meeting-recorder) and is not editable except "My notes".
 - **Limits.** 3-hour cap (FR-5). Earlier notes: 20 (FR-10). Event notes text 20,000 characters (FR-11). The `calendar_event` limits are checked by the tool like the rest of `context.json` (Technical design › Data); a rejected event drops only `calendar_event`, logs the rule, and the job runs. "My notes" has no cap beyond 1 MB; a longer paste is refused with a message.
@@ -212,6 +227,8 @@ All local; classification **confidential** for the store, recordings, transcript
 - **`context.json` (meeting-context's file, extended):** `platform` gains `desktop`. Desktop recordings set `url`, `meeting_id`, `tab_title` null and `participants`, `speaking` empty. New optional `calendar_event`: `{occurrence_id ≤ 255, series_id ≤ 255, title ≤ 300, start, end (ISO 8601 with offset), organizer ≤ 100 | null, calendar ≤ 100 | null (D31), attendees: [{name ≤ 100, response: accepted|declined|tentative|needs_action}] ≤ 200, description ≤ 20,000}`. The tool's limits table adds these as reject rules for identifiers and type errors and cut rules for lengths and counts (`calendar_event` listed in `truncated` when cut). Written atomically by the app before it spawns the job.
 - **Meeting folder:** adds `recording.partial.wav` (mono, 48 kHz, 16-bit PCM; about 1 GB per 3 hours) while recording; deleted after a good conversion to `recording.m4a` (AAC, mono, 64 kbps; about 85 MB per 3 hours).
 - **Config:** `config.toml` gains `meeting_path` (absolute path; no secret).
+- **Store setting `auto_update`** (`true`|`false`, absent = `false`; FR-25).
+- **Release assets (FR-24):** `Meeting.app.tar.gz` (the app with `meeting` inside its resources), `Meeting.app.tar.gz.sig` and `latest.json` in Tauri's updater format. The updater public key is compiled into the app; the private key and its password are GitHub Actions secrets and never in the repo.
 - **No migration** of existing files; backfill fills the store (FR-14).
 
 ### API
@@ -242,6 +259,10 @@ No change to the native-messaging protocol or the extension.
 | `health` | — | `{checks: [{name, ok, fix}]}` (as `meeting doctor`) | — |
 | `settings_info` (D33) | — | `{recordings_dir, vault_dir, vault_folder, store: {ok: true} \| {ok: false, message}}` | `not_configured` |
 | `recorder_retry` (D33) | `{folder}` | `{state}` | `not_found`, `already_recording` |
+| `update_status` (FR-25) | — | `{version, auto_update, state: idle\|checking\|downloading\|ready\|installing, progress\|null, available: {version, notes}\|null, error\|null, tool_error\|null}` | — |
+| `update_check` | — | `{started: true}`; result through `update_status` | — |
+| `update_install` | — | `{started: true}` | `recording_active`, `no_update` |
+| `set_auto_update` | `{enabled}` | `{auto_update}` | `store_unavailable` |
 
 ### Backend
 
@@ -252,6 +273,7 @@ No change to the native-messaging protocol or the extension.
 - **Calendar (app, FR-8 to FR-11).** EventKit full-access request; events fetched for the 8-day window; occurrence identifier is EventKit's event identifier plus the occurrence start, series identifier is the calendar item's external identifier (shared by all occurrences of a series, stable across devices). Attendee email-only names, rooms and resources are dropped before anything leaves the calendar module. Change notifications refresh the list.
 - **Processing spawn (FR-6, FR-19).** Uses `meeting_path` from config, never `PATH`; the app checks the path is absolute and executable before spawning.
 - **Single instance.** A second launch focuses the running app.
+- **Updater (FR-24 to FR-27).** `tauri-plugin-updater` on the Rust side only, never exposed to the webview (D47); endpoint the `latest.json` of this repo's latest GitHub Release over HTTPS; a bundle is installed only when its signature verifies with the compiled-in public key. Relaunch uses Tauri's own restart. The tool swap is a same-directory write and rename, so a reader sees the old or the new file, never a partial one.
 - **Logging.** The app logs to the same log file and directory with the same rules (no transcript, event values, names or note text; stage and error kinds only).
 
 ### Frontend
@@ -263,6 +285,7 @@ React 19 + strict TS + CSS modules in `desktop/`, tests colocated (`*.test.tsx`)
 - **Event view:** FR-10, with Start recording disabled while recording.
 - **Notes list:** FR-15; loading "Loading meetings…"; backfill progress (FR-14).
 - **Note view:** read mode shows `body_html` (rendered by the Rust side with `pulldown-cmark`, raw HTML disabled, D25); edit mode is a markdown textarea; speakers panel with rename fields; transcript tab; "My notes" textarea; actions per FR-17; Rerun dialog (FR-19); Trash confirm (FR-21); vault failure banner with Retry (FR-18).
+- **Settings › Updates:** version, Check for updates, Install updates automatically, the available version's notes with Install and relaunch, download progress, and update or tool-swap errors (FR-25, FR-27).
 - **Menu-bar item:** idle, recording (mark + timer) and paused marks; menu items Start recording (ad hoc, last language), Pause/Resume, Stop, Open Meeting, Quit (confirms while recording).
 - **Webview security:** strict content security policy with no remote content; no Tauri plugins exposed to the webview beyond the commands above; no shell, file-system or HTTP access from the UI.
 
@@ -304,6 +327,8 @@ React 19 + strict TS + CSS modules in `desktop/`, tests colocated (`*.test.tsx`)
 | Spawning an attacker-chosen binary | `meeting_path` comes only from `config.toml` written by `meeting install`; must be absolute and executable; arguments passed as a list, no shell. |
 | Another local user or app reading meeting content | Store 0600 in the user's Library; recordings and vault keep today's protections; relies on FileVault for encryption at rest (as the existing files do). |
 | Attendee email addresses or names leaking | Emails dropped in the calendar module and never stored; names and event text never logged. |
+| A tampered or substituted update | HTTPS download from GitHub; the bundle is installed only when its signature verifies with the public key compiled into the app; the `meeting` binary travels inside that bundle, so it is covered by the same signature. The private key lives only in GitHub Actions secrets. |
+| A public repo exposing secrets | Before the repo is made public, its history is checked for keys and personal data (D44); the Deepgram key stays in the Keychain and was never in the repo. |
 | Recording without the user knowing | Recording only starts by an explicit Start; menu-bar mark always visible while recording; macOS shows its own system-audio and mic indicators. |
 
 ### Testing
@@ -313,12 +338,14 @@ React 19 + strict TS + CSS modules in `desktop/`, tests colocated (`*.test.tsx`)
 - **Tauri command tests:** each command's success and error codes against a temp store and fake recorder and calendar (injected as struct fields, per the crate's convention).
 - **Frontend (Vitest, colocated):** notes list states (loading, empty, processing stage, failed), search debounce, note view edit and autosave, rerun dialog, trash confirm, event view and earlier notes, permission and denied messages, recording bar.
 - **CI:** the Rust job covers the new workspace member (building the desktop frontend first when the Tauri build needs it); a new path-filtered job for `desktop/` runs build, typecheck, Biome and Vitest. The gate commands in CLAUDE.md and docs/development.md gain the desktop line.
+- **Updates:** Rust unit tests for the version comparison, the auto-install gate (idle vs recording vs saving), the tool swap (differs/equal, missing `meeting_path`, read-only directory leaves the old file) and each update command's errors, with the updater injected as fn pointers. Vitest for the Settings update states. CI checks that the tag matches the three versions. Manual: a real update from one tagged release to the next, with a job running during the swap.
 - **Manual (needs real permissions and devices):** a Slack huddle and a WhatsApp call recorded end to end (both voices audible, transcript correct); permission prompts and denied states (FR-2, FR-8); pause/resume timing (FR-3); 3-hour cap shortened by a debug build constant; sleep, quit and `kill -9` recovery (FR-5, FR-7); headphones plugged mid-call; an event from Google and iCloud calendars (FR-8, FR-9); both flags on with a real event (FR-12).
 
 ## Rollout and cost
 
 - Personal tool, one user. Code merges dark behind `FEATURE_DESKTOP_APP` (off); turned on by building the tool and the app with it set, then running `meeting install` once (to write `meeting_path`) and launching the app (backfill).
-- Install: `npm run tauri build` in `desktop/`, move `Meeting.app` to `/Applications`, open it once (right-click → Open for an ad-hoc signed app), grant permissions. Documented in the installation guide.
+- Install: download `Meeting.app` from the latest GitHub Release (or `npm run tauri build` in `desktop/`), move it to `/Applications`, open it once (right-click → Open for an ad-hoc signed app), grant permissions, run `meeting install` with the bundled tool once. Later versions arrive through FR-25/FR-26. Documented in the installation guide.
+- Before the first release: make the repo public (D44) after checking its history, create the updater key pair, and store the private key and password as Actions secrets.
 - Cost: Deepgram per audio minute as today (mono, one channel); Claude through the user's plan, one call per meeting as today. No new service.
 - Rollback: rebuild the tool without the flag; the store is then ignored and the extension works as today. Edits made in the app remain in the vault notes already written.
 - Watch after release: the log for store errors and conversion failures; that every recorded call gets a note.
@@ -330,6 +357,7 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 ## Epics
 
 - **E1 Meeting desktop app** — covers FR-1 to FR-23. Issue: #134
+- **E2 Desktop app updates** — covers FR-24 to FR-27. Issue: #169
 
 ## Decisions
 
@@ -345,7 +373,7 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 - 2026-11-13 **D9 Editable: title, summary body, speaker names and a "My notes" field.** Renaming a speaker replaces that label everywhere in the note; transcript text is read-only; a summary rerun asks before replacing edited fields. Decided by: Siam, "Title, body, speakers, my notes (Recommended)".
 - 2026-11-13 **D10 App recordings are processed by a detached `meeting process`.** The app saves the recording into its own meeting folder and spawns the job in its own process group, as the native host does, so quitting the app never kills a job and lock, job file, notification and Jobs tab behave as today. Decided by: Siam, "Detached `meeting process` (Recommended)".
 - 2026-11-13 **D11 Gated by a new build-time flag `FEATURE_DESKTOP_APP`; event context also needs `FEATURE_MEETING_CONTEXT`.** Pipeline and store changes merge dark per FLAGS.md; a chosen event reaches Claude only when both flags are on. Decided by: Siam, "Own flag, needs context flag (Recommended)".
-- 2026-11-13 **D12 Installed as a local, ad-hoc signed build.** Built on the user's Mac and moved into `/Applications` by hand; no developer account, notarization or auto-update. Decided by: Siam, "Local build, ad-hoc signed (Recommended)".
+- 2026-11-13 **D12 Installed as a local, ad-hoc signed build.** Built on the user's Mac and moved into `/Applications` by hand; no developer account, notarization or auto-update. Decided by: Siam, "Local build, ad-hoc signed (Recommended)". *Changed 2026-11-16 by D44–D47: releases are built by CI and the app updates itself; ad-hoc signing kept.*
 - 2026-11-13 **D13 Recording rules match the extension.** Language `bn`/`en` (last used), Start, Pause/Resume, Stop, a 3-hour cap on recorded time, under 10 s saved but not processed, one recording at a time; audio only. Decided by: Siam, "Same as extension (Recommended)".
 - 2026-11-13 **D14 Audio is appended to a WAV while recording and converted to `recording.m4a` on Stop.** Crash-safe; the WAV is deleted after a good conversion and a leftover one is recovered on the next launch. Decided by: Siam, "Chunked WAV → m4a (Recommended)".
 - 2026-11-13 **D15 A main window plus a menu-bar item.** The window holds the calendar list, notes and search; the menu-bar item shows the recording state and Start/Stop with the window closed. Decided by: Siam, "Window + menu-bar item (Recommended)".
@@ -377,6 +405,12 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 - 2026-11-13 **D41 More error codes:** `store_unavailable` on `note_update`, `note_rerun`, `note_open`, `note_archive`, `note_trash`; `unknown_note` on `note_archive`, `note_trash`; `archive_failed`, `trash_failed` passed through from the host's rules; `open_failed` when `/usr/bin/open` fails. Decided by: Siam during issue refinement, "Add them (Recommended)".
 - 2026-11-14 **D42 Calendar error codes:** `calendar_failed` on `calendar_events` and `calendar_event` when Calendar cannot be read (the EventKit worker stopped or the command failed; message "Calendar could not be read; quit and reopen Meeting"), and `store_unavailable` on `set_hidden_calendars` when the store cannot be written, so a hidden-calendar choice never silently fails to stick. `calendars` keeps no error code (`[]` without access). Decided by: Siam during implementation of #142, "Add two codes (Recommended)".
 - 2026-11-14 **D43 Summary links open in the system browser through the app's own command, and the window never navigates away.** A click on an `http`, `https` or `mailto` link in the note view's summary calls `note_open_link {url}`; the Rust side checks the scheme again and opens it with the existing `/usr/bin/open` opener (argument list, no shell), so no new crate or plugin (D22 unchanged). The main webview gets an `on_navigation` guard (built into `tauri`) that refuses any URL outside the app's own origin, so no link, form or script can load a remote page in the window. Rejected: `tauri-plugin-opener` (a new dependency and a plugin exposed to the webview) and inert links (a summary's links would be useless). Decided by: Siam while filing #164 from #147, "Own command + guard (Recommended)".
+- 2026-11-16 **D44 Releases are downloaded from this repo's public GitHub Releases; the repo becomes public.** No token in the app. Rejected: a token in the Keychain (setup and rotation) and a separate public release repo. Decided by: Siam, "Make repo public".
+- 2026-11-16 **D45 Release builds stay ad-hoc signed (D12 kept for signing).** No certificate to manage; macOS may ask for Microphone, System Audio Recording and Calendar permission again after each update. Rejected: a self-signed certificate (stable identity) and a Developer ID. Decided by: Siam, "Keep ad-hoc".
+- 2026-11-16 **D46 One version for the app and the tool, released by pushing a tag `vX.Y.Z`.** Decided by: Siam, "One version, tag vX.Y.Z (Recommended)".
+- 2026-11-16 **D47 The `meeting` tool is bundled in Meeting.app and swapped into `meeting_path` by the app; `tauri-plugin-updater` approved (Rust side only).** One updater signature covers both; the app and tool always match, keeping D24's one-binary rule. Extends D22. Decided by: Siam, "Bundled in the app (Recommended)" and "app and meeting tool, just like herdr app and herdr core".
+- 2026-11-16 **D48 The extension is not updated by the app, and a failed update keeps the current version.** The native-messaging protocol is unchanged (D8), so an older extension keeps working; failures show in Settings and retry at the next launch; no downgrade. Decided by: Siam, "Extension out; keep current on failure (Recommended)".
+- 2026-11-16 **D49 Update UI: Settings shows the version, "Check for updates" and an "Install updates automatically" checkbox; installs only while the recorder is idle.** Smaller rules proposed by Claude for the owner's review: the checkbox is off by default; automatic checks at launch and every 6 hours; release notes from the tag message; the `meeting` swap runs on every launch before anything can start a job. Team proposal, no source, for the rules after the first sentence. Decided by: Siam, "Toggle + manual button (Recommended)".
 
 ## Open questions
 
@@ -390,6 +424,7 @@ None.
 - 2026-11-13: D36–D41 added during issue refinement (audio permission detection, Open in Obsidian, health via `meeting doctor`, My notes on unfinished notes, backfill event link, error codes in the table). Affect #140, #141, #143, #144, #145, #147.
 - 2026-11-14: D42 added during implementation of #142 (`calendar_failed` on `calendar_events`/`calendar_event`, `store_unavailable` on `set_hidden_calendars`). Affects #142, #145, #148.
 - 2026-11-14: D43 added while filing #164 from #147 (summary links open through `note_open_link`; `on_navigation` guard; API table row). Affects #147, #164.
+- 2026-11-16: Updates added: FR-24 to FR-27, D44 to D49, epic E2; D12's "no auto-update" replaced (signing unchanged); Non-goals, Data, API, Backend, Edge cases, Threats, Testing and Rollout updated. E1 issues are not affected. Approved by Siam; epic #169.
 
 ## Related
 
