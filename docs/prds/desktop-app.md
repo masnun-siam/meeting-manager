@@ -273,7 +273,7 @@ No change to the native-messaging protocol or the extension.
 - **Calendar (app, FR-8 to FR-11).** EventKit full-access request; events fetched for the 8-day window; occurrence identifier is EventKit's event identifier plus the occurrence start, series identifier is the calendar item's external identifier (shared by all occurrences of a series, stable across devices). Attendee email-only names, rooms and resources are dropped before anything leaves the calendar module. Change notifications refresh the list.
 - **Processing spawn (FR-6, FR-19).** Uses `meeting_path` from config, never `PATH`; the app checks the path is absolute and executable before spawning.
 - **Single instance.** A second launch focuses the running app.
-- **Updater (FR-24 to FR-27).** `tauri-plugin-updater` on the Rust side only, never exposed to the webview (D47); endpoint the `latest.json` of this repo's latest GitHub Release over HTTPS; a bundle is installed only when its signature verifies with the compiled-in public key. Relaunch uses Tauri's own restart. The tool swap is a same-directory write and rename, so a reader sees the old or the new file, never a partial one.
+- **Updater (FR-24 to FR-27).** `tauri-plugin-updater` on the Rust side only, never exposed to the webview (D47); endpoint the `latest.json` of this repo's latest GitHub Release over HTTPS; a bundle is installed only when its signature verifies with the compiled-in public key. Relaunch uses Tauri's own restart. The bundled `meeting` binary and the updater artifacts are release-only settings in `desktop/src-tauri/tauri.release.conf.json`, merged only by the release workflow (D50). The tool swap is a same-directory write and rename, so a reader sees the old or the new file, never a partial one.
 - **Logging.** The app logs to the same log file and directory with the same rules (no transcript, event values, names or note text; stage and error kinds only).
 
 ### Frontend
@@ -344,7 +344,7 @@ React 19 + strict TS + CSS modules in `desktop/`, tests colocated (`*.test.tsx`)
 ## Rollout and cost
 
 - Personal tool, one user. Code merges dark behind `FEATURE_DESKTOP_APP` (off); turned on by building the tool and the app with it set, then running `meeting install` once (to write `meeting_path`) and launching the app (backfill).
-- Install: download `Meeting.app` from the latest GitHub Release (or `npm run tauri build` in `desktop/`), move it to `/Applications`, open it once (right-click → Open for an ad-hoc signed app), grant permissions, run `meeting install` with the bundled tool once. Later versions arrive through FR-25/FR-26. Documented in the installation guide.
+- Install: download `Meeting.app` from the latest GitHub Release (or `npm run tauri build` in `desktop/`), move it to `/Applications`, open it once (right-click → Open for an ad-hoc signed app), grant permissions, run `meeting install` with the bundled tool once (a local build carries no bundled tool, so its tool comes from `cargo install` and FR-27 does nothing; D50). Later versions arrive through FR-25/FR-26. Documented in the installation guide.
 - Before the first release: make the repo public (D44) after checking its history, create the updater key pair, and store the private key and password as Actions secrets.
 - Cost: Deepgram per audio minute as today (mono, one channel); Claude through the user's plan, one call per meeting as today. No new service.
 - Rollback: rebuild the tool without the flag; the store is then ignored and the extension works as today. Edits made in the app remain in the vault notes already written.
@@ -411,6 +411,7 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 - 2026-11-16 **D47 The `meeting` tool is bundled in Meeting.app and swapped into `meeting_path` by the app; `tauri-plugin-updater` approved (Rust side only).** One updater signature covers both; the app and tool always match, keeping D24's one-binary rule. Extends D22. Decided by: Siam, "Bundled in the app (Recommended)" and "app and meeting tool, just like herdr app and herdr core".
 - 2026-11-16 **D48 The extension is not updated by the app, and a failed update keeps the current version.** The native-messaging protocol is unchanged (D8), so an older extension keeps working; failures show in Settings and retry at the next launch; no downgrade. Decided by: Siam, "Extension out; keep current on failure (Recommended)".
 - 2026-11-16 **D49 Update UI: Settings shows the version, "Check for updates" and an "Install updates automatically" checkbox; installs only while the recorder is idle.** Smaller rules proposed by Claude for the owner's review: the checkbox is off by default; automatic checks at launch and every 6 hours; release notes from the tag message; the `meeting` swap runs on every launch before anything can start a job. Team proposal, no source, for the rules after the first sentence. Decided by: Siam, "Toggle + manual button (Recommended)".
+- 2026-11-16 **D50 Release-only bundle settings live in `desktop/src-tauri/tauri.release.conf.json`, merged only by the release workflow (`tauri build --config`).** It holds the bundled `meeting` binary (`bundle.resources`) and `bundle.createUpdaterArtifacts`, so local builds and the Rust gate need neither the signing key nor a prebuilt `meeting`. A local build has no bundled tool and FR-27 skips the swap. Decided by: Siam during issue refinement, "Release overlay file (Recommended)".
 
 ## Open questions
 
@@ -425,6 +426,7 @@ None.
 - 2026-11-14: D42 added during implementation of #142 (`calendar_failed` on `calendar_events`/`calendar_event`, `store_unavailable` on `set_hidden_calendars`). Affects #142, #145, #148.
 - 2026-11-14: D43 added while filing #164 from #147 (summary links open through `note_open_link`; `on_navigation` guard; API table row). Affects #147, #164.
 - 2026-11-16: Updates added: FR-24 to FR-27, D44 to D49, epic E2; D12's "no auto-update" replaced (signing unchanged); Non-goals, Data, API, Backend, Edge cases, Threats, Testing and Rollout updated. E1 issues are not affected. Approved by Siam; epic #169.
+- 2026-11-16: D50 added during issue refinement of #169 (release-only overlay config; Backend and Rollout updated). Affects #171, #173.
 
 ## Related
 
