@@ -26,7 +26,7 @@ Tests swap in a fake `EventSource` (`Calendar::with(&env, source)`). In this cra
 | `occurrence_id` = `<eventIdentifier>\|<start unix seconds>`; `series_id` = `calendarItemExternalIdentifier`. An event whose id is over 255 characters is skipped (the tool would reject it) | `model::clean` |
 | Attendees: rooms and resources dropped; names empty or containing `@` dropped; an organizer named with `@` becomes `null`. Only `EKParticipant.name` is read, never its URL | `model::clean`, `eventkit::raw_person` |
 | Responses: accepted, declined, tentative; anything else is `needs_action` | `eventkit::response_of` |
-| Notes: trimmed, cut to 20,000 characters, `null` when empty; `has_notes` is the same test | `model::description` |
+| Notes: HTML reduced to plain text (`ical::html_to_text`: tags dropped, entities decoded, list items as indented `- ` lines), trimmed, cut to 20,000 characters, `null` when empty; `has_notes` is the same test | `model::description` |
 | Logs: counts and error kinds only, never a title, calendar name, attendee name or notes | everywhere |
 
 ## Commands
