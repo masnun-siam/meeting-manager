@@ -53,9 +53,14 @@ jobs:
       - name: Write latest.json
         run: |
           bundle=target/release/bundle/macos
+          # Notes come only from an annotated tag's message; a lightweight tag has none.
+          : > "$RUNNER_TEMP/notes.md"
+          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag ]; then
+            git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)' > "$RUNNER_TEMP/notes.md"
+          fi
           jq -n \
             --arg version "${GITHUB_REF_NAME#v}" \
-            --arg notes "$(git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)')" \
+            --rawfile notes "$RUNNER_TEMP/notes.md" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg url "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/Meeting.app.tar.gz" \
             --rawfile signature "$bundle/Meeting.app.tar.gz.sig" \
@@ -67,6 +72,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           bundle=target/release/bundle/macos
-          notes=$(git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)')
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes "$notes" \
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" \
             "$bundle/Meeting.app.tar.gz" "$bundle/Meeting.app.tar.gz.sig" "$bundle/latest.json"
