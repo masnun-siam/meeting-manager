@@ -26,5 +26,11 @@
       "signingIdentity": "-",
       "entitlements": "./Entitlements.plist"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU3NUFGNTlGRDk1RTZCOApSV1M0NXBYOVdhOTFEanNadFRWSHJRUlFZV0RwM3BYZGU1UzVkeHpXMUxUUGRRS2VEb0dVWlUyYQo=",
+      "endpoints": ["https://github.com/masnun-siam/meeting-manager/releases/latest/download/latest.json"]
+    }
   }
 }
