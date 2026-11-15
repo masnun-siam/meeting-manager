@@ -31,7 +31,12 @@ jobs:
             echo "::error::Set all three versions to $want before tagging v$want."
             exit 1
           fi
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned: Rust 1.100 moved build-script dirs to `build/<pkg>/<hash>/out`, and tauri-build
+      # 2.6 (the newest that fits rust-version) then copies the bundled `meeting` onto the
+      # `build/meeting` directory. Raise it once tauri-build is upgraded.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v5
         with:
