@@ -124,7 +124,8 @@ fn safe_name(name: Option<&str>) -> Option<String> {
 
 /// The notes text, trimmed and cut to `MAX_DESCRIPTION` characters; `None` when empty.
 pub fn description(notes: Option<&str>) -> Option<String> {
-    let notes = notes?.trim();
+    let notes = meeting::ical::html_to_text(notes?);
+    let notes = notes.trim();
     (!notes.is_empty()).then(|| notes.chars().take(MAX_DESCRIPTION).collect())
 }
 
@@ -309,5 +310,17 @@ pub mod tests {
         let cut = description(Some(&wide)).unwrap();
         assert_eq!(cut.chars().count(), 20_000);
         assert_eq!(cut.len(), 40_000);
+    }
+
+    #[test]
+    fn html_notes_become_plain_text() {
+        assert_eq!(
+            description(Some(
+                "<ol><li>Week &amp; plan</li></ol><br>Join: <a href=\"https://x\">x</a>"
+            ))
+            .as_deref(),
+            Some("- Week & plan\n\nJoin: x")
+        );
+        assert_eq!(description(Some("<br><p></p>")), None);
     }
 }

@@ -118,13 +118,18 @@ fn push_capped(line: &mut String, part: &str) -> Result<(), Error> {
 impl Event {
     /// The description as plain text: HTML reduced to text, cut to 20,000 characters.
     pub fn plain_description(&self) -> String {
-        let text = self.description.as_deref().unwrap_or("");
-        let text = if looks_like_html(text) {
-            collapse_blank_lines(&decode_entities(&strip_tags(text)))
-        } else {
-            text.to_owned()
-        };
+        let text = html_to_text(self.description.as_deref().unwrap_or(""));
         text.trim().chars().take(MAX_DESCRIPTION).collect()
+    }
+}
+
+/// `text` reduced to plain text when it looks like HTML (calendar notes often are); other text is
+/// returned unchanged. Linear in the input; no length cap.
+pub fn html_to_text(text: &str) -> String {
+    if looks_like_html(text) {
+        collapse_blank_lines(&decode_entities(&strip_tags(text)))
+    } else {
+        text.to_owned()
     }
 }
 
@@ -473,11 +478,13 @@ fn looks_like_html(text: &str) -> bool {
         .any(|after| after.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!'))
 }
 
-/// Drops tags (and `<script>`/`<style>` contents); `<br>`, `</p>`, `</div>` and `</li>` become
-/// newlines. A `<` with no `>` after it is kept as text.
+/// Drops tags (and `<script>`/`<style>` contents); `<br>`, `</p>`, `</div>`, `</ul>` and `</ol>`
+/// become newlines, and each `<li>` starts a `- ` line indented two spaces per nested list. A `<`
+/// with no `>` after it is kept as text.
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut rest = html;
+    let mut depth: usize = 0;
     while let Some((before, after)) = rest.split_once('<') {
         out.push_str(before);
         let Some((tag, tail)) = after.split_once('>') else {
@@ -495,7 +502,21 @@ fn strip_tags(html: &str) -> String {
             .to_ascii_lowercase();
         match name.as_str() {
             "br" => out.push('\n'),
-            "p" | "div" | "li" if closing => out.push('\n'),
+            "p" | "div" if closing => out.push('\n'),
+            "ul" | "ol" if closing => {
+                depth = depth.saturating_sub(1);
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            "ul" | "ol" => depth = depth.saturating_add(1).min(MAX_DEPTH),
+            "li" if !closing => {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&"  ".repeat(depth.saturating_sub(1)));
+                out.push_str("- ");
+            }
             "script" | "style" if !closing => {
                 let end = format!("</{name}");
                 let at = rest
@@ -807,8 +828,19 @@ mod tests {
             description(
                 "<p>Hi&nbsp;all,</p><br><br><br><div>Plan: <b>ship</b> &lt;v2&gt; &amp; &quot;more&quot; &#39;x&#39; &apos;y&apos; &#8212; &#x1F642;</div><ul><li>one</li><li>two</li></ul><script>alert(1)</script><STYLE>p{}</style>end &bogus; &#xZZ; a < b"
             ),
-            "Hi all,\n\nPlan: ship <v2> & \"more\" 'x' 'y' — 🙂\none\ntwo\nend &bogus; &#xZZ; a < b"
+            "Hi all,\n\nPlan: ship <v2> & \"more\" 'x' 'y' — 🙂\n- one\n- two\nend &bogus; &#xZZ; a < b"
         );
+    }
+
+    #[test]
+    fn nested_lists_become_indented_dashes() {
+        assert_eq!(
+            html_to_text(
+                "<ol><li>Review <ol><li>Goals</li><li>On track? <br></li></ol></li><li>Plan</li></ol><br>Done"
+            ),
+            "- Review\n  - Goals\n  - On track?\n- Plan\n\nDone\n"
+        );
+        assert_eq!(html_to_text("a < b\n"), "a < b\n");
     }
 
     #[test]
