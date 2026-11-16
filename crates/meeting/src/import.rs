@@ -301,6 +301,8 @@ mod tests {
         assert!(left.is_empty(), "{left:?}");
     }
 
+    // BSD `date -r`: macOS only; the Linux hook image skips it, macOS CI runs it.
+    #[cfg(target_os = "macos")]
     #[test]
     fn local_minute_runs_bin_date() {
         let got = local_minute(1_700_000_000).unwrap();

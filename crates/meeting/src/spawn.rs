@@ -55,7 +55,9 @@ pub fn check_tool(path: &Path) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::{MetadataExt, symlink};
+    #[cfg(target_os = "macos")]
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::symlink;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -90,8 +92,12 @@ echo $$ > "$d/pid"
 
     struct Seen {
         args: Vec<String>,
+        // Read only by the macOS-only process group test.
+        #[cfg(target_os = "macos")]
         pid: String,
+        #[cfg(target_os = "macos")]
         pgid: String,
+        #[cfg(target_os = "macos")]
         stdio: Vec<String>,
     }
 
@@ -114,8 +120,11 @@ echo $$ > "$d/pid"
         let lines = |file: &str| read(file).lines().map(str::to_string).collect();
         let seen = Seen {
             args: lines("args"),
+            #[cfg(target_os = "macos")]
             pid: read("pid").trim().to_string(),
+            #[cfg(target_os = "macos")]
             pgid: read("pgid").trim().to_string(),
+            #[cfg(target_os = "macos")]
             stdio: lines("stdio"),
         };
         fs::remove_dir_all(&dir).unwrap();
@@ -141,6 +150,8 @@ echo $$ > "$d/pid"
         assert_eq!(args("bare", None, None), ["process", REC]);
     }
 
+    // Reads the child's group and stdio the macOS way; the Linux hook image skips it, macOS CI runs it.
+    #[cfg(target_os = "macos")]
     #[test]
     fn process_detached_gives_the_child_its_own_group_and_null_stdio() {
         let seen = spawn_and_wait("group", None, None);
