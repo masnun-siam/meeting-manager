@@ -2,7 +2,7 @@
 
 Covers: desktop/
 
-The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, package `meeting-desktop`, lib `meeting_desktop`) links the `meeting` library and whose UI (`desktop/src`) is React 19 with strict TS and CSS modules. Every command is implemented (the calendar commands: [features/desktop-calendar.md](features/desktop-calendar.md); the recorder commands: [features/desktop-recorder.md](features/desktop-recorder.md); the notes commands: [Notes commands](#notes-commands-notes) below). Behaviour: [prds/desktop-app.md](prds/desktop-app.md).
+The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, package `meeting-desktop`, lib `meeting_desktop`) links the `meeting` library and whose UI (`desktop/src`) is React 19 with strict TS and CSS modules. Every command is implemented (the calendar commands: [features/desktop-calendar.md](features/desktop-calendar.md); the recorder commands: [features/desktop-recorder.md](features/desktop-recorder.md); the notes commands: [Notes commands](#notes-commands-notes) below). Behaviour: [prds/desktop/desktop-app.md](prds/desktop/desktop-app.md).
 
 ## Flag
 

@@ -92,7 +92,7 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 
 ## Notes store (desktop flag on)
 
-With `FEATURE_DESKTOP_APP=1` in the tool build (`Pipeline.desktop`), every run also writes the recording's row in the notes store (`store.rs`, `notes.sqlite`; PRD `docs/prds/desktop-app.md` FR-12, FR-13, FR-19). Off, no store file or directory is created and `claude`'s arguments and stdin and the note bytes are unchanged.
+With `FEATURE_DESKTOP_APP=1` in the tool build (`Pipeline.desktop`), every run also writes the recording's row in the notes store (`store.rs`, `notes.sqlite`; PRD `docs/prds/desktop/desktop-app.md` FR-12, FR-13, FR-19). Off, no store file or directory is created and `claude`'s arguments and stdin and the note bytes are unchanged.
 
 | When | Store call | Row |
 |---|---|---|
@@ -110,7 +110,7 @@ With `FEATURE_DESKTOP_APP=1` in the tool build (`Pipeline.desktop`), every run a
 
 ## Context block
 
-`context_block::build` (PRD `docs/prds/meeting-context.md` FR-9) turns `context.json`, a calendar match, `recorded_at` and `duration_s` into the text Claude reads before the transcript. `Pipeline::context_extra` calls it on every summary run (first run and rerun) when the flag is on and `context.json` loads; otherwise, or when it builds `None`, `claude` gets today's arguments and stdin.
+`context_block::build` (PRD `docs/prds/context/meeting-context.md` FR-9) turns `context.json`, a calendar match, `recorded_at` and `duration_s` into the text Claude reads before the transcript. `Pipeline::context_extra` calls it on every summary run (first run and rerun) when the flag is on and `context.json` loads; otherwise, or when it builds `None`, `claude` gets today's arguments and stdin.
 
 - Sent only when there is Meet's `meeting_title`, a non-empty `participants` or `speaking`, or a calendar match (from the iCal address, or a desktop `calendar_event`). Identity alone (platform, URL, tab title, times) builds `None`.
 - Layout, between `=====BEGIN MEETING CONTEXT=====` and `=====END MEETING CONTEXT=====`: `platform:`, `meeting_title:`, `calendar_title:`, `recorded_at:`, `duration:` (`hh:mm:ss`), `organizer:`, `attendees:` (`- "Name" accepted`), `participants:` (`- "Name" (self)`), `speaking:` (`- 00:00:01-00:00:35: "A", "B"`, the transcript's clock), the description between `<<<DESCRIPTION` and `DESCRIPTION>>>`, then `partial: <fields>` (from `truncated`, minus `tab_title`) and `cut: <parts>`. Absent parts are left out.

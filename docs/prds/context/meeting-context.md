@@ -2,7 +2,7 @@
 
 **Status:** Approved · **Date:** 2026-10-22 · **Slug:** `meeting-context` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager (private)
 
-This document is the source of truth for the feature: every issue is derived from it, and a decision that is not written here has not been made. It changes parts of [meeting-recorder.md](meeting-recorder.md) (FR-7, FR-13, FR-15, the `process` message and the summary prompt); where the two disagree, this PRD wins.
+This document is the source of truth for the feature: every issue is derived from it, and a decision that is not written here has not been made. It changes parts of [meeting-recorder.md](../recorder/meeting-recorder.md) (FR-7, FR-13, FR-15, the `process` message and the summary prompt); where the two disagree, this PRD wins.
 
 ## Overview
 
@@ -40,7 +40,7 @@ The single user of the extension and the `meeting` tool, on their own Mac, in Ch
 - In-call chat, live captions, shared screen content, slides or attachments from the invite.
 - Notes of earlier meetings in the same series as context.
 - Injecting the content script into Meet tabs that were open before the extension was installed or reloaded (no `scripting` permission). Those tabs show the "reload the Meet tab" state (FR-5).
-- A manual step to map speakers to names, and a user-entered title (both still non-goals from [meeting-recorder.md](meeting-recorder.md)).
+- A manual step to map speakers to names, and a user-entered title (both still non-goals from [meeting-recorder.md](../recorder/meeting-recorder.md)).
 - Changing the Deepgram request (D11).
 - Saving context for recordings recovered after a browser crash (D14), or for a recording whose hand-off failed (host missing or not configured).
 - Showing calendar results in the Jobs tab. The outcome is in the note's frontmatter (FR-10).
@@ -324,6 +324,6 @@ None. Approved 2026-10-22 by the PRD panel (CTO, CEO, Critical, Security, QA, UX
 
 ## Related
 
-- [meeting-recorder.md](meeting-recorder.md) — FR-7, FR-13, FR-15, summary schema and prompt.
-- [recording-folders.md](recording-folders.md) — per-recording folder, Archive and Trash.
+- [meeting-recorder.md](../recorder/meeting-recorder.md) — FR-7, FR-13, FR-15, summary schema and prompt.
+- [recording-folders.md](../recorder/recording-folders.md) — per-recording folder, Archive and Trash.
 - Paperclip task PER-118; panel round 1: PER-119 to PER-124; round 2: PER-127 to PER-132; round 3: PER-134 to PER-139; round 4: PER-141 to PER-143; round 5: PER-144, PER-145; round 6: PER-147, PER-148; round 7: PER-150.

@@ -1,7 +1,7 @@
 //! `context.json`: what the extension read from the meeting tab, checked against the limits
-//! table of `docs/prds/meeting-context.md`. A reject rule drops the whole context, a cut rule
+//! table of `docs/prds/context/meeting-context.md`. A reject rule drops the whole context, a cut rule
 //! trims the field and lists it in `truncated`. Rule names are the only thing ever logged.
-//! The desktop app adds `calendar_event` (`docs/prds/desktop-app.md`): its reject rules drop
+//! The desktop app adds `calendar_event` (`docs/prds/desktop/desktop-app.md`): its reject rules drop
 //! only the event.
 
 use std::fs;

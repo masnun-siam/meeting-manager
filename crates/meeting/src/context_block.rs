@@ -1,5 +1,5 @@
 //! The fenced meeting-context block Claude reads before the transcript
-//! (`docs/prds/meeting-context.md`, FR-9). Pure: no I/O. Single-line values from other people
+//! (`docs/prds/context/meeting-context.md`, FR-9). Pure: no I/O. Single-line values from other people
 //! are JSON strings and the description is escaped line by line, so none of them can end the
 //! block.
 

@@ -2,7 +2,7 @@
 
 **Status:** Approved · **Date:** 2026-11-13 · **Slug:** `desktop-app` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager (public from the first release, D44)
 
-This document is the source of truth for the feature: every issue is derived from it, and a decision that is not written here has not been made. It adds to [meeting-recorder.md](meeting-recorder.md), [recording-folders.md](recording-folders.md), [recording-import.md](recording-import.md) and [meeting-context.md](meeting-context.md) without changing their behaviour while `FEATURE_DESKTOP_APP` is off; with it on, the changes listed under "Changes to existing behaviour" apply and win over those PRDs.
+This document is the source of truth for the feature: every issue is derived from it, and a decision that is not written here has not been made. It adds to [meeting-recorder.md](../recorder/meeting-recorder.md), [recording-folders.md](../recorder/recording-folders.md), [recording-import.md](../recorder/recording-import.md) and [meeting-context.md](../context/meeting-context.md) without changing their behaviour while `FEATURE_DESKTOP_APP` is off; with it on, the changes listed under "Changes to existing behaviour" apply and win over those PRDs.
 
 ## Overview
 
@@ -430,6 +430,6 @@ None.
 
 ## Related
 
-- [meeting-recorder.md](meeting-recorder.md), [recording-folders.md](recording-folders.md), [recording-import.md](recording-import.md), [meeting-context.md](meeting-context.md) (FR-9, FR-10 context block and note metadata reused; D1 changed for the app only by D3 here).
-- [FLAGS.md](../../FLAGS.md) (`FEATURE_DESKTOP_APP` row added when the flag lands).
+- [meeting-recorder.md](../recorder/meeting-recorder.md), [recording-folders.md](../recorder/recording-folders.md), [recording-import.md](../recorder/recording-import.md), [meeting-context.md](../context/meeting-context.md) (FR-9, FR-10 context block and note metadata reused; D1 changed for the app only by D3 here).
+- [FLAGS.md](../../../FLAGS.md) (`FEATURE_DESKTOP_APP` row added when the flag lands).
 - Apple: Core Audio process taps (`CATapDescription`, macOS 14.2+), EventKit full calendar access (macOS 14+). Tauri 2 docs. SQLite FTS5.

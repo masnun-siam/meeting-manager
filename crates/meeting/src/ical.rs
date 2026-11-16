@@ -1,4 +1,4 @@
-//! A small iCalendar reader for the calendar match (`docs/prds/meeting-context.md`, FR-8). It
+//! A small iCalendar reader for the calendar match (`docs/prds/context/meeting-context.md`, FR-8). It
 //! reads only what the match needs, keeps times raw (no time-zone conversion) and returns an
 //! error, never a panic, on malformed input. The error text never contains input text.
 

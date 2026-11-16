@@ -81,4 +81,4 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 cd extension && npm run build && npm run typecheck && npx biome ci . && npm test
 ```
 
-CI runs the same gates per part on every pull request. Workflow, commit style and rules: [CONTRIBUTING.md](CONTRIBUTING.md). Start with [docs/README.md](docs/README.md) (architecture, development, per-component and per-feature docs). Requirements and decisions are in the PRD, [docs/prds/meeting-recorder.md](docs/prds/meeting-recorder.md). Agent instructions: [CLAUDE.md](CLAUDE.md).
+CI runs the same gates per part on every pull request. Workflow, commit style and rules: [CONTRIBUTING.md](CONTRIBUTING.md). Start with [docs/README.md](docs/README.md) (architecture, development, per-component and per-feature docs). Requirements and decisions are in the PRD, [docs/prds/recorder/meeting-recorder.md](docs/prds/recorder/meeting-recorder.md). Agent instructions: [CLAUDE.md](CLAUDE.md).

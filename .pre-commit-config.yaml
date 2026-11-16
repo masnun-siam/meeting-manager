@@ -1,0 +1,27 @@
+# Install once per clone: pre-commit install --hook-type pre-commit --hook-type pre-push
+default_install_hook_types: [pre-commit, pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: claude-md-nested
+        name: only the root CLAUDE.md
+        entry: scripts/repo-guards/claude-md-guard.sh nested
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      - id: claude-md-generated
+        name: no generated agent files
+        entry: scripts/repo-guards/claude-md-guard.sh generated
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      - id: claude-md-warn
+        name: warn on constitution change
+        entry: scripts/repo-guards/claude-md-guard.sh warn
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
+        stages: [pre-commit]

@@ -146,7 +146,7 @@ flowchart TD
 - A failed Start (`resetWithError`) closes the offscreen document, resets to `idle` and sets an `error` notice. `start` also rethrows, which the SW logs.
 - `offscreen_error` before `offscreen_started` resets like a failed Start. After it, only the notice is set and `offscreen_stopped` follows.
 - If the popup cannot reach the SW, `RecordTab` shows "Could not reach the recorder".
-- **Context line** (`FEATURE_MEETING_CONTEXT` on, phases `recording` and `paused` only; FR-5 in [meeting-context.md](../prds/meeting-context.md)): first in the status region, from `meeting_context`.
+- **Context line** (`FEATURE_MEETING_CONTEXT` on, phases `recording` and `paused` only; FR-5 in [meeting-context.md](../prds/context/meeting-context.md)): first in the status region, from `meeting_context`.
 
   | Platform, `capture` | Text |
   |---|---|

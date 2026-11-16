@@ -1,4 +1,4 @@
-//! Picks the calendar event a recording belongs to (`docs/prds/meeting-context.md`, FR-8):
+//! Picks the calendar event a recording belongs to (`docs/prds/context/meeting-context.md`, FR-8):
 //! candidates by meeting ID, then the instance within 12 hours, else the latest series. Pure: no
 //! I/O, never panics. Returns no email address.
 
