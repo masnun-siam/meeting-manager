@@ -85,8 +85,7 @@ echo $$ > "$d/pid"
 /usr/bin/stat -f %r /dev/fd/3 /dev/fd/4 /dev/fd/5 > "$d/stdio"
 /usr/bin/touch "$d/done"
 "#;
-        fs::write(&path, script).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&path, script);
         path
     }
 

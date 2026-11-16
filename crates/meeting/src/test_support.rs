@@ -3,7 +3,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
@@ -15,6 +14,29 @@ pub fn temp(name: &str) -> PathBuf {
     dir
 }
 
+/// Writes an executable script. A child process writes it, never the test process: on Linux,
+/// another test thread's fork can inherit our write descriptor and make exec fail with "Text file
+/// busy", which turned stub-based tests flaky in the hook image (#186).
+pub fn write_script(path: &Path, content: &str) {
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(content.as_bytes())
+        .unwrap();
+    assert!(
+        child.wait().unwrap().success(),
+        "cannot write {}",
+        path.display()
+    );
+}
+
 /// A stub `claude` that records its arguments and stdin, then runs `tail`.
 pub fn stub(dir: &Path, tail: &str) -> PathBuf {
     let path = dir.join("claude");
@@ -22,8 +44,7 @@ pub fn stub(dir: &Path, tail: &str) -> PathBuf {
         "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{d}/args.txt\"\ncat > \"{d}/stdin.txt\"\n{tail}\n",
         d = dir.display()
     );
-    fs::write(&path, script).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    write_script(&path, &script);
     path
 }
 

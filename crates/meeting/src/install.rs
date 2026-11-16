@@ -153,9 +153,7 @@ mod tests {
     }
 
     fn stub(dir: &Path, name: &str, body: &str) {
-        let path = dir.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&dir.join(name), &format!("#!/bin/sh\n{body}\n"));
     }
 
     fn run(e: &Env, answers: &str) -> (anyhow::Result<Config>, String) {

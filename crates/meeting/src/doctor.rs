@@ -182,8 +182,7 @@ mod tests {
     }
 
     fn script(path: &Path, body: &str) {
-        fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(path, &format!("#!/bin/sh\n{body}\n"));
     }
 
     fn key_ok() -> anyhow::Result<String> {

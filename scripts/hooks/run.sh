@@ -24,7 +24,7 @@ case $stage in
     scripts/hooks/docker.sh scripts/hooks/gates.sh commit
     rc=$? ;;
   push)
-    protected "${PRE_COMMIT_REMOTE_BRANCH#refs/heads/}"
+    r=${PRE_COMMIT_REMOTE_BRANCH:-}; protected "${r#refs/heads/}"
     scripts/repo-guards/changed-files.sh --push >/dev/null || exit 1
     BLUBIRD_NO_FETCH=1 scripts/hooks/docker.sh scripts/hooks/gates.sh push
     rc=$?

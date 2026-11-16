@@ -686,7 +686,6 @@ mod tests {
 
     #[test]
     fn health_has_the_meeting_path_check_only_with_the_flag_on() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = temp("native-health-desktop");
         let mut host = host(&dir);
         let checks = |host: &Host| -> Vec<(String, bool, String)> {
@@ -704,8 +703,7 @@ mod tests {
         host.desktop = true;
         let unset = checks(&host);
         let tool = dir.join("meeting");
-        fs::write(&tool, "#!/bin/sh\n").unwrap();
-        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&tool, "#!/bin/sh\n");
         let Ok(config) = host.config.as_mut() else {
             unreachable!()
         };
