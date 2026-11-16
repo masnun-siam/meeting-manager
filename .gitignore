@@ -1,1 +1,7 @@
 /target
+
+# Local scratch and tool state
+.worktrees/
+.gitnexus/
+.playwright-mcp/
+.claude/settings.local.json
