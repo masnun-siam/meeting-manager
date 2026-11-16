@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import type { Note } from '../../api';
 import { BackIcon } from '../../icons';
 import { formatDuration, formatRecorded, languageLabel, sourceLabel } from '../list/format';
@@ -69,9 +69,25 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
       {note ? (
         <>
           <div className={styles.header}>
-            <h2 ref={heading} tabIndex={-1} className={styles.heading}>
+            {/* The h2 stays the focus target; for a `done` note the title is edited in place. */}
+            <h2 ref={heading} tabIndex={-1} className={note.status === 'done' ? 'sr-only' : styles.heading}>
               {note.title ?? UNTITLED}
             </h2>
+            {note.status === 'done' ? (
+              <input
+                type="text"
+                aria-label="Title"
+                placeholder={UNTITLED}
+                className={`${styles.heading} ${styles.titleInput}`}
+                value={autosave.value('title')}
+                onChange={(e) => autosave.change('title', e.target.value)}
+                onFocus={() => autosave.focus('title')}
+                onBlur={() => autosave.blur('title')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+              />
+            ) : null}
             <div role="status" className={styles.saveLine} data-state={autosave.saveState}>
               {autosave.saveState === 'error' ? autosave.problem : SAVE_TEXT[autosave.saveState]}
             </div>
@@ -111,23 +127,23 @@ function Facts({ note }: { note: Note }) {
   return (
     <dl className={styles.facts}>
       <div>
-        <dt>Recorded</dt>
+        <dt className="sr-only">Recorded</dt>
         <dd>{formatRecorded(note.recorded_at)}</dd>
       </div>
       {length !== null ? (
         <div>
-          <dt>Duration</dt>
+          <dt className="sr-only">Duration</dt>
           <dd>{length}</dd>
         </div>
       ) : null}
       {language ? (
         <div>
-          <dt>Language</dt>
+          <dt className="sr-only">Language</dt>
           <dd>{language}</dd>
         </div>
       ) : null}
       <div>
-        <dt>Source</dt>
+        <dt className="sr-only">Source</dt>
         <dd>{sourceLabel(note.source)}</dd>
       </div>
       {note.event ? (
@@ -166,29 +182,43 @@ function Status({ note }: { note: Note }) {
   );
 }
 
-/** Title, summary and speaker names are editable only for a `done` note; "My notes" always. */
+/**
+ * Whether the sidebar fits in the scrolling view, so it can stay pinned beside the summary. A taller
+ * one scrolls with the page: pinned, its end would be out of reach, and a scroll area of its own
+ * would trap the wheel.
+ */
+function useFitsInView(ref: RefObject<HTMLElement | null>): boolean {
+  const [fits, setFits] = useState(true);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const view = element.closest('main') ?? document.documentElement;
+    const check = () => setFits(element.offsetHeight + STICKY_MARGIN <= view.clientHeight);
+    const observer = new ResizeObserver(check);
+    observer.observe(element);
+    observer.observe(view);
+    return () => observer.disconnect();
+  }, [ref]);
+  return fits;
+}
+
+/** Room left above and below the pinned sidebar. */
+const STICKY_MARGIN = 32;
+
+/** Summary and speaker names are editable only for a `done` note; "My notes" always. */
 function Editors({ note, autosave }: { note: Note; autosave: Autosave }) {
   const editable = note.status === 'done';
+  const aside = useRef<HTMLDivElement>(null);
+  const sticky = useFitsInView(aside);
   return (
     <div className={styles.layout}>
       <div className={styles.primary}>
         <Tabs summary={<Summary note={note} autosave={autosave} editable={editable} />} transcript={note.transcript} />
       </div>
-      <div className={styles.aside}>
-        {editable ? (
-          <label className={`${styles.stacked} ${styles.card}`}>
-            <span className={styles.cardTitle}>Title</span>
-            <input
-              type="text"
-              value={autosave.value('title')}
-              onChange={(e) => autosave.change('title', e.target.value)}
-              onFocus={() => autosave.focus('title')}
-              onBlur={() => autosave.blur('title')}
-            />
-          </label>
-        ) : null}
-        <SpeakersPanel note={note} autosave={autosave} editable={editable} />
+      {/* "My notes" first: it is the user's own writing and must stay reachable however many speakers. */}
+      <div ref={aside} className={styles.aside} data-sticky={sticky}>
         <MyNotes autosave={autosave} />
+        <SpeakersPanel note={note} autosave={autosave} editable={editable} />
       </div>
     </div>
   );
