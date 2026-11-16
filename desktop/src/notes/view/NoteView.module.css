@@ -20,11 +20,37 @@
 
 .heading {
   flex: 1 1 360px;
+  min-width: 0;
   font-family: var(--font-title);
   font-size: 30px;
   font-weight: 700;
+  min-height: 0;
   letter-spacing: -0.01em;
   overflow-wrap: anywhere;
+}
+
+/* The title edited in place: reads as the heading until hovered or focused. */
+.header input.titleInput {
+  width: 100%;
+  font-family: var(--font-title);
+  font-size: 30px;
+  font-weight: 700;
+  margin: -4px 0 -4px -8px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.header input.titleInput:hover {
+  border-color: var(--line);
+}
+
+.header input.titleInput:focus {
+  border-color: var(--line-strong);
+  background: var(--surface);
 }
 
 .problem {
@@ -62,37 +88,39 @@
   color: var(--ink);
 }
 
+/* One quiet line: date · length · language · source, the linked event on its own line. */
 .facts {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
-  margin: 0;
+  align-items: baseline;
+  gap: var(--space-1) 0;
+  margin: calc(-1 * var(--space-2)) 0 0;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
 }
 
 .facts > div {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  gap: var(--space-1);
 }
 
-.facts dt {
+.facts > div:not(.eventFact) + div:not(.eventFact)::before {
+  content: "·";
+  margin: 0 var(--space-2);
   color: var(--ink-faint);
-  font-size: var(--text-xs);
 }
 
 .facts dd {
   margin: 0;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
 .facts > .eventFact {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  flex-basis: 100%;
+}
+
+.eventFact dt {
+  color: var(--ink-faint);
 }
 
 .state {
@@ -168,9 +196,15 @@
   min-width: 0;
 }
 
-.aside {
+/* Clips the tab row's band to the column (clip, unlike hidden, keeps the tab row sticky). */
+.primary {
+  overflow-x: clip;
+}
+
+/* Pinned beside the summary only when it fits in the window (`useFitsInView`); otherwise it scrolls with the page. */
+.aside[data-sticky="true"] {
   position: sticky;
-  top: 0;
+  top: var(--space-4);
 }
 
 .card {
@@ -178,6 +212,13 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface);
+}
+
+.count {
+  margin-left: var(--space-1);
+  color: var(--ink-faint);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .cardTitle {
@@ -197,12 +238,15 @@
   flex-direction: column;
 }
 
-/* The summary's Edit button sits on the tab row, at its right end. */
+/* The summary's Edit button sits on the tab row, at its right end, and sticks with it. */
 .sectionHead {
-  position: absolute;
-  top: 0;
-  right: 0;
+  position: sticky;
+  top: 3px;
+  z-index: 2;
   display: flex;
+  align-self: flex-end;
+  margin-top: calc(-1 * (var(--tab-row) + var(--space-4)));
+  margin-bottom: calc(var(--tab-row) + var(--space-4) - 28px);
 }
 
 .hint {
@@ -274,19 +318,44 @@
 }
 
 .tabs {
+  --tab-row: 32px;
+
   position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
+/* Stays at the top while the summary or transcript scrolls; the band hides text passing under it. */
 .tablist {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: inline-flex;
   align-self: flex-start;
   gap: 2px;
   padding: 3px;
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
+}
+
+/* The band behind the sticky tab row, clipped to the column by .primary. */
+.tablist::before {
+  position: absolute;
+  inset: -6px -2000px;
+  z-index: -1;
+  background: var(--canvas);
+  content: "";
+}
+
+/* The pill itself, painted over the band (the band covers the tab list's own background). */
+.tablist::after {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--surface-sunken);
+  content: "";
 }
 
 .tablist [role="tab"] {
@@ -383,47 +452,52 @@
 .speakers {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* label | name field, then "shown name — evidence" on one line (full text on hover). */
 .speaker {
   display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: baseline;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
   gap: 2px var(--space-2);
-}
-
-.speaker + .speaker {
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--line);
 }
 
 .label {
   color: var(--ink-faint);
   font-size: var(--text-xs);
-}
-
-.shown {
-  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .field {
   display: flex;
-  grid-column: 1 / -1;
 }
 
 .field input {
   width: 100%;
+  min-height: 26px;
+  padding-block: 2px;
 }
 
-.evidence {
-  grid-column: 1 / -1;
+.detail {
+  grid-column: 2;
+  overflow: hidden;
   color: var(--ink-faint);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.shown {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.evidence::before {
+  content: " — ";
 }
 
 .backdrop {
@@ -487,7 +561,7 @@
     grid-template-columns: 1fr;
   }
 
-  .aside {
+  .aside[data-sticky="true"] {
     position: static;
   }
 }

@@ -9,7 +9,10 @@ export function SpeakersPanel({ note, autosave, editable }: { note: Note; autosa
   return (
     <section aria-labelledby="note-speakers" className={`${styles.section} ${styles.card}`}>
       <h3 id="note-speakers" className={styles.cardTitle}>
-        Speakers
+        Speakers{' '}
+        <span className={styles.count} aria-hidden="true">
+          {note.speakers.length}
+        </span>
       </h3>
       <ul className={styles.speakers}>
         {note.speakers.map((speaker) => {
@@ -17,7 +20,6 @@ export function SpeakersPanel({ note, autosave, editable }: { note: Note; autosa
           return (
             <li key={speaker.label} className={styles.speaker}>
               <span className={styles.label}>{speaker.label}</span>
-              <span className={styles.shown}>{shownName(speaker)}</span>
               {editable ? (
                 <label className={styles.field}>
                   <span className="sr-only">Name for {speaker.label}</span>
@@ -30,7 +32,10 @@ export function SpeakersPanel({ note, autosave, editable }: { note: Note; autosa
                   />
                 </label>
               ) : null}
-              {speaker.evidence ? <span className={styles.evidence}>{speaker.evidence}</span> : null}
+              <span className={styles.detail} title={speaker.evidence || undefined}>
+                <span className={styles.shown}>{shownName(speaker)}</span>
+                {speaker.evidence ? <span className={styles.evidence}>{speaker.evidence}</span> : null}
+              </span>
             </li>
           );
         })}
