@@ -1,0 +1,4 @@
+[toolchain]
+# One Rust for host, hook image (docker/hooks.Dockerfile) and CI.
+channel = "1.100.0"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

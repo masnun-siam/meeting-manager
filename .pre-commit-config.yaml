@@ -25,3 +25,20 @@ repos:
         always_run: true
         verbose: true
         stages: [pre-commit]
+      # Every gate below runs in the hook image (scripts/hooks/docker.sh), on changed files only;
+      # the Tauri crate runs on the host (macOS-only). Full suites: make check and CI.
+      - id: commit-gates
+        name: secrets, suppressions, hygiene, rustfmt, biome (Docker)
+        entry: scripts/hooks/run.sh commit
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      - id: push-gates
+        name: branch secrets, clippy, types, related tests, changed-line coverage >= 80%
+        entry: scripts/hooks/run.sh push
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
+        stages: [pre-push]

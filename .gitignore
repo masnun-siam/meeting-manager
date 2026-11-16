@@ -5,3 +5,8 @@
 .gitnexus/
 .playwright-mcp/
 .claude/settings.local.json
+
+# Coverage reports (hooks and CI)
+coverage/
+*.lcov
+/.hook-logs/
