@@ -1,0 +1,81 @@
+name: release
+
+# Pushing a tag vX.Y.Z publishes Meeting.app with the matching `meeting` inside (FR-24, D46).
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # actions/checkout drops the tag's annotation, which carries the release notes.
+      - run: git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+      # Before any build: a mismatch publishes nothing.
+      - name: Check the versions match the tag
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          app=$(jq -r .version desktop/src-tauri/tauri.conf.json)
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          tool=$(jq -r '.packages[] | select(.name == "meeting") | .version' <<<"$metadata")
+          desktop=$(jq -r '.packages[] | select(.name == "meeting-desktop") | .version' <<<"$metadata")
+          echo "tag $want, tauri.conf.json $app, meeting $tool, meeting-desktop $desktop"
+          if [ "$app" != "$want" ] || [ "$tool" != "$want" ] || [ "$desktop" != "$want" ]; then
+            echo "::error::Set all three versions to $want before tagging v$want."
+            exit 1
+          fi
+      # Pinned: Rust 1.100 moved build-script dirs to `build/<pkg>/<hash>/out`, and tauri-build
+      # 2.6 (the newest that fits rust-version) then copies the bundled `meeting` onto the
+      # `build/meeting` directory. Raise it once tauri-build is upgraded.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - run: cargo build --release -p meeting
+        env:
+          FEATURE_DESKTOP_APP: "1"
+      - name: Build Meeting.app and its updater bundle
+        run: npx tauri build --config src-tauri/tauri.release.conf.json
+        working-directory: desktop
+        env:
+          FEATURE_DESKTOP_APP: "1"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Write latest.json
+        run: |
+          bundle=target/release/bundle/macos
+          # Notes come only from an annotated tag's message; a lightweight tag has none.
+          : > "$RUNNER_TEMP/notes.md"
+          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag ]; then
+            git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)' > "$RUNNER_TEMP/notes.md"
+          fi
+          jq -n \
+            --arg version "${GITHUB_REF_NAME#v}" \
+            --rawfile notes "$RUNNER_TEMP/notes.md" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg url "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/Meeting.app.tar.gz" \
+            --rawfile signature "$bundle/Meeting.app.tar.gz.sig" \
+            '{version: $version, notes: $notes, pub_date: $pub_date,
+              platforms: {"darwin-aarch64": {signature: $signature, url: $url}}}' \
+            > "$bundle/latest.json"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bundle=target/release/bundle/macos
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" \
+            "$bundle/Meeting.app.tar.gz" "$bundle/Meeting.app.tar.gz.sig" "$bundle/latest.json"

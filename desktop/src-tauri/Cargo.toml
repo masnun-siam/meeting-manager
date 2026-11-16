@@ -18,6 +18,8 @@ anyhow = "1"
 tracing = "0.1"
 tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
+# Rust side only (D47): no capability lists it, so the webview cannot reach it.
+tauri-plugin-updater = "2"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 # The macOS bindings the recorder, calendar and tray issues use. Each starts with no framework
 # feature on; the issue that needs a class turns its cargo feature on here.

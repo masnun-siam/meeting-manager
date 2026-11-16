@@ -151,9 +151,12 @@ pub fn run() {
     if mode == Mode::On {
         // Registered before anything else, as the plugin requires. Rust side only: no
         // capability lists it.
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            focus_main(app)
-        }));
+        builder = builder
+            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                focus_main(app)
+            }))
+            // Rust side only (D47): no capability lists it.
+            .plugin(tauri_plugin_updater::Builder::new().build());
     }
     match configure(builder, mode).build(tauri::generate_context!()) {
         Ok(app) => app.run(move |app, event| match event {
@@ -423,6 +426,60 @@ mod tests {
         let macos = &config["bundle"]["macOS"];
         assert_eq!(macos["minimumSystemVersion"], "14.4");
         assert_eq!(macos["signingIdentity"], "-");
+        // Release-only settings live in the overlay (D50), so a local build needs no signing
+        // key and no prebuilt `meeting`.
+        assert!(config["bundle"].get("createUpdaterArtifacts").is_none());
+        assert!(config["bundle"].get("resources").is_none());
+        let updater = &config["plugins"]["updater"];
+        assert_eq!(
+            updater["endpoints"],
+            serde_json::json!([
+                "https://github.com/masnun-siam/meeting-manager/releases/latest/download/latest.json"
+            ])
+        );
+        assert!(!updater["pubkey"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_release_overlay_adds_only_the_bundle_settings() {
+        let overlay = json_file("tauri.release.conf.json");
+        assert_eq!(
+            overlay,
+            serde_json::json!({
+                "bundle": {
+                    "createUpdaterArtifacts": true,
+                    "resources": { "../../target/release/meeting": "meeting" }
+                }
+            })
+        );
+    }
+
+    /// The `version` under `[package]` of a Cargo manifest.
+    fn package_version(manifest: &str) -> &str {
+        let package = manifest
+            .split("\n[")
+            .find(|section| section.trim_start_matches('[').starts_with("package]"))
+            .expect("a [package] section");
+        package
+            .lines()
+            .find_map(|line| line.strip_prefix("version = \""))
+            .and_then(|rest| rest.strip_suffix('"'))
+            .expect("a package version")
+    }
+
+    #[test]
+    fn the_versions_match() {
+        let app = json_file("tauri.conf.json");
+        let tool = manifest_file("../../crates/meeting/Cargo.toml");
+        assert_eq!(app["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(package_version(&tool), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn the_package_version_is_read_from_the_package_section() {
+        let manifest =
+            "[package]\nname = \"x\"\nversion = \"1.2.3\"\n\n[dependencies]\nversion = \"9\"\n";
+        assert_eq!(package_version(manifest), "1.2.3");
     }
 
     #[test]
