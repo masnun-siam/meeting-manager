@@ -1,4 +1,5 @@
 [toolchain]
-# One Rust for host, hook image (docker/hooks.Dockerfile) and CI.
-channel = "1.100.0"
+# One Rust for host, hook image (docker/hooks.Dockerfile) and CI. 1.99.1 = release.yml pin: on
+# Rust >= 1.100, tauri-build 2.6 bundles `meeting` into the wrong place (docs/development.md).
+channel = "1.99.1"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]

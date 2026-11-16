@@ -2,7 +2,7 @@
 
 Covers: desktop/src-tauri/src/recorder/, desktop/src-tauri/src/tray.rs
 
-The desktop app's recording session: start, pause, resume, stop, the automatic stops (including sleep and quit), the WAV written while recording, the hand-off to `meeting process`, crash recovery, `recorder_retry` and the menu-bar item. Behaviour: [../prds/desktop/desktop-app.md](../prds/desktop/desktop-app.md) FR-1 to FR-7 (D13, D14, D15, D32, D33, D36). Audio comes from the capture boundary ([../desktop.md](../desktop.md#capture-boundary-capturemodrs)).
+The desktop app's recording session: start, pause, resume, stop, the automatic stops (including sleep and quit), the WAV written while recording, the hand-off to `meeting process`, crash recovery, `recorder_retry` and the menu-bar item. Behaviour: [../prds/desktop/desktop-app.md](../../prds/desktop/desktop-app.md) FR-1 to FR-7 (D13, D14, D15, D32, D33, D36). Audio comes from the capture boundary ([../desktop.md](../../desktop.md#capture-boundary-capturemodrs)).
 
 ## Files
 
@@ -87,7 +87,7 @@ On success the language is saved to the store setting `language` (a store failur
 
 ## Commands
 
-All run on a blocking thread (permission prompts, joins and ffmpeg block). Replies: [../desktop.md](../desktop.md) and the PRD's API table.
+All run on a blocking thread (permission prompts, joins and ffmpeg block). Replies: [../desktop.md](../../desktop.md) and the PRD's API table.
 
 | Command | Reply | Errors |
 |---|---|---|

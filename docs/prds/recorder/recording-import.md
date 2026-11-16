@@ -188,4 +188,4 @@ None.
 
 - [meeting-recorder.md](meeting-recorder.md): the pipeline, outputs, retention and CLI this feature reuses unchanged.
 - [recording-folders.md](recording-folders.md): the folder layout and recording rule (FR-3, FR-4, FR-5, FR-8) amended by FR-5 to FR-7 here.
-- [../features/processing.md](../../features/processing.md), [../tool.md](../../tool.md), [../features/native-messaging.md](../../features/native-messaging.md): docs to update with the implementation.
+- [../features/processing.md](../../modules/recorder/meeting-recorder.md), [../tool.md](../../tool.md), [../features/native-messaging.md](../../modules/recorder/native-messaging.md): docs to update with the implementation.

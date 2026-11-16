@@ -55,8 +55,8 @@ esac
 
 if [ "$stage" != all ]; then
   step "no new lint, type or test suppressions"
-  # This script and its contract tests hold the patterns themselves, so they are not scanned.
-  hits=$(added . ':!scripts/hooks/gates.sh' ':!scripts/hooks/tests/*' | grep -E '^\+' | grep -v '^+++' \
+  # Code only: docs and these scripts name the patterns without using them.
+  hits=$(added '*.rs' '*.ts' '*.tsx' '*.js' | grep -E '^\+' | grep -v '^+++' \
     | grep -nE '#!?\[(allow|expect)\(|cfg_attr\(.*(allow|expect)\(|biome-ignore|@ts-(ignore|nocheck|expect-error)|eslint-disable|\b(it|test|describe)\.(skip|only)\(|#\[ignore\]' || true)
   [ -z "$hits" ] || { printf '%s\n' "$hits"; fail "new suppression (fix the cause instead)"; }
 

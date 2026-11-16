@@ -1,6 +1,6 @@
 # Rust crate: `meeting`
 
-Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (lib.rs, main.rs, calendar.rs, calendar_fetch.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, folders.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, context_block.rs, ical.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, spawn.rs, store.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
+Covers: crates/meeting/Cargo.toml, crates/meeting/src/, crates/meeting/tests/
 
 One crate (`meeting`, edition 2024) with a library (`src/lib.rs`, linked by the desktop app) and the `meeting` binary (`src/main.rs`). Dependencies: `clap`, `serde`, `serde_json`, `toml`, `anyhow`, `tracing`, `tracing-subscriber`, `ureq` (HTTP), `keyring` (Keychain), `rusqlite` (bundled SQLite with FTS5, for the desktop app's store). External programs: `ffmpeg`, `claude`, `osascript`. See [architecture.md](architecture.md) for how the crate fits with the extension.
 
@@ -10,13 +10,13 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 
 | Command | Does | Details |
 |---|---|---|
-| `meeting process <recording> [--retranscribe] [--language bn\|en] [--job-id <id>]` | Builds a `Pipeline`, runs it in the foreground, sends a macOS notification at the end. `--job-id` is hidden: the native host passes it. | [features/processing.md](features/processing.md) |
-| `meeting install` | Registers the native host, writes config. | [features/setup.md](features/setup.md) |
-| `meeting config set-key` | Stores the Deepgram key in the Keychain (hidden prompt). | [features/setup.md](features/setup.md) |
-| `meeting config set-calendar` | Only with `FEATURE_MEETING_CONTEXT=1`: checks, fetches and parses the secret iCal address (hidden prompt), then stores it in the Keychain; empty answer removes it. | [features/setup.md](features/setup.md) |
-| `meeting import <file> --language bn\|en [--date "YYYY-MM-DD HH:MM"]` | Copies the file into a new meeting folder (`import::import`), prints `imported → <path>`, then runs the same foreground pipeline and notification as `process`. | [features/processing.md](features/processing.md) |
-| `meeting doctor` | Prints one line per check; exits non-zero if any failed. | [features/setup.md](features/setup.md) |
-| `meeting native-host [origin]` | Entry point Chrome launches (as `meeting <origin>`, rewritten by `chrome_args`). | [features/native-messaging.md](features/native-messaging.md) |
+| `meeting process <recording> [--retranscribe] [--language bn\|en] [--job-id <id>]` | Builds a `Pipeline`, runs it in the foreground, sends a macOS notification at the end. `--job-id` is hidden: the native host passes it. | [recorder/meeting-recorder.md](modules/recorder/meeting-recorder.md) |
+| `meeting install` | Registers the native host, writes config. | [recorder/setup.md](modules/recorder/setup.md) |
+| `meeting config set-key` | Stores the Deepgram key in the Keychain (hidden prompt). | [recorder/setup.md](modules/recorder/setup.md) |
+| `meeting config set-calendar` | Only with `FEATURE_MEETING_CONTEXT=1`: checks, fetches and parses the secret iCal address (hidden prompt), then stores it in the Keychain; empty answer removes it. | [recorder/setup.md](modules/recorder/setup.md) |
+| `meeting import <file> --language bn\|en [--date "YYYY-MM-DD HH:MM"]` | Copies the file into a new meeting folder (`import::import`), prints `imported → <path>`, then runs the same foreground pipeline and notification as `process`. | [recorder/meeting-recorder.md](modules/recorder/meeting-recorder.md) |
+| `meeting doctor` | Prints one line per check; exits non-zero if any failed. | [recorder/setup.md](modules/recorder/setup.md) |
+| `meeting native-host [origin]` | Entry point Chrome launches (as `meeting <origin>`, rewritten by `chrome_args`). | [recorder/native-messaging.md](modules/recorder/native-messaging.md) |
 
 - `Language` (`bn`, `en`) is defined in `lib.rs` and imported by `deepgram`, `meta`, `native`, `plan`, `transcript`, `vault`.
 - `run` dispatches with a chain of `if let` blocks, each returning. The trailing `bail!("... not implemented yet")` is unreachable for current commands.
@@ -55,7 +55,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `native.rs` | Chrome native messaging host; Archive and Trash look the job up and call `folders`, with the store when `Host.desktop` is on | `Host` (incl. `store_path`), `serve` |
 | `test_support.rs` | Test fakes (`#[cfg(test)]` only) | `mock`, `mock_raw`, `stall`, `stub`, `envelope`, `temp`, `VALID` |
 
-Processing modules are covered in [features/processing.md](features/processing.md). `native.rs`: [features/native-messaging.md](features/native-messaging.md). `install.rs`, `doctor.rs`, `config.rs`, `secret.rs`: [features/setup.md](features/setup.md).
+Processing modules are covered in [recorder/meeting-recorder.md](modules/recorder/meeting-recorder.md). `native.rs`: [recorder/native-messaging.md](modules/recorder/native-messaging.md). `install.rs`, `doctor.rs`, `config.rs`, `secret.rs`: [recorder/setup.md](modules/recorder/setup.md).
 
 ## Layering
 

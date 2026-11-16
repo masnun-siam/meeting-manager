@@ -2,7 +2,7 @@
 
 Covers: desktop/src-tauri/src/calendar/
 
-The desktop app's calendar module: macOS Calendar through EventKit, the upcoming list, one event with its earlier notes, the calendars and the hidden-calendar setting, change notifications, and the lookup the recorder uses for `context.json`. Behaviour: [../prds/desktop/desktop-app.md](../prds/desktop/desktop-app.md) FR-8 to FR-11, FR-20. Module map: [../desktop.md](../desktop.md).
+The desktop app's calendar module: macOS Calendar through EventKit, the upcoming list, one event with its earlier notes, the calendars and the hidden-calendar setting, change notifications, and the lookup the recorder uses for `context.json`. Behaviour: [../prds/desktop/desktop-app.md](../../prds/desktop/desktop-app.md) FR-8 to FR-11, FR-20. Module map: [../desktop.md](../../desktop.md).
 
 ## Files
 

@@ -1,6 +1,6 @@
 # Architecture
 
-Covers: Cargo.toml, crates/meeting/, extension/, desktop/, .github/workflows/
+Covers: Cargo.toml, FLAGS.md
 
 A Chrome extension records a meeting tab plus the mic; a local Rust CLI (`meeting`) transcribes it with Deepgram, summarises it with headless Claude Code and writes a note into an Obsidian vault. macOS only. No server: everything runs on the user's machine.
 
@@ -35,7 +35,7 @@ flowchart LR
 ## How they talk
 
 - **Extension internals:** `chrome.runtime` messages between popup, service worker and offscreen document; status in `chrome.storage.session`. See [extension.md](extension.md#message-passing).
-- **Extension → tool:** Chrome native messaging (`com.meeting_manager.host`). Chrome launches `meeting chrome-extension://<id>/` per request, which `main.rs` runs as `native-host`; the host only accepts the pinned extension origin. See [features/native-messaging.md](features/native-messaging.md).
+- **Extension → tool:** Chrome native messaging (`com.meeting_manager.host`). Chrome launches `meeting chrome-extension://<id>/` per request, which `main.rs` runs as `native-host`; the host only accepts the pinned extension origin. See [recorder/native-messaging.md](modules/recorder/native-messaging.md).
 - **Tool → tool:** the host never processes a recording itself; it writes a `queued` job and spawns `meeting process --job-id <id>` in its own process group, then exits.
 - **Tool → extension:** no push. The popup Jobs tab polls `list_jobs`; the tool reads and writes job JSON files that both sides see through the host.
 
@@ -44,10 +44,10 @@ flowchart LR
 | Store | Owner | Doc |
 |---|---|---|
 | `chrome.storage.session` / `.local`, OPFS `recordings/` | Extension | [extension.md](extension.md#state-storage) |
-| Recording and side files in the recording's folder (`meta.json`, `transcript.md`, `summary.md`, …) | Tool | [features/processing.md](features/processing.md#files) |
-| Job files under `~/Library/Application Support/meeting-manager/jobs/` | Tool | [features/processing.md](features/processing.md#job-lifecycle) |
-| `~/.config/meeting-manager/config.toml`, Keychain items (Deepgram key; calendar address, flag on), Chrome host manifest | Tool | [features/setup.md](features/setup.md) |
-| Vault note | Tool | [features/processing.md](features/processing.md#files) |
+| Recording and side files in the recording's folder (`meta.json`, `transcript.md`, `summary.md`, …) | Tool | [recorder/meeting-recorder.md](modules/recorder/meeting-recorder.md#files) |
+| Job files under `~/Library/Application Support/meeting-manager/jobs/` | Tool | [recorder/meeting-recorder.md](modules/recorder/meeting-recorder.md#job-lifecycle) |
+| `~/.config/meeting-manager/config.toml`, Keychain items (Deepgram key; calendar address, flag on), Chrome host manifest | Tool | [recorder/setup.md](modules/recorder/setup.md) |
+| Vault note | Tool | [recorder/meeting-recorder.md](modules/recorder/meeting-recorder.md#files) |
 | Log `~/Library/Logs/meeting-manager/meeting.log` | Tool | [tool.md](tool.md#gotchas) |
 
 ## Main flow
@@ -71,7 +71,7 @@ sequenceDiagram
   E->>H: list_jobs (Jobs tab, every 3 s)
 ```
 
-Details per stage: [features/recording.md](features/recording.md) → [features/native-messaging.md](features/native-messaging.md) → [features/processing.md](features/processing.md). First-run setup: [features/setup.md](features/setup.md).
+Details per stage: [recorder/browser-recording.md](modules/recorder/browser-recording.md) → [recorder/native-messaging.md](modules/recorder/native-messaging.md) → [recorder/meeting-recorder.md](modules/recorder/meeting-recorder.md). First-run setup: [recorder/setup.md](modules/recorder/setup.md).
 
 ## Cross-cutting rules
 

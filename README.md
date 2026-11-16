@@ -14,7 +14,7 @@ flowchart LR
 
 ## Install
 
-Needs macOS, Chrome 116+, Rust 1.87+, Node 24+, ffmpeg with libopus, a logged-in Claude Code, a Deepgram API key and an Obsidian vault.
+Needs macOS, Chrome 116+, Rust via rustup (the repo pins 1.99.1 in `rust-toolchain.toml`), Node 24+, ffmpeg with libopus, a logged-in Claude Code, a Deepgram API key and an Obsidian vault.
 
 ```sh
 cargo install --path crates/meeting
@@ -61,7 +61,7 @@ meeting import ~/Desktop/call.m4a --language en                    # recording m
 | Job status | `~/Library/Application Support/meeting-manager/jobs/` |
 | Log | `~/Library/Logs/meeting-manager/meeting.log` (never contains the key or transcript text) |
 
-Full reference: [docs/features/setup.md](docs/features/setup.md).
+Full reference: [docs/modules/recorder/setup.md](docs/modules/recorder/setup.md).
 
 ## Troubleshooting
 

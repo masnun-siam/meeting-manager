@@ -2,7 +2,7 @@
 
 Covers: crates/meeting/src/install.rs, crates/meeting/src/config.rs, crates/meeting/src/secret.rs, crates/meeting/src/doctor.rs, crates/meeting/src/spawn.rs, crates/meeting/src/main.rs
 
-First-run order: `meeting install`, `meeting config set-key`, `meeting doctor`. Commands are wired in `run` in `main.rs`. See [../tool.md](../tool.md), [native-messaging.md](native-messaging.md).
+First-run order: `meeting install`, `meeting config set-key`, `meeting doctor`. Commands are wired in `run` in `main.rs`. See [../tool.md](../../tool.md), [native-messaging.md](native-messaging.md).
 
 ## `meeting install`
 

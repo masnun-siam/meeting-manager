@@ -1,8 +1,8 @@
 # Desktop app
 
-Covers: desktop/
+Covers: desktop/index.html, desktop/public/, desktop/src/, desktop/src-tauri/
 
-The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, package `meeting-desktop`, lib `meeting_desktop`) links the `meeting` library and whose UI (`desktop/src`) is React 19 with strict TS and CSS modules. Every command is implemented (the calendar commands: [features/desktop-calendar.md](features/desktop-calendar.md); the recorder commands: [features/desktop-recorder.md](features/desktop-recorder.md); the notes commands: [Notes commands](#notes-commands-notes) below). Behaviour: [prds/desktop/desktop-app.md](prds/desktop/desktop-app.md).
+The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, package `meeting-desktop`, lib `meeting_desktop`) links the `meeting` library and whose UI (`desktop/src`) is React 19 with strict TS and CSS modules. Every command is implemented (the calendar commands: [desktop/calendar.md](modules/desktop/calendar.md); the recorder commands: [desktop/recorder.md](modules/desktop/recorder.md); the notes commands: [Notes commands](#notes-commands-notes) below). Behaviour: [prds/desktop/desktop-app.md](prds/desktop/desktop-app.md).
 
 ## Flag
 
@@ -21,15 +21,15 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | `lib.rs` | `run()`, the flag, `configure` (setup and command registration), `launch` (state, tool swap, window, hooks), the `App` state `{env, recorder, calendar, notes, admin, updater}`. `launch_in` takes the `Env` and `Updater` constructors, so its tests start the app in a temp home with an updater whose checks fail (`updater::tests::unplugged`) and an invoked command never touches the real store, vault, recordings or update server. The issues that fill a module do not edit it |
 | `env.rs` | `Env { home, store_path, jobs }`; `config()` reloads `config.toml` on every call and returns the error as a string; `store()` opens the notes store and keeps `anyhow::Error`, so `store::OpenError` can be downcast. `Env::at(home)` is the constructor tests use |
 | `reply.rs` | `ok(fields)`, `err(code, message)`: the reply shape of every command |
-| `recorder/` | `Recorder` ([features/desktop-recorder.md](features/desktop-recorder.md)): WAV writer, folder, conversion, hand-off, notices; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry`; hooks `on_launch` (crash recovery), `on_sleep` (will-sleep observer), `on_exit_requested` (`Recorder::quit`; `false` keeps the app running) |
-| `calendar/` | `Calendar` (EventKit, [features/desktop-calendar.md](features/desktop-calendar.md)); `calendar_status`, `calendar_events`, `calendar_event`, `calendars`, `set_hidden_calendars`; hook `on_launch`; `Calendar::event_for_context` for `context.json` |
+| `recorder/` | `Recorder` ([desktop/recorder.md](modules/desktop/recorder.md)): WAV writer, folder, conversion, hand-off, notices; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry`; hooks `on_launch` (crash recovery), `on_sleep` (will-sleep observer), `on_exit_requested` (`Recorder::quit`; `false` keeps the app running) |
+| `calendar/` | `Calendar` (EventKit, [desktop/calendar.md](modules/desktop/calendar.md)); `calendar_status`, `calendar_events`, `calendar_event`, `calendars`, `set_hidden_calendars`; hook `on_launch`; `Calendar::event_for_context` for `context.json` |
 | `notes/mod.rs` | `Notes { open, spawn }` (fn pointers; real: `native::open_with_system`, `spawn::process_detached`); `notes_list`, `note_get`, `note_update`, `note_rerun`, `note_open`, each a thin wrapper over a `pub fn` taking `&Env` |
 | `notes/markdown.rs` | `render_html` (summary markdown to safe HTML) and `shown_transcript` (speaker labels to current names) |
 | `admin/mod.rs` | `Admin { progress, trash, doctor, doctor_timeout }`; `rescan`, `rescan_status`, `health`, `note_archive`, `note_trash`, `settings_info`; hook `on_launch` (first backfill) |
 | `admin/backfill.rs` | Folder scan (`candidates`), `read_folder` (folder files to a `RunResult`), `run` (merge, then remove gone rows, then `backfill_done`), `open_or_rebuild` (move a broken store aside) |
 | `updater/mod.rs` | `Updater { version, check, restart, every, poll }` (FR-25, FR-26; below); `update_status`, `update_check`, `update_install`, `set_auto_update`; hook `on_launch` (automatic check and 6-hourly timer); `swap_tool`, the tool swap (FR-27), which fills `tool_error` through `Updater::set_tool_error` |
 | `updater/tool.rs` | `swap(bundled, target)`: replaces `meeting_path` with the bundled `meeting` when the bytes differ (FR-27; below) |
-| `tray.rs` | Hook `setup`: the menu-bar item ([features/desktop-recorder.md](features/desktop-recorder.md#menu-bar-item-trayrs)); needs the main thread, so the mock-runtime tests run without it |
+| `tray.rs` | Hook `setup`: the menu-bar item ([desktop/recorder.md](modules/desktop/recorder.md#menu-bar-item-trayrs)); needs the main thread, so the mock-runtime tests run without it |
 | `capture/` | Audio capture: the boundary in `mod.rs` and the Core Audio implementation (below) |
 
 - **Startup order** (`launch`, flag on): manage `App`, `updater::swap_tool` (before anything can spawn a job), open the window, then `tray::setup`, `recorder::on_launch`, `admin::on_launch`, `calendar::on_launch`, `recorder::on_sleep`, `updater::on_launch`. Hooks take `&AppHandle<R>` for any runtime so tests run them on Tauri's mock runtime.

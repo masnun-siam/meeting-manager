@@ -1,5 +1,7 @@
 # Installation
 
+Covers: crates/meeting/src/install.rs, crates/meeting/src/doctor.rs, extension/manifest.config.ts, .github/workflows/release.yml
+
 Set up Meeting Manager on macOS with Google Chrome. For the shortest path to a first recording, see the [quickstart](quickstart.md).
 
 ## 1. Prerequisites
@@ -8,7 +10,7 @@ Set up Meeting Manager on macOS with Google Chrome. For the shortest path to a f
 |---|---|---|
 | macOS | — | Keychain and Chrome's native-host location are macOS-specific |
 | Google Chrome 116+ | `chrome://version` | google.com/chrome |
-| Rust 1.87+ | `rustc --version` | `curl https://sh.rustup.rs -sSf \| sh` |
+| Rust (rustup; the repo pins 1.99.1 in `rust-toolchain.toml`) | `rustc --version` | `curl https://sh.rustup.rs -sSf \| sh` |
 | Node.js 24+ | `node --version` | nodejs.org or `brew install node` |
 | ffmpeg with libopus | `ffmpeg -hide_banner -encoders \| grep libopus` | `brew install ffmpeg` |
 | Claude Code, logged in | `claude auth status` | Install Claude Code, then `claude auth login` |
@@ -113,4 +115,4 @@ If you installed the desktop app, quit it and move `/Applications/Meeting.app` t
 
 Remove the extension from `chrome://extensions`. Recordings in `~/Downloads/Meetings` and notes in your vault are left alone.
 
-Reference for every setting, path and `doctor` check: [../features/setup.md](../features/setup.md).
+Reference for every setting, path and `doctor` check: [setup](../modules/recorder/setup.md).

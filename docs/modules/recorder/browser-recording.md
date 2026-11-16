@@ -2,7 +2,7 @@
 
 Covers: extension/src/popup/RecordTab.tsx, extension/src/popup/useRecorderStatus.ts, extension/src/popup/Popup.tsx, extension/src/popup/main.tsx, extension/src/popup/index.html, extension/src/background/, extension/src/offscreen/, extension/src/permission/, extension/src/shared/messages.ts, extension/src/shared/recordingState.ts, extension/src/shared/recordingFile.ts, extension/src/shared/micPermission.ts
 
-The user presses Start in the popup. The extension records the active tab and the mic, saves a `recording.webm` to `Downloads/Meetings/<name>/`, and asks the `meeting` tool to process it. Component overview: [extension.md](../extension.md). What happens after the hand-off: [processing.md](processing.md). Native call details: [native-messaging.md](native-messaging.md).
+The user presses Start in the popup. The extension records the active tab and the mic, saves a `recording.webm` to `Downloads/Meetings/<name>/`, and asks the `meeting` tool to process it. Component overview: [extension.md](../../extension.md). What happens after the hand-off: [processing.md](meeting-recorder.md). Native call details: [native-messaging.md](native-messaging.md).
 
 ## Who does what
 
@@ -15,7 +15,7 @@ The user presses Start in the popup. The extension records the active tab and th
 | Recorder | `offscreen/recorder.ts` | `getUserMedia` for tab and mic, mix, `MediaRecorder`, chunk writes, 3 h cap timer. |
 | File | `shared/recordingFile.ts` | `recordings/<startedAt>.webm` in the origin-private file system. |
 | Save | `background/save.ts` | Download, delete temp file, native `process` call. With `FEATURE_MEETING_CONTEXT=1`, Start stores the tab identity in `storage.session` `meeting_context` and the `process` message carries it as `context` (trimmed to 256 KiB); the key is cleared after hand-off. Recovered recordings send none. |
-| Context session | `background/contextSession.ts` | Flag on: sends `context_start` / `context_stop` to a Meet tab, keeps the recording segments and merges content-script batches into `meeting_context`. See [extension.md](../extension.md). |
+| Context session | `background/contextSession.ts` | Flag on: sends `context_start` / `context_stop` to a Meet tab, keeps the recording segments and merges content-script batches into `meeting_context`. See [extension.md](../../extension.md). |
 | Recover | `background/recover.ts` | Re-save leftovers at browser start. |
 | Mic page | `permission/MicPermission.tsx` | Grants mic permission once. |
 
@@ -34,7 +34,7 @@ sequenceDiagram
   SW->>SW: tabCapture.getMediaStreamId(active tab)
   SW->>O: ensureOffscreen, then offscreen_start
   SW->>SW: status = recording (badge REC)
-  SW->>SW: flag on: meeting_context with the first segment; Meet tab: context_start (2 s max)
+  SW->>SW: flag on: meeting_context with the first segment, then context_start to the Meet tab (2 s max)
   O->>O: tab stream + mic stream, mix, MediaRecorder(5 s chunks)
   O-->>SW: offscreen_started {micIncluded}
   loop every 5 s
@@ -146,7 +146,7 @@ flowchart TD
 - A failed Start (`resetWithError`) closes the offscreen document, resets to `idle` and sets an `error` notice. `start` also rethrows, which the SW logs.
 - `offscreen_error` before `offscreen_started` resets like a failed Start. After it, only the notice is set and `offscreen_stopped` follows.
 - If the popup cannot reach the SW, `RecordTab` shows "Could not reach the recorder".
-- **Context line** (`FEATURE_MEETING_CONTEXT` on, phases `recording` and `paused` only; FR-5 in [meeting-context.md](../prds/context/meeting-context.md)): first in the status region, from `meeting_context`.
+- **Context line** (`FEATURE_MEETING_CONTEXT` on, phases `recording` and `paused` only; FR-5 in [meeting-context.md](../../prds/context/meeting-context.md)): first in the status region, from `meeting_context`.
 
   | Platform, `capture` | Text |
   |---|---|

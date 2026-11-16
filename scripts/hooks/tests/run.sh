@@ -116,7 +116,7 @@ check "ci: tool runs the changed-line coverage gate" 'grep -q "changed-lines-cov
 check "ci: extension and desktop guard their coverage logs" 'grep -q coverage-log-guard "$w/extension.yml" && grep -q coverage-log-guard "$w/desktop.yml"'
 gl_ci=$(grep -o '[0-9a-f]\{64\}  gl.tgz' "$w/guards.yml" | cut -d' ' -f1)
 check "ci: gitleaks checksum matches the hook image" '[ -n "$gl_ci" ] && grep -q "gl_sum=$gl_ci" "$repo/docker/hooks.Dockerfile"'
-check "ci: Rust comes from rust-toolchain.toml" '! grep -q "rust-toolchain@stable" "$w/tool.yml" && grep -q "channel = \"1.100.0\"" "$repo/rust-toolchain.toml" && grep -q "rust:1.100.0" "$repo/docker/hooks.Dockerfile"'
+check "ci: Rust comes from rust-toolchain.toml" '! grep -q "rust-toolchain@stable" "$w/tool.yml" && grep -q "channel = \"1.99.1\"" "$repo/rust-toolchain.toml" && grep -q "toolchain: 1.99.1" "$w/release.yml" && grep -q "rust:1.99.1" "$repo/docker/hooks.Dockerfile"'
 check "ci: Node 24 everywhere" 'grep -qx 24 "$repo/.nvmrc" && grep -q "node:24" "$repo/docker/hooks.Dockerfile" && ! grep -h "node-version:" "$w"/*.yml | grep -v "node-version: 24"'
 
 check "real .git/config unchanged" '[ "$(shasum -a 256 <"$real_cfg")" = "$real_sum" ]'

@@ -1,5 +1,7 @@
 # Quickstart
 
+Covers: README.md, extension/src/popup/
+
 From a fresh clone to your first meeting note. Assumes macOS, Chrome, Rust, Node 24, `brew install ffmpeg`, a logged-in Claude Code and a Deepgram key; see [installation](installation.md) for details and troubleshooting.
 
 ```sh

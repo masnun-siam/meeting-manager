@@ -222,4 +222,4 @@ None.
 ## Related
 
 - [meeting-recorder.md](meeting-recorder.md): FR-4, FR-8, FR-14, FR-15 and "Recordings directory" are amended by this PRD; its change log points here.
-- [../features/recording.md](../../features/recording.md), [../features/processing.md](../../features/processing.md), [../features/native-messaging.md](../../features/native-messaging.md): docs to update with the implementation.
+- [../features/recording.md](../../modules/recorder/browser-recording.md), [../features/processing.md](../../modules/recorder/meeting-recorder.md), [../features/native-messaging.md](../../modules/recorder/native-messaging.md): docs to update with the implementation.

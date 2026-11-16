@@ -27,7 +27,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `tabCapture` | `chrome.tabCapture.getMediaStreamId` in `recordingControl.ts` |
 | `offscreen` | `chrome.offscreen.createDocument` / `closeDocument` |
 | `downloads` | Saving `Meetings/<name>/recording.webm` in `save.ts` |
-| `nativeMessaging` | Talking to the Rust host, see [features/native-messaging.md](features/native-messaging.md) |
+| `nativeMessaging` | Talking to the Rust host, see [recorder/native-messaging.md](modules/recorder/native-messaging.md) |
 | `storage` | `chrome.storage.session` (status) and `chrome.storage.local` (language) |
 
 ## Directory map
@@ -45,7 +45,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/popup/RecordTab.tsx` | Record UI | `RecordTab` |
 | `src/popup/useRecorderStatus.ts` | Live status hook | `useRecorderStatus` |
 | `src/popup/useMeetingContext.ts` | Live meeting context hook (flag on; null and no storage read when off) | `useMeetingContext` |
-| `src/popup/JobsTab.tsx`, `useJobs.ts` | Jobs UI | see [features/native-messaging.md](features/native-messaging.md) |
+| `src/popup/JobsTab.tsx`, `useJobs.ts` | Jobs UI | see [recorder/native-messaging.md](modules/recorder/native-messaging.md) |
 | `src/permission/MicPermission.tsx` | Mic grant page | `MicPermission` |
 | `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock`, `MEET_CODE` |
 | `src/shared/flags.ts` | Build-time flag, defined in `vite.config.ts` | `meetingContextEnabled` |
@@ -55,11 +55,11 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/shared/recordingState.ts` | Pure lifecycle | `transition`, `elapsedMs`, `remainingMs`, `RECORDING_CAP_MS` |
 | `src/shared/recordingFile.ts` | OPFS file per recording | `appendChunk`, `getRecordingFile`, `deleteRecordingFile`, `RECORDINGS_DIR` |
 | `src/shared/micPermission.ts` | Mic permission helpers | `micPermissionState`, `openMicPermissionPage`, `MIC_PERMISSION_PAGE` |
-| `src/shared/native.ts`, `nativeClient.ts` | Native host client | see [features/native-messaging.md](features/native-messaging.md) |
+| `src/shared/native.ts`, `nativeClient.ts` | Native host client | see [recorder/native-messaging.md](modules/recorder/native-messaging.md) |
 | `src/test/setup.ts` | vitest setup | `cleanup` after each test |
 | `manifest.config.ts`, `vite.config.ts`, `vitest.config.ts`, `tsconfig.json`, `biome.json` | Build and tooling config | |
 
-Feature flow for recording: [features/recording.md](features/recording.md). Processing: [features/processing.md](features/processing.md).
+Feature flow for recording: [recorder/browser-recording.md](modules/recorder/browser-recording.md). Processing: [recorder/meeting-recorder.md](modules/recorder/meeting-recorder.md).
 
 ## Message passing
 
