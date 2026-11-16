@@ -154,6 +154,13 @@ fn hides_on_close(mode: Mode, label: &str) -> bool {
     mode == Mode::On && label == Mode::On.window_label()
 }
 
+/// Whether an exit request goes through the recorder's quit rules (FR-5). Not the updater's
+/// relaunch: it holds the recorder in `saving` until the process ends, so waiting for that
+/// save would never return, and Tauri does not let a restart be prevented anyway.
+fn asks_recorder(mode: Mode, code: Option<i32>) -> bool {
+    mode == Mode::On && code != Some(tauri::RESTART_EXIT_CODE)
+}
+
 pub fn run() {
     meeting::logging::init();
     let mode = mode(desktop_enabled());
@@ -170,9 +177,9 @@ pub fn run() {
     }
     match configure(builder, mode).build(tauri::generate_context!()) {
         Ok(app) => app.run(move |app, event| match event {
-            RunEvent::ExitRequested { api, .. } => {
+            RunEvent::ExitRequested { api, code, .. } => {
                 // Built off, no hook runs: quitting is never held back.
-                if mode == Mode::On && !recorder::on_exit_requested(app) {
+                if asks_recorder(mode, code) && !recorder::on_exit_requested(app) {
                     api.prevent_exit();
                 }
             }
@@ -427,6 +434,14 @@ mod tests {
         assert_eq!(status["auto_update"], false);
         let install = invoke(&app, "main", "update_install").unwrap();
         assert_eq!(install["code"], "no_update");
+    }
+
+    #[test]
+    fn only_the_relaunch_skips_the_recorders_quit_rules() {
+        assert!(asks_recorder(Mode::On, None));
+        assert!(asks_recorder(Mode::On, Some(0)));
+        assert!(!asks_recorder(Mode::On, Some(tauri::RESTART_EXIT_CODE)));
+        assert!(!asks_recorder(Mode::Off, None));
     }
 
     #[test]
