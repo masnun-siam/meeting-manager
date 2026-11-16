@@ -179,7 +179,10 @@ pub fn run() {
         Ok(app) => app.run(move |app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {
                 // Built off, no hook runs: quitting is never held back.
-                if asks_recorder(mode, code) && !recorder::on_exit_requested(app) {
+                // The updater first: while it installs, the recorder's quit would wait forever.
+                if asks_recorder(mode, code)
+                    && !(updater::on_exit_requested(app) && recorder::on_exit_requested(app))
+                {
                     api.prevent_exit();
                 }
             }
@@ -434,6 +437,33 @@ mod tests {
         assert_eq!(status["auto_update"], false);
         let install = invoke(&app, "main", "update_install").unwrap();
         assert_eq!(install["code"], "no_update");
+        let check = invoke(&app, "main", "update_check").unwrap();
+        assert_eq!(check, serde_json::json!({"ok": true, "started": true}));
+        assert!(updater::on_exit_requested(app.handle()));
+    }
+
+    #[test]
+    fn set_auto_update_answers_through_ipc() {
+        let app = started(Mode::On);
+        let webview = app.get_webview_window("main").unwrap();
+        let request = InvokeRequest {
+            cmd: "set_auto_update".into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(serde_json::json!({"enabled": true})),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        };
+        let reply: Value = get_ipc_response(&webview, request)
+            .unwrap()
+            .deserialize()
+            .unwrap();
+        assert_eq!(reply, serde_json::json!({"ok": true, "auto_update": true}));
+        assert_eq!(
+            invoke(&app, "main", "update_status").unwrap()["auto_update"],
+            true
+        );
     }
 
     #[test]

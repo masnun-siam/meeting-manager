@@ -35,7 +35,7 @@ pub type CheckFn = Arc<dyn Fn() -> Result<Option<Found>, String> + Send + Sync>;
 pub type DownloadFn = Arc<dyn Fn(&mut dyn FnMut(u8)) -> Result<Vec<u8>, String> + Send + Sync>;
 /// Replaces the app bundle with the downloaded package.
 pub type InstallFn = Arc<dyn Fn(&[u8]) -> Result<(), String> + Send + Sync>;
-/// Relaunches the app; the real one never returns.
+/// Relaunches the app (`restart`) or quits it (`quit`); the real relaunch never returns.
 pub type RestartFn = Arc<dyn Fn() + Send + Sync>;
 
 /// A newer release a check found, with what downloads and installs it.
@@ -76,6 +76,8 @@ struct Shared {
     available: Option<Found>,
     error: Option<String>,
     tool_error: Option<String>,
+    /// A quit asked for while installing: once installed, the app quits instead of relaunching.
+    quit_requested: bool,
 }
 
 /// The update state and its outside effects, swapped for fakes in tests.
@@ -86,6 +88,7 @@ pub struct Updater {
     pub version: String,
     pub check: CheckFn,
     pub restart: RestartFn,
+    pub quit: RestartFn,
     pub every: Duration,
     pub poll: Duration,
 }
@@ -93,15 +96,16 @@ pub struct Updater {
 impl Updater {
     /// The real updater: checks through the plugin, relaunches with Tauri's own restart.
     pub fn new<R: Runtime>(app: &AppHandle<R>) -> Updater {
-        let handle = app.clone();
+        let (relaunch, exit) = (app.clone(), app.clone());
         Updater::with(
             app.package_info().version.to_string(),
             plugin_check(app.clone()),
-            Arc::new(move || handle.restart()),
+            Arc::new(move || relaunch.restart()),
+            Arc::new(move || exit.exit(0)),
         )
     }
 
-    pub fn with(version: String, check: CheckFn, restart: RestartFn) -> Updater {
+    pub fn with(version: String, check: CheckFn, restart: RestartFn, quit: RestartFn) -> Updater {
         Updater {
             shared: Arc::new(Mutex::new(Shared {
                 phase: Phase::Idle,
@@ -109,10 +113,12 @@ impl Updater {
                 available: None,
                 error: None,
                 tool_error: None,
+                quit_requested: false,
             })),
             version,
             check,
             restart,
+            quit,
             every: EVERY,
             poll: POLL,
         }
@@ -144,6 +150,18 @@ impl Updater {
             "error": shared.error,
             "tool_error": shared.tool_error,
         }))
+    }
+
+    /// Whether the app may quit now. Not while installing: the updater holds the recorder in
+    /// `saving`, so the recorder's quit would wait for it forever. The quit is kept instead, and
+    /// the app quits once the install is done.
+    pub fn may_quit(&self) -> bool {
+        let mut shared = self.shared();
+        if shared.phase != Phase::Installing {
+            return true;
+        }
+        shared.quit_requested = true;
+        false
     }
 
     /// Moves `Idle` → `to`; `false` when something already runs, so it never runs twice.
@@ -181,29 +199,33 @@ impl Updater {
         }
         let (updater, recorder) = (self.clone(), recorder.clone());
         self.spawn("update-check", move || {
-            if let Some(found) = updater.run_check() {
-                if install {
-                    updater.set_phase(Phase::Downloading);
-                    updater.download_and_install(&found, &recorder);
-                }
+            if let Some(found) = updater.run_check(install) {
+                updater.download_and_install(&found, &recorder);
             }
         })
     }
 
-    /// The check itself; leaves the phase `Idle` unless it returns a release to install.
-    fn run_check(&self) -> Option<Found> {
-        match (self.check)() {
+    /// The check itself. With `install` and a release found, it returns that release with the
+    /// phase already `Downloading`, in the same lock, so nothing else starts in between;
+    /// otherwise it leaves the phase `Idle` and returns `None`.
+    fn run_check(&self, install: bool) -> Option<Found> {
+        let found = match (self.check)() {
             Err(reason) => {
                 self.fail("check", format!("Couldn't check for updates: {reason}"));
-                None
+                return None;
             }
-            Ok(found) => {
-                let mut shared = self.shared();
-                shared.phase = Phase::Idle;
-                shared.available = found.clone();
-                found
-            }
-        }
+            Ok(found) => found,
+        };
+        let mut shared = self.shared();
+        shared.available = found.clone();
+        let found = found.filter(|_| install);
+        shared.phase = if found.is_some() {
+            Phase::Downloading
+        } else {
+            Phase::Idle
+        };
+        shared.progress = found.as_ref().map(|_| 0);
+        found
     }
 
     /// `update_install`: downloads on its own thread, then installs once the recorder is idle.
@@ -254,9 +276,22 @@ impl Updater {
             thread::sleep(self.poll);
         };
         self.set_phase(Phase::Installing);
-        if let Err(reason) = (found.install)(&bytes) {
+        let installed = (found.install)(&bytes);
+        let quit = std::mem::take(&mut self.shared().quit_requested);
+        if let Err(reason) = installed {
             drop(saving);
-            return self.fail("install", install_error(&reason));
+            self.fail("install", install_error(&reason));
+            if quit {
+                (self.quit)();
+            }
+            return;
+        }
+        if quit {
+            // Freed first, so the quit's own rules find the recorder idle.
+            tracing::info!("update installed, quitting as asked");
+            self.set_phase(Phase::Idle);
+            drop(saving);
+            return (self.quit)();
         }
         tracing::info!("update installed, relaunching");
         (self.restart)();
@@ -267,12 +302,16 @@ impl Updater {
     /// FR-26's timer: one named thread that checks every `every` while `auto_update` is on.
     pub fn start_timer(&self, recorder: &Recorder, store_path: PathBuf) -> Option<JoinHandle<()>> {
         let (updater, recorder) = (self.clone(), recorder.clone());
-        self.spawn("update-timer", move || {
-            loop {
-                thread::sleep(updater.every);
-                updater.tick(&recorder, &store_path);
-            }
-        })
+        thread::Builder::new()
+            .name("update-timer".into())
+            .spawn(move || {
+                loop {
+                    thread::sleep(updater.every);
+                    updater.tick(&recorder, &store_path);
+                }
+            })
+            .inspect_err(|e| tracing::warn!(kind = ?e.kind(), "cannot start the update timer"))
+            .ok()
     }
 
     /// A launch or timer tick: an automatic check and install, only while `auto_update` is on.
@@ -397,6 +436,13 @@ fn found(update: tauri_plugin_updater::Update) -> Found {
     }
 }
 
+/// Called on every exit request but the updater's own relaunch: `false` keeps the app running
+/// until the install is done (`Updater::may_quit`).
+pub fn on_exit_requested<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<App>()
+        .is_none_or(|state| state.updater.may_quit())
+}
+
 /// Called once at startup, last: with automatic install on, a check now and the 6-hourly timer.
 pub fn on_launch<R: Runtime>(app: &AppHandle<R>) {
     if let Some(state) = app.try_state::<App>() {
@@ -455,6 +501,7 @@ pub(crate) mod tests {
             env!("CARGO_PKG_VERSION").into(),
             Arc::new(|| Err("no updater in tests".into())),
             Arc::new(|| {}),
+            Arc::new(|| {}),
         )
     }
 
@@ -465,6 +512,7 @@ pub(crate) mod tests {
         downloads: AtomicUsize,
         installs: AtomicUsize,
         restarts: AtomicUsize,
+        quits: AtomicUsize,
         /// The recorder state seen at restart, and whether a second `begin_saving` was refused.
         at_restart: Mutex<Option<(&'static str, bool)>>,
     }
@@ -476,8 +524,9 @@ pub(crate) mod tests {
         check: Result<bool, String>,
         download: Answer,
         install: Answer,
-        /// Held by the fake download until the test drops its sender.
+        /// Held by the fake download, or install, until the test drops its sender.
         hold_download: Option<std::sync::mpsc::Receiver<()>>,
+        hold_install: Option<std::sync::mpsc::Receiver<()>>,
     }
 
     impl Fakes {
@@ -488,6 +537,7 @@ pub(crate) mod tests {
                 download: Ok(()),
                 install: Ok(()),
                 hold_download: None,
+                hold_install: None,
             }
         }
 
@@ -498,9 +548,12 @@ pub(crate) mod tests {
                 download,
                 install,
                 hold_download,
+                hold_install,
             } = self;
             let hold = Arc::new(Mutex::new(hold_download));
-            let (c1, c2, c3, c4) = (calls.clone(), calls.clone(), calls.clone(), calls.clone());
+            let hold_install = Arc::new(Mutex::new(hold_install));
+            let (c1, c2, c3) = (calls.clone(), calls.clone(), calls.clone());
+            let (c4, c5) = (calls.clone(), calls.clone());
             let found = Found {
                 version: "0.2.0".into(),
                 notes: Some("Faster saving.".into()),
@@ -516,6 +569,9 @@ pub(crate) mod tests {
                 install: Arc::new(move |bytes| {
                     assert_eq!(bytes, b"bundle");
                     c3.installs.fetch_add(1, Ordering::SeqCst);
+                    if let Some(hold) = hold_install.lock().unwrap().take() {
+                        let _ = hold.recv();
+                    }
                     install.clone()
                 }),
             };
@@ -531,6 +587,9 @@ pub(crate) mod tests {
                     *c4.at_restart.lock().unwrap() = Some((watched.status().state, refused));
                     // Last, so a test that saw the count also sees what was recorded.
                     c4.restarts.fetch_add(1, Ordering::SeqCst);
+                }),
+                Arc::new(move || {
+                    c5.quits.fetch_add(1, Ordering::SeqCst);
                 }),
             );
             updater.poll = Duration::from_millis(10);
@@ -790,6 +849,77 @@ pub(crate) mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn a_quit_while_installing_waits_for_the_install_then_quits_instead_of_relaunching() {
+        let rig = rig("update-quit", ok_capture());
+        let (release, hold) = std::sync::mpsc::channel();
+        let fakes = Fakes {
+            hold_install: Some(hold),
+            ..Fakes::new()
+        };
+        let calls = fakes.calls.clone();
+        let updater = fakes.updater(&rig.recorder);
+        assert!(updater.may_quit());
+        checked(&updater, &rig.recorder);
+        updater.start_install(&rig.recorder).unwrap();
+        wait_for("installing", || calls.installs.load(Ordering::SeqCst) == 1);
+        assert_eq!(status(&updater, &rig)["state"], "installing");
+        assert!(!updater.may_quit());
+        drop(release);
+        wait_for("the quit", || calls.quits.load(Ordering::SeqCst) == 1);
+        assert_eq!(calls.restarts.load(Ordering::SeqCst), 0);
+        // The quit finds the recorder free, so its own rules do not wait.
+        assert_eq!(rig.recorder.status().state, "idle");
+        assert!(updater.may_quit());
+    }
+
+    #[test]
+    fn a_quit_while_an_install_fails_still_quits() {
+        let rig = rig("update-quit-fail", ok_capture());
+        let (release, hold) = std::sync::mpsc::channel();
+        let fakes = Fakes {
+            hold_install: Some(hold),
+            install: Err("disk full".into()),
+            ..Fakes::new()
+        };
+        let calls = fakes.calls.clone();
+        let updater = fakes.updater(&rig.recorder);
+        checked(&updater, &rig.recorder);
+        updater.start_install(&rig.recorder).unwrap();
+        wait_for("installing", || calls.installs.load(Ordering::SeqCst) == 1);
+        assert!(!updater.may_quit());
+        drop(release);
+        wait_for("the quit", || calls.quits.load(Ordering::SeqCst) == 1);
+        assert_eq!(rig.recorder.status().state, "idle");
+        assert_eq!(
+            status(&updater, &rig)["error"],
+            "Couldn't install the update: disk full"
+        );
+    }
+
+    #[test]
+    fn an_automatic_check_goes_straight_to_downloading() {
+        let rig = rig("update-auto-phase", ok_capture());
+        let updater = Fakes::new().updater(&rig.recorder);
+        let found = updater.run_check(true).expect("a release to install");
+        assert_eq!(found.version, "0.2.0");
+        let status = status(&updater, &rig);
+        assert_eq!(status["state"], "downloading");
+        assert_eq!(status["progress"], 0);
+        // Nothing else can start in that state.
+        assert!(updater.start_check(&rig.recorder, false).is_none());
+        updater.start_install(&rig.recorder).unwrap();
+        assert!(updater.run_check(false).is_none());
+    }
+
+    #[test]
+    fn a_plugin_error_reads_as_its_message() {
+        assert_eq!(
+            reason(&tauri_plugin_updater::Error::ReleaseNotFound),
+            "Could not fetch a valid release JSON from the remote"
+        );
     }
 
     #[test]
