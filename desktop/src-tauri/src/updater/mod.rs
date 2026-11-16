@@ -173,6 +173,7 @@ impl Updater {
         shared.phase = to;
         shared.progress = (to == Phase::Downloading).then_some(0);
         shared.error = None;
+        shared.quit_requested = false;
         true
     }
 
@@ -269,15 +270,30 @@ impl Updater {
         self.set_phase(Phase::Ready);
         // Shared by manual and automatic install: the guard keeps the recorder in `saving` from
         // here to the relaunch, so Start is refused in between.
+        // The guard and `Installing` are taken in one lock, so `may_quit` never sees the recorder
+        // held while the phase still says otherwise.
         let saving = loop {
-            if let Some(saving) = recorder.begin_saving() {
-                break saving;
+            {
+                let mut shared = self.shared();
+                if let Some(saving) = recorder.begin_saving() {
+                    shared.phase = Phase::Installing;
+                    break saving;
+                }
             }
             thread::sleep(self.poll);
         };
-        self.set_phase(Phase::Installing);
         let installed = (found.install)(&bytes);
-        let quit = std::mem::take(&mut self.shared().quit_requested);
+        // The kept quit is read and the phase left in one lock, so a quit arriving now is either
+        // kept here or, once `Idle`, goes through the recorder's own rules.
+        let quit = {
+            let mut shared = self.shared();
+            let quit = std::mem::take(&mut shared.quit_requested);
+            if quit || installed.is_err() {
+                shared.phase = Phase::Idle;
+                shared.progress = None;
+            }
+            quit
+        };
         if let Err(reason) = installed {
             drop(saving);
             self.fail("install", install_error(&reason));
@@ -289,7 +305,6 @@ impl Updater {
         if quit {
             // Freed first, so the quit's own rules find the recorder idle.
             tracing::info!("update installed, quitting as asked");
-            self.set_phase(Phase::Idle);
             drop(saving);
             return (self.quit)();
         }
