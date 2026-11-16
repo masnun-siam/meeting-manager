@@ -98,7 +98,7 @@ cd extension && npm ci && npm run build
 
 Then click the reload icon on the extension in `chrome://extensions`. The binary path stays the same, so `meeting install` is only needed again if you install `meeting` somewhere else.
 
-With the desktop app installed, build the tool with `FEATURE_DESKTOP_APP=1` instead, rebuild the app as in section 6 and replace `/Applications/Meeting.app`.
+With the desktop app installed from a release, update the app from Settings › Updates: Check for updates, then Install and relaunch, or turn on Install updates automatically to install while no recording runs. Update the extension as above. With an app built from source, build the tool with `FEATURE_DESKTOP_APP=1` instead, rebuild the app as in section 6 and replace `/Applications/Meeting.app`.
 
 ## Uninstall
 

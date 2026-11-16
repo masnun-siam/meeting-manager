@@ -58,15 +58,21 @@ describe('Settings', () => {
     render(<Settings />);
     await screen.findByRole('checkbox', { name: /Work/ });
     await screen.findByRole('list', { name: 'Health checks' });
+    await screen.findByText('Version 0.1.0');
 
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual([
       'Calendars',
+      'Updates',
       'Meetings',
       'Folders',
       'Health',
     ]);
     await user.tab();
     expect(screen.getByRole('checkbox', { name: /Work/ })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('checkbox', { name: 'Install updates automatically' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Check for updates' })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole('button', { name: 'Rescan folders' })).toHaveFocus();
     await user.tab();
