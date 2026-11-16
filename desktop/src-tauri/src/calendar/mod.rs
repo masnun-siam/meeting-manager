@@ -945,6 +945,7 @@ pub(crate) mod tests {
             calendar: Calendar::with(&env, source),
             notes: crate::notes::Notes::new(&env),
             admin: crate::admin::Admin::new(&env),
+            updater: crate::updater::tests::unplugged(app.handle()),
             env,
         });
         let changed = Arc::new(AtomicUsize::new(0));
