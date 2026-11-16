@@ -167,6 +167,48 @@ describe('UpdatesSection', () => {
     },
   );
 
+  it('disables both buttons and keeps polling while a downloaded update waits for the recorder', async () => {
+    api.updateStatus.mockResolvedValue(status({ available: found, state: 'ready' }));
+    await setup();
+
+    expect(installButton()).toBeDisabled();
+    expect(checkButton()).toBeDisabled();
+    expect(screen.queryByText(FINISH_RECORDING)).not.toBeInTheDocument();
+    expect(statusLine()).toBeEmptyDOMElement();
+    const calls = api.updateStatus.mock.calls.length;
+    await tick(2000);
+    expect(api.updateStatus.mock.calls.length).toBeGreaterThan(calls);
+  });
+
+  it('describes the disabled Install with the reason and clears a stale reply once the recording ends', async () => {
+    api.updateStatus.mockResolvedValue(status({ available: found }));
+    api.updateInstall.mockResolvedValue({ ok: false, code: 'recording_active', message: FINISH_RECORDING });
+    const user = await setup();
+    api.recorderStatus.mockResolvedValue(recorder('recording'));
+
+    await user.click(installButton());
+    await tick(1000);
+
+    expect(installButton()).toHaveAccessibleDescription(FINISH_RECORDING);
+    expect(alerts()).toEqual([FINISH_RECORDING]);
+    api.recorderStatus.mockResolvedValue(recorder('idle'));
+    await tick(1000);
+
+    expect(installButton()).toBeEnabled();
+    expect(alerts()).toEqual([]);
+  });
+
+  it('shows a no_update reply', async () => {
+    const message = 'No update is available; check for updates first';
+    api.updateStatus.mockResolvedValue(status({ available: found }));
+    api.updateInstall.mockResolvedValue({ ok: false, code: 'no_update', message });
+    const user = await setup();
+
+    await user.click(installButton());
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+  });
+
   it('shows a recording_active reply', async () => {
     api.updateStatus.mockResolvedValue(status({ available: found }));
     api.updateInstall.mockResolvedValue({ ok: false, code: 'recording_active', message: FINISH_RECORDING });
@@ -230,6 +272,29 @@ describe('UpdatesSection', () => {
 
     expect(autoBox()).not.toBeChecked();
     expect(screen.getByText('database is locked')).toHaveAttribute('role', 'status');
+  });
+
+  it('keeps the latest of two quick toggles when the first save fails late', async () => {
+    let failFirst!: () => void;
+    api.setAutoUpdate
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            failFirst = () => resolve({ ok: false, code: 'store_unavailable', message: 'database is locked' });
+          }),
+      )
+      .mockImplementationOnce(async () => ({ ok: true, auto_update: false }));
+    const user = await setup();
+
+    await user.click(autoBox());
+    await user.click(autoBox());
+    expect(autoBox()).not.toBeChecked();
+    failFirst();
+    await tick(0);
+
+    expect(api.setAutoUpdate.mock.calls).toEqual([[{ enabled: true }], [{ enabled: false }]]);
+    expect(autoBox()).not.toBeChecked();
+    expect(screen.queryByText('database is locked')).not.toBeInTheDocument();
   });
 
   it('returns the setting when the save is rejected', async () => {

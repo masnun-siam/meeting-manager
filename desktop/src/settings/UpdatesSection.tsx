@@ -72,6 +72,11 @@ export function UpdatesSection() {
 
   const state = status?.state;
   const recording = recorder !== null && recorder.state !== 'idle';
+
+  // A reply such as "Finish the recording to install" is stale once the recording ends.
+  useEffect(() => {
+    if (!recording) setProblem(null);
+  }, [recording]);
   const checkingText = starting || watching || state === 'checking';
   const progressText =
     state === 'downloading'
@@ -101,11 +106,12 @@ export function UpdatesSection() {
             type="button"
             data-variant="primary"
             disabled={recording || installing || state !== 'idle'}
+            aria-describedby={recording ? 'updates-finish-recording' : undefined}
             onClick={install}
           >
             Install and relaunch
           </button>
-          {recording && <p>{FINISH_RECORDING}</p>}
+          {recording && <p id="updates-finish-recording">{FINISH_RECORDING}</p>}
         </div>
       )}
       <p role="status" className={styles.muted}>
