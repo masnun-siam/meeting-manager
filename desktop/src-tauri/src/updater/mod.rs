@@ -18,6 +18,8 @@ use crate::admin::blocking;
 use crate::recorder::Recorder;
 use crate::reply;
 
+mod tool;
+
 /// The store setting behind "Install updates automatically": `"true"` or `"false"`, absent =
 /// off (FR-25).
 pub const AUTO_UPDATE_KEY: &str = "auto_update";
@@ -456,6 +458,38 @@ fn found(update: tauri_plugin_updater::Update) -> Found {
 pub fn on_exit_requested<R: Runtime>(app: &AppHandle<R>) -> bool {
     app.try_state::<App>()
         .is_none_or(|state| state.updater.may_quit())
+}
+
+/// FR-27, called once at startup before anything can start a job: swaps the bundled `meeting`
+/// tool into `meeting_path` when they differ. A development run reads no bundled tool: its
+/// resource directory is Cargo's output directory, whose `meeting` is a local build (D50).
+pub fn swap_tool<R: Runtime>(app: &AppHandle<R>) {
+    let Some(state) = app.try_state::<App>() else {
+        return;
+    };
+    let bundled = app
+        .path()
+        .resource_dir()
+        .ok()
+        .filter(|_| !tauri::is_dev())
+        .map(|dir| dir.join("meeting"));
+    let target = state
+        .env
+        .config()
+        .ok()
+        .and_then(|config| config.meeting_path);
+    swap_into(&state.updater, bundled.as_deref(), target.as_deref());
+}
+
+/// The swap, its outcome logged by kind and its failure kept as `tool_error`.
+fn swap_into(updater: &Updater, bundled: Option<&Path>, target: Option<&Path>) {
+    let swapped = match bundled {
+        Some(bundled) => tool::swap(bundled, target),
+        None => Ok(tool::Swap::NoBundled),
+    };
+    let outcome = swapped.as_ref().map_or("failed", tool::Swap::as_str);
+    tracing::info!(outcome, "meeting tool swap");
+    updater.set_tool_error(swapped.err());
 }
 
 /// Called once at startup, last: with automatic install on, a check now and the 6-hourly timer.
@@ -1013,6 +1047,36 @@ pub(crate) mod tests {
             .set_setting(AUTO_UPDATE_KEY, "yes")
             .unwrap();
         assert!(!auto_update(&path));
+    }
+
+    #[test]
+    fn a_failed_tool_swap_is_the_tool_error_and_a_later_one_clears_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let rig = rig("update-tool-swap", ok_capture());
+        let updater = Fakes::new().updater(&rig.recorder);
+        let (bundled, bin) = (rig.env().home.join("meeting"), rig.env().home.join("bin"));
+        fs::write(&bundled, b"meeting 0.2.0").unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        let target = bin.join("meeting");
+        fs::write(&target, b"meeting 0.1.0").unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o555)).unwrap();
+        swap_into(&updater, Some(&bundled), Some(&target));
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = status(&updater, &rig)["tool_error"].clone();
+        assert!(
+            error
+                .as_str()
+                .unwrap()
+                .starts_with("The meeting tool wasn't updated: "),
+            "{error}"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"meeting 0.1.0");
+        swap_into(&updater, Some(&bundled), Some(&target));
+        assert_eq!(status(&updater, &rig)["tool_error"], Value::Null);
+        assert_eq!(fs::read(&target).unwrap(), b"meeting 0.2.0");
+        swap_into(&updater, None, Some(&target));
+        assert_eq!(status(&updater, &rig)["tool_error"], Value::Null);
     }
 
     #[test]

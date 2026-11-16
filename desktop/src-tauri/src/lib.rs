@@ -95,8 +95,8 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
     }
 }
 
-/// What startup does: the state first, so no command can run without it, then the window, then
-/// the hooks.
+/// What startup does: the state first, so no command can run without it, then the tool swap
+/// (FR-27), so every job the app starts uses the bundled tool, then the window, then the hooks.
 fn launch<R: Runtime>(app: &AppHandle<R>, mode: Mode) -> anyhow::Result<()> {
     launch_in(app, mode, env::Env::new, updater::Updater::new)
 }
@@ -119,6 +119,8 @@ fn launch_in<R: Runtime>(
             updater: new_updater(app),
             env,
         });
+        // Before the window and the hooks: a command, recovery (FR-7) or a rerun can spawn.
+        updater::swap_tool(app);
     }
     WebviewWindowBuilder::new(
         app,
@@ -435,6 +437,8 @@ mod tests {
         assert_eq!(status["state"], "idle");
         assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(status["auto_update"], false);
+        // No bundled tool in tests (D50): the launch's swap did nothing.
+        assert_eq!(status["tool_error"], Value::Null);
         let install = invoke(&app, "main", "update_install").unwrap();
         assert_eq!(install["code"], "no_update");
         let check = invoke(&app, "main", "update_check").unwrap();
