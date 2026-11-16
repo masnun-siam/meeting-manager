@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "agentic-workflow": {
+      "source": { "source": "github", "repo": "blubird-interactiveltd/agentic-workflow" }
+    }
+  },
+  "enabledPlugins": {
+    "blubird@agentic-workflow": true
+  }
+}
