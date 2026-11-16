@@ -11,6 +11,7 @@ pub mod notes;
 pub mod recorder;
 pub mod reply;
 pub mod tray;
+pub mod updater;
 
 /// The state every command reads, managed once at startup.
 pub struct App {
@@ -19,6 +20,7 @@ pub struct App {
     pub calendar: calendar::Calendar,
     pub notes: notes::Notes,
     pub admin: admin::Admin,
+    pub updater: updater::Updater,
 }
 
 fn flag_gate(value: Option<&str>) -> bool {
@@ -85,6 +87,10 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
             admin::note_archive,
             admin::note_trash,
             admin::settings_info,
+            updater::update_status,
+            updater::update_check,
+            updater::update_install,
+            updater::set_auto_update,
         ]),
     }
 }
@@ -92,14 +98,16 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
 /// What startup does: the state first, so no command can run without it, then the window, then
 /// the hooks.
 fn launch<R: Runtime>(app: &AppHandle<R>, mode: Mode) -> anyhow::Result<()> {
-    launch_in(app, mode, env::Env::new)
+    launch_in(app, mode, env::Env::new, updater::Updater::new)
 }
 
-/// `launch` with the `Env` from `new_env`, so tests keep every command off the real home.
+/// `launch` with the `Env` from `new_env` and the `Updater` from `new_updater`, so tests keep
+/// every command off the real home and the update server.
 fn launch_in<R: Runtime>(
     app: &AppHandle<R>,
     mode: Mode,
     new_env: impl FnOnce() -> anyhow::Result<env::Env>,
+    new_updater: impl FnOnce(&AppHandle<R>) -> updater::Updater,
 ) -> anyhow::Result<()> {
     if mode == Mode::On {
         let env = new_env()?;
@@ -108,6 +116,7 @@ fn launch_in<R: Runtime>(
             calendar: calendar::Calendar::new(&env),
             notes: notes::Notes::new(&env),
             admin: admin::Admin::new(&env),
+            updater: new_updater(app),
             env,
         });
     }
@@ -126,6 +135,7 @@ fn launch_in<R: Runtime>(
         admin::on_launch(app);
         calendar::on_launch(app);
         recorder::on_sleep(app);
+        updater::on_launch(app);
     }
     Ok(())
 }
@@ -205,7 +215,7 @@ mod tests {
     use super::*;
 
     /// Every command of the PRD's API table.
-    const COMMANDS: [&str; 22] = [
+    const COMMANDS: [&str; 26] = [
         "recorder_status",
         "recorder_start",
         "recorder_pause",
@@ -228,6 +238,10 @@ mod tests {
         "note_archive",
         "note_trash",
         "settings_info",
+        "update_status",
+        "update_check",
+        "update_install",
+        "set_auto_update",
     ];
 
     /// A started app on the mock runtime, its `Env` in a temp home removed on drop: invoking a
@@ -265,7 +279,13 @@ mod tests {
             .build(mock_context(noop_assets()))
             .unwrap();
         let env_home = home.clone();
-        launch_in(app.handle(), mode, || Ok(env::Env::at(env_home))).unwrap();
+        launch_in(
+            app.handle(),
+            mode,
+            || Ok(env::Env::at(env_home)),
+            updater::tests::unplugged,
+        )
+        .unwrap();
         Started { app, home }
     }
 
@@ -395,6 +415,18 @@ mod tests {
             let reply = invoke(&app, "main", command).unwrap();
             assert_eq!(reply["code"], "not_recording", "{command}");
         }
+    }
+
+    #[test]
+    fn the_update_status_answers_through_ipc() {
+        let app = started(Mode::On);
+        let status = invoke(&app, "main", "update_status").unwrap();
+        assert_eq!(status["ok"], true);
+        assert_eq!(status["state"], "idle");
+        assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(status["auto_update"], false);
+        let install = invoke(&app, "main", "update_install").unwrap();
+        assert_eq!(install["code"], "no_update");
     }
 
     #[test]

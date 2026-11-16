@@ -101,7 +101,7 @@ pub async fn note_trash<R: Runtime>(app: AppHandle<R>, id: i64) -> Value {
 
 /// Runs `f` off the main thread: `meeting doctor` may take seconds, and a folder move or the
 /// Trash may too, and a sync command would freeze every window meanwhile.
-async fn blocking<R: Runtime>(
+pub(crate) async fn blocking<R: Runtime>(
     app: AppHandle<R>,
     f: impl FnOnce(&App) -> Value + Send + 'static,
 ) -> Value {

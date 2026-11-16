@@ -84,6 +84,19 @@ export function mockApi(overrides: Partial<Api> = {}): Api {
       vault_folder: 'Meetings',
       store: { ok: true as const },
     })),
+    updateStatus: vi.fn(async () => ({
+      ok: true as const,
+      version: '0.1.0',
+      auto_update: false,
+      state: 'idle' as const,
+      progress: null,
+      available: null,
+      error: null,
+      tool_error: null,
+    })),
+    updateCheck: vi.fn(async () => ({ ok: true as const, started: true as const })),
+    updateInstall: vi.fn(async () => ({ ok: true as const, started: true as const })),
+    setAutoUpdate: vi.fn(async () => ({ ok: true as const, auto_update: false })),
     ...overrides,
   };
 }

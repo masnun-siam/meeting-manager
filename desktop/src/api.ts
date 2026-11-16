@@ -137,6 +137,19 @@ export type SettingsInfo = {
 };
 export type SettingsInfoError = 'not_configured';
 
+export type UpdateState = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing';
+export type UpdateStatus = {
+  version: string;
+  auto_update: boolean;
+  state: UpdateState;
+  progress: number | null;
+  available: { version: string; notes: string | null } | null;
+  error: string | null;
+  tool_error: string | null;
+};
+export type UpdateInstallError = 'recording_active' | 'no_update';
+export type SetAutoUpdateError = 'store_unavailable';
+
 function isReply(value: unknown): value is { ok: boolean } {
   if (typeof value !== 'object' || value === null || !('ok' in value) || typeof value.ok !== 'boolean') {
     return false;
@@ -192,3 +205,9 @@ export const health = () => call<{ checks: HealthCheck[] }>('health');
 export const noteArchive = (req: { id: number }) => call<object, NoteArchiveError>('note_archive', req);
 export const noteTrash = (req: { id: number }) => call<object, NoteTrashError>('note_trash', req);
 export const settingsInfo = () => call<SettingsInfo, SettingsInfoError>('settings_info');
+
+export const updateStatus = () => call<UpdateStatus>('update_status');
+export const updateCheck = () => call<{ started: true }>('update_check');
+export const updateInstall = () => call<{ started: true }, UpdateInstallError>('update_install');
+export const setAutoUpdate = (req: { enabled: boolean }) =>
+  call<{ auto_update: boolean }, SetAutoUpdateError>('set_auto_update', req);

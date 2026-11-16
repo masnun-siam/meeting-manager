@@ -64,6 +64,10 @@ const cases: Case[] = [
   ['noteArchive', () => api.noteArchive({ id: 7 }), 'note_archive', { id: 7 }],
   ['noteTrash', () => api.noteTrash({ id: 7 }), 'note_trash', { id: 7 }],
   ['settingsInfo', () => api.settingsInfo(), 'settings_info', undefined],
+  ['updateStatus', () => api.updateStatus(), 'update_status', undefined],
+  ['updateCheck', () => api.updateCheck(), 'update_check', undefined],
+  ['updateInstall', () => api.updateInstall(), 'update_install', undefined],
+  ['setAutoUpdate', () => api.setAutoUpdate({ enabled: true }), 'set_auto_update', { enabled: true }],
 ];
 
 beforeEach(() => {
@@ -73,7 +77,7 @@ beforeEach(() => {
 describe('api', () => {
   it('has one case per exported command', () => {
     expect(cases.map(([name]) => name).sort()).toEqual(Object.keys(api).sort());
-    expect(cases).toHaveLength(22);
+    expect(cases).toHaveLength(26);
   });
 
   it.each(cases)('%s invokes its command with snake_case arguments', async (_name, run, command, args) => {

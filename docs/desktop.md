@@ -11,14 +11,14 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | Built | Window | Registered |
 |---|---|---|
 | Off (default) | label `off`, page `off.html` ("Built without FEATURE_DESKTOP_APP"), no capability | Nothing: no state, no command, no plugin, no hook |
-| On | label `main`, page `index.html` | The single-instance and updater plugins, the `App` state, the 22 commands, the launch hooks |
+| On | label `main`, page `index.html` | The single-instance and updater plugins, the `App` state, the 26 commands, the launch hooks |
 
 ## Rust side (`desktop/src-tauri/src`)
 
 | File | Holds |
 |---|---|
 | `main.rs` | Calls `meeting_desktop::run()`. The binary is `meeting-desktop`; the CLI owns the name `meeting` |
-| `lib.rs` | `run()`, the flag, `configure` (setup and command registration), `launch` (state, window, hooks), the `App` state `{env, recorder, calendar, notes, admin}`. `launch_in` takes the `Env` constructor, so its tests start the app in a temp home and an invoked command never touches the real store, vault or recordings. The issues that fill a module do not edit it |
+| `lib.rs` | `run()`, the flag, `configure` (setup and command registration), `launch` (state, window, hooks), the `App` state `{env, recorder, calendar, notes, admin, updater}`. `launch_in` takes the `Env` and `Updater` constructors, so its tests start the app in a temp home with an updater whose checks fail (`updater::tests::unplugged`) and an invoked command never touches the real store, vault, recordings or update server. The issues that fill a module do not edit it |
 | `env.rs` | `Env { home, store_path, jobs }`; `config()` reloads `config.toml` on every call and returns the error as a string; `store()` opens the notes store and keeps `anyhow::Error`, so `store::OpenError` can be downcast. `Env::at(home)` is the constructor tests use |
 | `reply.rs` | `ok(fields)`, `err(code, message)`: the reply shape of every command |
 | `recorder/` | `Recorder` ([features/desktop-recorder.md](features/desktop-recorder.md)): WAV writer, folder, conversion, hand-off, notices; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry`; hooks `on_launch` (crash recovery), `on_sleep` (will-sleep observer), `on_exit_requested` (`Recorder::quit`; `false` keeps the app running) |
@@ -27,10 +27,11 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | `notes/markdown.rs` | `render_html` (summary markdown to safe HTML) and `shown_transcript` (speaker labels to current names) |
 | `admin/mod.rs` | `Admin { progress, trash, doctor, doctor_timeout }`; `rescan`, `rescan_status`, `health`, `note_archive`, `note_trash`, `settings_info`; hook `on_launch` (first backfill) |
 | `admin/backfill.rs` | Folder scan (`candidates`), `read_folder` (folder files to a `RunResult`), `run` (merge, then remove gone rows, then `backfill_done`), `open_or_rebuild` (move a broken store aside) |
+| `updater/mod.rs` | `Updater { version, check, restart, every, poll }` (FR-25, FR-26; below); `update_status`, `update_check`, `update_install`, `set_auto_update`; hook `on_launch` (automatic check and 6-hourly timer); `Updater::set_tool_error` for the tool swap (#173) |
 | `tray.rs` | Hook `setup`: the menu-bar item ([features/desktop-recorder.md](features/desktop-recorder.md#menu-bar-item-trayrs)); needs the main thread, so the mock-runtime tests run without it |
 | `capture/` | Audio capture: the boundary in `mod.rs` and the Core Audio implementation (below) |
 
-- **Startup order** (`launch`, flag on): manage `App`, open the window, then `tray::setup`, `recorder::on_launch`, `admin::on_launch`, `calendar::on_launch`, `recorder::on_sleep`. Hooks take `&AppHandle<R>` for any runtime so tests run them on Tauri's mock runtime.
+- **Startup order** (`launch`, flag on): manage `App`, open the window, then `tray::setup`, `recorder::on_launch`, `admin::on_launch`, `calendar::on_launch`, `recorder::on_sleep`, `updater::on_launch`. Hooks take `&AppHandle<R>` for any runtime so tests run them on Tauri's mock runtime.
 - **Single instance:** `tauri-plugin-single-instance` is added in `run()`, before everything else, and only there: on macOS a second instance in one process exits it, which would end the test process. A second launch focuses the `main` window.
 - **Updater:** `tauri-plugin-updater` is added in `run()` right after single instance, flag on only. Its endpoint (the `latest.json` of this repo's latest GitHub Release) and public key are `plugins.updater` in `tauri.conf.json`; release builds come from `release.yml` ([development.md](development.md#releasing)).
 - **Quit:** with the flag on, `run()` calls `recorder::on_exit_requested` on `RunEvent::ExitRequested` and prevents the exit when it returns `false`. Built off, it is not called.
@@ -44,7 +45,7 @@ The PRD's API table (Technical design › API) is the contract. Every command is
 
 - `desktop/src/api.ts` has one typed function per command, the request and reply types, and each command's error codes as a string-literal union. Argument keys are snake_case, exactly the Rust argument names. A reply without a boolean `ok` throws `Invalid reply from the Meeting app`; an error reply is returned, not thrown.
 - `desktop/src/api.mock.ts`: `mockApi(overrides)` for component tests (`vi.mock('./api', async () => (await import('./api.mock')).mockApi())`).
-- A test in `lib.rs` checks that `api.ts` names the same 22 commands. A new command changes the contract: PRD first.
+- A test in `lib.rs` checks that `api.ts` names the same 26 commands. A new command changes the contract: PRD first.
 
 ## Capture boundary (`capture/mod.rs`)
 
@@ -114,6 +115,21 @@ No command takes a path from the UI. `health`, `note_archive` and `note_trash` a
 - Every status: `language`, `duration_s` (rounded) and `recorded_at` from `meta.json` (`recorded_at_for` without it), `transcript` = `transcript::utterance_lines`, `source` and `event` from `context.json` by `pipeline::source_of` / `pipeline::event_link` (D40).
 
 A file that can't be read counts as missing. After the folders, rows whose recording is no longer a file are removed, unless the recordings directory itself can't be read (an unmounted volume would make every recording look gone). `backfill_done` is set only when no row failed to store.
+
+## Updates (`updater/`)
+
+Rust side only (D47): the plugin is reached through `UpdaterExt` in `Updater::new`, never from the webview. One `Mutex` holds the phase (`idle`, `checking`, `downloading`, `ready`, `installing`), `progress`, the last answered check's `available` release, `error` and `tool_error`. Work runs on named threads (`update-check`, `update-install`, `update-timer`); the commands return at once. Logs carry the failed stage only.
+
+| Command | Behaviour |
+|---|---|
+| `update_status` | `{version, auto_update, state, progress, available: {version, notes}\|null, error, tool_error}`. `auto_update` reads the store setting `auto_update`: only `"true"` is on; absent, other values or an unopenable store are off (logged by kind) |
+| `update_check` | `{started: true}`. Starts a check only from `idle`, so two never run at once and a check during a download changes nothing. A failure sets `error` to `Couldn't check for updates: <reason>`; a connect or timeout error is `offline`. `is_newer` (the plugin's `version_comparator`) offers only a higher `major.minor.patch` that is not a pre-release (D48) |
+| `update_install` | `no_update` with no `available`; `recording_active` ("Finish the recording to install") when the recorder is not `idle`, with nothing downloaded. Otherwise `{started: true}` and the install below; also `{started: true}` when one is already running |
+| `set_auto_update` | `{enabled}` → stores `"true"`/`"false"`, answers `{auto_update}`; `store_unavailable` when the store can't be written. Checks nothing at once (FR-26: next launch or tick) |
+
+**Install** (manual or automatic): download with `progress` 0–100, then `ready` while it polls `Recorder::begin_saving()` every second. The `SavingGuard` is held from install to relaunch, so Start is refused (`already_recording`) in between. Then `Update::install` and `AppHandle::restart()`. A failed download (the signature is verified there) or install drops the guard and returns to `idle` with `error` = `Couldn't install the update: <reason>`; the running app is unchanged and the next launch or check tries again.
+
+**Automatic** (`auto_update` on): `on_launch` checks once and the `update-timer` thread every 6 hours, each time reading the setting; a newer release is downloaded in the background, even while recording, and installed through the same gate, so a recording running when the download finishes delays the relaunch until it is saved.
 
 ## UI (`desktop/src`)
 
