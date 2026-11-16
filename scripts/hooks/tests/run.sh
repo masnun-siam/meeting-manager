@@ -109,6 +109,10 @@ check "make: up runs tauri dev on 1420 without AGENT" 'make -n desktop | grep -q
 p1=$(make -n desktop AGENT=alpha | grep -o 'localhost:[0-9]*' | head -1); p2=$(make -n desktop AGENT=alpha | grep -o 'localhost:[0-9]*' | head -1); p3=$(make -n desktop AGENT=beta | grep -o 'localhost:[0-9]*' | head -1)
 check "make: AGENT gives a stable port of its own" '[ "$p1" = "$p2" ] && [ "$p1" != "localhost:1420" ] && [ "$p1" != "$p3" ]'
 check "make: all and with= start the same as up" 'make -n up all with=x | grep -q "this product has one repo"'
+# make 3.81 (macOS) looks commands up on its own PATH, not the exported one: an agent's
+# non-login shell has no ~/.cargo/bin, so host cargo targets must still find it.
+mkdir -p "$t/home/.cargo/bin" && cp "$bin/cargo" "$t/home/.cargo/bin/cargo" && : >"$t/calls"
+check "make: host cargo targets work without ~/.cargo/bin on PATH" 'HOME=$t/home PATH=/usr/bin:/bin make doctor && grep -q "^cargo run -q -p meeting -- doctor" "$t/calls"'
 
 # --- CI and image pins agree ---
 w=$repo/.github/workflows

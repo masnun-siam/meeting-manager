@@ -3,6 +3,8 @@
 SHELL := /bin/bash
 export BASE_REF ?= main
 export PATH := $(HOME)/.cargo/bin:$(PATH)
+# make 3.81 (macOS) runs simple commands from its own PATH, so name host cargo by its path.
+CARGO := $(or $(wildcard $(HOME)/.cargo/bin/cargo),cargo)
 DOCKER := scripts/hooks/docker.sh
 # AGENT=<name> gives a parallel session its own Vite port; unset keeps Tauri's default 1420.
 AGENT ?=
@@ -32,21 +34,21 @@ desktop: ## Run the desktop app against a Vite dev server on PORT (AGENT-scoped)
 	cd desktop && npx tauri dev --config '{"build":{"devUrl":"http://localhost:$(PORT)","beforeDevCommand":"npm run dev -- --port $(PORT)"},"app":{"security":{"devCsp":"default-src '\''self'\''; connect-src ipc: http://ipc.localhost ws://localhost:$(PORT); object-src '\''none'\''; base-uri '\''none'\''; frame-ancestors '\''none'\''"}}}'
 
 doctor: ## Health check of the installed tool (config, Keychain, ffmpeg, claude, Chrome host)
-	cargo run -q -p meeting -- doctor
+	$(CARGO) run -q -p meeting -- doctor
 
 check: ## Every gate on every file: full suites, coverage, lint (what CI runs)
 	scripts/hooks/run.sh all
 
 lint: ## Format, clippy, types and biome, as CI runs them
 	$(DOCKER) sh -c 'cargo fmt --all --check && cargo clippy -p meeting --all-targets --locked -- -D warnings && cd extension && npx tsc --noEmit && npx biome ci . && cd ../desktop && npx tsc --noEmit && npx biome ci .'
-	cargo clippy -p meeting-desktop --all-targets --locked -- -D warnings
+	$(CARGO) clippy -p meeting-desktop --all-targets --locked -- -D warnings
 
 fmt: ## Format Rust and fix biome findings
 	$(DOCKER) sh -c 'cargo fmt --all && cd extension && npx biome check --write . && cd ../desktop && npx biome check --write .'
 
 test: ## Full test suites without coverage
 	$(DOCKER) sh -c 'cargo test -p meeting --locked && cd extension && npx vitest run && cd ../desktop && npx vitest run'
-	cargo test -p meeting-desktop --locked
+	$(CARGO) test -p meeting-desktop --locked
 
 test-tooling: ## Contract tests for the hooks, Makefile and CI pins (no Docker; seconds)
 	scripts/hooks/tests/run.sh
