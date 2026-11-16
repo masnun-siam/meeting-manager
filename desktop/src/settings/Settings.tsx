@@ -3,6 +3,7 @@ import { FoldersSection } from './FoldersSection';
 import { HealthSection } from './HealthSection';
 import { RescanSection } from './RescanSection';
 import styles from './Settings.module.css';
+import { UpdatesSection } from './UpdatesSection';
 import { useSettingsInfo } from './useSettingsInfo';
 
 /** FR-20. Each section loads and fails on its own, so one failing leaves the others usable. */
@@ -14,6 +15,7 @@ export function Settings() {
     <section className={styles.settings}>
       <h2>Settings</h2>
       <CalendarsSection />
+      <UpdatesSection />
       <RescanSection storeProblem={store?.ok === false ? store.message : null} onFinished={reload} />
       <FoldersSection view={view} />
       <HealthSection />

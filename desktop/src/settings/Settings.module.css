@@ -157,3 +157,20 @@
     grid-template-columns: 1fr;
   }
 }
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.release {
+  font-weight: 500;
+}
+
+/* Release notes are plain text; keep their line breaks and wrap long words. */
+.notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
