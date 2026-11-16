@@ -3,9 +3,9 @@ name: extension
 on:
   push:
     branches: [main]
-    paths: ["extension/**", .github/workflows/extension.yml]
+    paths: ["extension/**", .github/workflows/extension.yml, "scripts/repo-guards/**"]
   pull_request:
-    paths: ["extension/**", .github/workflows/extension.yml]
+    paths: ["extension/**", .github/workflows/extension.yml, "scripts/repo-guards/**"]
 
 jobs:
   check:
@@ -15,6 +15,8 @@ jobs:
         working-directory: extension
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the changed-line coverage gate diffs against the base branch
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -24,4 +26,11 @@ jobs:
       - run: npm run build
       - run: npx tsc --noEmit
       - run: npx biome ci .
-      - run: npx vitest run
+      - run: npx vitest run --coverage 2>&1 | tee ../coverage-run.log
+        shell: bash
+      # vitest writes paths relative to the package; the gates read them from the repo root.
+      - run: sed -i 's|^SF:src/|SF:extension/src/|' coverage/lcov.info
+      - run: ../scripts/repo-guards/coverage-log-guard.sh ../coverage-run.log coverage/lcov.info
+      - if: github.event_name == 'pull_request'
+        working-directory: .
+        run: python3 -I scripts/repo-guards/changed-lines-coverage.py --base "origin/${{ github.base_ref }}" extension/coverage/lcov.info -- 'extension/src/*.ts' 'extension/src/*.tsx' ':!extension/src/*.test.ts' ':!extension/src/*.test.tsx' ':!extension/src/test/*'

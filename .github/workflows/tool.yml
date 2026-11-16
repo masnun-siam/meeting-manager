@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - Cargo.toml
+      - rust-toolchain.toml
+      - "scripts/repo-guards/**"
+      - "scripts/hooks/install-host-tools.sh"
       - Cargo.lock
       - "crates/**"
       - "desktop/src-tauri/**"
@@ -12,6 +15,9 @@ on:
   pull_request:
     paths:
       - Cargo.toml
+      - rust-toolchain.toml
+      - "scripts/repo-guards/**"
+      - "scripts/hooks/install-host-tools.sh"
       - Cargo.lock
       - "crates/**"
       - "desktop/src-tauri/**"
@@ -22,9 +28,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          fetch-depth: 0 # the changed-line coverage gate diffs against the base branch
+      # rust-toolchain.toml pins the version and components; rustup installs them on first use.
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: scripts/hooks/install-host-tools.sh
       - uses: Swatinem/rust-cache@v2
       - run: command -v ffmpeg || brew install ffmpeg
       # The desktop crate embeds `desktop/dist` at compile time, so clippy and test need it built.
@@ -39,4 +47,8 @@ jobs:
         working-directory: desktop
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo llvm-cov --workspace --locked --lcov --output-path coverage/rust.lcov 2>&1 | tee coverage-run.log
+        shell: bash
+      - run: scripts/repo-guards/coverage-log-guard.sh coverage-run.log coverage/rust.lcov
+      - if: github.event_name == 'pull_request'
+        run: python3 -I scripts/repo-guards/changed-lines-coverage.py --base "origin/${{ github.base_ref }}" coverage/rust.lcov -- 'crates/*.rs' 'desktop/src-tauri/*.rs'

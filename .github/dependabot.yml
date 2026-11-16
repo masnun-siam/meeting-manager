@@ -1,0 +1,68 @@
+# Dependabot version updates, from the blubird plugin's template (templates/dependabot.yml).
+# - Updates target main: this repo has no staging branch (owner decision, onboarding #186).
+# - Minor and patch updates are grouped into one PR per ecosystem; majors come one by one.
+# - Ecosystems are staggered across the week.
+# - Titles read "chore(deps): bump ...". The guards workflow skips only the issue-reference rule
+#   for PRs authored by dependabot[bot].
+# - Security-update PRs are off in the repository settings; alerts are on.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: "/extension"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: tuesday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: "/desktop"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: wednesday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: thursday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+  - package-ecosystem: docker
+    directory: "/docker"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: friday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
