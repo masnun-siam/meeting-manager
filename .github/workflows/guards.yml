@@ -1,7 +1,7 @@
 name: guards
 
 # Runs on every pull request, whatever it changes: secrets in the PR's commits and the issue
-# reference in its body. Matches the local pre-push secret scan (scripts/hooks/gates.sh).
+# reference in its body, plus the contract tests of the hooks and CI pins (seconds). Matches the local pre-push secret scan (scripts/hooks/gates.sh).
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review]
@@ -25,6 +25,13 @@ jobs:
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gl.tgz" | sha256sum -c -
           tar -xzf gl.tgz gitleaks
           ./gitleaks git --log-opts="origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }}" --redact --no-banner .
+
+  tooling:
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: make test-tooling
 
   pr-body:
     runs-on: ubuntu-latest

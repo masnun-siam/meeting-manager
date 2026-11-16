@@ -8,7 +8,7 @@ DOCKER := scripts/hooks/docker.sh
 AGENT ?=
 PORT := $(if $(AGENT),$(shell printf '%s' '$(AGENT)' | cksum | awk '{print 1421 + $$1 % 500}'),1420)
 
-.PHONY: help setup up all extension desktop doctor check lint fmt test clean-docker
+.PHONY: help setup up all extension desktop doctor check lint fmt test test-tooling clean-docker
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
@@ -47,6 +47,10 @@ fmt: ## Format Rust and fix biome findings
 test: ## Full test suites without coverage
 	$(DOCKER) sh -c 'cargo test -p meeting --locked && cd extension && npx vitest run && cd ../desktop && npx vitest run'
 	cargo test -p meeting-desktop --locked
+
+test-tooling: ## Contract tests for the hooks, Makefile and CI pins (no Docker; seconds)
+	scripts/hooks/tests/run.sh
+	scripts/repo-guards/tests/run.sh
 
 clean-docker: ## Remove this project's hook containers, volumes and images
 	-docker ps -aq --filter label=meeting-manager.hook=1 | xargs docker rm -f
