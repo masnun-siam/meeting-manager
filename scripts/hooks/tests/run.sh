@@ -144,6 +144,9 @@ check "ci: gitleaks checksum matches the hook image" '[ -n "$gl_ci" ] && grep -q
 check "ci: Rust comes from rust-toolchain.toml" '! grep -q "rust-toolchain@stable" "$w/tool.yml" && grep -q "channel = \"1.99.1\"" "$repo/rust-toolchain.toml" && grep -q "toolchain: 1.99.1" "$w/release.yml" && grep -q "rust:1.99.1" "$repo/docker/hooks.Dockerfile"'
 check "ci: Node 24 everywhere" 'grep -qx 24 "$repo/.nvmrc" && grep -q "node:24" "$repo/docker/hooks.Dockerfile" && ! grep -h "node-version:" "$w"/*.yml | grep -v "node-version: 24"'
 
+gnv=$(grep -o 'gitnexus@[0-9.]*' "$repo/.mcp.json")
+check "gitnexus: docs build the index with the .mcp.json version and --index-only" '[ -n "$gnv" ] && grep -q "npx $gnv analyze --index-only" "$repo/docs/development.md" && ! grep -E "gitnexus@[0-9.]* analyze" "$repo/docs/development.md" | grep -qv -- "--index-only"'
+
 check "real .git/config unchanged" '[ "$(shasum -a 256 <"$real_cfg")" = "$real_sum" ]'
 echo "$((n - fails))/$n passed"
 [ "$fails" = 0 ]
