@@ -191,6 +191,7 @@ function MoreMenu({ trigger, items }: { trigger: RefObject<HTMLButtonElement | n
   const [active, setActive] = useState(0);
   const base = useId();
   const wrapper = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
   useEffect(() => {
@@ -199,16 +200,20 @@ function MoreMenu({ trigger, items }: { trigger: RefObject<HTMLButtonElement | n
 
   useEffect(() => {
     if (!open) return;
-    // A click or a focus move (Tab) outside closes it. Not `focusout`: WebKit blurs to nothing
-    // on a click on a button, which would close the menu before the click lands.
-    const onOutside = (e: Event) => {
+    // A click outside, or focus leaving the items (Tab, or Shift+Tab onto More), closes it.
+    // Not `focusout`: WebKit blurs to nothing on a click on a button, which would close the
+    // menu before the click lands.
+    const onClick = (e: Event) => {
       if (!wrapper.current?.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', onOutside);
-    document.addEventListener('focusin', onOutside);
+    const onFocus = (e: Event) => {
+      if (!menu.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('focusin', onFocus);
     return () => {
-      document.removeEventListener('mousedown', onOutside);
-      document.removeEventListener('focusin', onOutside);
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('focusin', onFocus);
     };
   }, [open]);
 
@@ -262,13 +267,16 @@ function MoreMenu({ trigger, items }: { trigger: RefObject<HTMLButtonElement | n
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
-        onClick={() => (open ? setOpen(false) : show(0))}
+        // Keeps focus on the item until the click closes the menu (else focusin closes it first).
+        onMouseDown={(e) => open && e.preventDefault()}
+        onClick={() => (open ? close() : show(0))}
         onKeyDown={onTriggerKey}
       >
         More
       </button>
       {open ? (
         <div
+          ref={menu}
           role="menu"
           id={menuId}
           aria-labelledby={`${base}-trigger`}

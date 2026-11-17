@@ -70,6 +70,7 @@ describe('Actions toolbar', () => {
     expect(item('Open folder')).toHaveFocus();
     await user.click(more());
     expect(menu()).not.toBeInTheDocument();
+    expect(more()).toHaveFocus();
   });
 
   it.each([
@@ -111,6 +112,12 @@ describe('Actions toolbar', () => {
     await user.keyboard('{Enter}');
     await user.tab();
     expect(menu()).not.toBeInTheDocument();
+
+    act(() => more().focus());
+    await user.keyboard('{Enter}');
+    await user.tab({ shift: true });
+    expect(menu()).not.toBeInTheDocument();
+    expect(more()).toHaveFocus();
 
     await user.click(more());
     await user.click(document.body);
