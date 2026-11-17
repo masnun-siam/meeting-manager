@@ -17,7 +17,7 @@ newrepo() { rm -rf "$1"; git init -q -b main "$1" && for kv in user.email=t@exam
 
 # Stub tools: log "<tool> <args>" to $t/calls; exit with STUB_<TOOL>_RC (default 0).
 bin=$t/bin; mkdir -p "$bin"
-for tool in gitleaks rustfmt npx cargo docker; do
+for tool in gitleaks rustfmt npx npm cargo docker; do
   cat >"$bin/$tool" <<STUB
 #!/bin/sh
 echo "$tool \$*" >>"$t/calls"
@@ -124,6 +124,10 @@ check "make: all and with= start the same as up" 'make -n up all with=x | grep -
 mkdir -p "$t/home/.cargo/bin" && cp "$bin/cargo" "$t/home/.cargo/bin/cargo" && : >"$t/calls"
 check "make: host cargo targets work without ~/.cargo/bin on PATH" 'HOME=$t/home PATH=/usr/bin:/bin make doctor && grep -q "^cargo run -q -p meeting -- doctor" "$t/calls"'
 
+# make desktop: node_modules installed for another platform (e.g. Linux, from the hook image) is reinstalled.
+mkdir -p desktop/node_modules/.bin && printf '#!/bin/sh\n' >desktop/node_modules/.bin/tauri && chmod +x desktop/node_modules/.bin/tauri; reset_calls
+check "make: desktop reinstalls node_modules without the host's tauri binding" 'make desktop && calls | grep -q "^npm ci"'
+rm -rf desktop/node_modules
 # --- Quickstart: every make target the README and CLAUDE.md name exists, and the README starts with setup/up/check ---
 targets=$(sed -n 's/^\([a-z-]*\):.*/\1/p' "$repo/Makefile")
 named=$(grep -ohE '`?make [a-z-]+' "$repo/README.md" "$repo/CLAUDE.md" "$repo/docs/development.md" | sed 's/`//; s/make //' | sort -u)

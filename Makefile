@@ -30,7 +30,8 @@ extension: ## Build the unpacked extension into extension/dist (load it in chrom
 	$(DOCKER) sh -c 'cd extension && npx vite build'
 
 desktop: ## Run the desktop app against a Vite dev server on PORT (AGENT-scoped)
-	cd desktop && { [ -x node_modules/.bin/tauri ] || npm ci --no-audit --no-fund; }
+	# Loading the CLI proves node_modules has this host's native binding, not the hook image's Linux one.
+	cd desktop && { node -e 'require("@tauri-apps/cli")' 2>/dev/null || npm ci --no-audit --no-fund; }
 	cd desktop && npx tauri dev --config '{"build":{"devUrl":"http://localhost:$(PORT)","beforeDevCommand":"npm run dev -- --port $(PORT)"},"app":{"security":{"devCsp":"default-src '\''self'\''; connect-src ipc: http://ipc.localhost ws://localhost:$(PORT); object-src '\''none'\''; base-uri '\''none'\''; frame-ancestors '\''none'\''"}}}'
 
 doctor: ## Health check of the installed tool (config, Keychain, ffmpeg, claude, Chrome host)
