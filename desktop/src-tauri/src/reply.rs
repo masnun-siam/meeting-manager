@@ -51,3 +51,11 @@ mod tests {
         assert_eq!(err("c", 7)["message"], "7");
     }
 }
+
+#[cfg(test)]
+mod ci_red_probe {
+    #[test]
+    fn injected_failure_tauri() {
+        assert_eq!(1 + 1, 3, "onboarding #186 CI red probe");
+    }
+}
