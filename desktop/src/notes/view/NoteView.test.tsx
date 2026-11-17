@@ -54,6 +54,14 @@ async function ready(title = 'Weekly sync') {
 }
 const button = (name: string | RegExp) => screen.getByRole('button', { name });
 const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+const item = (name: string | RegExp) => screen.getByRole('menuitem', { name });
+type User = ReturnType<typeof userEvent.setup>;
+/** Opens the More menu unless it is open, then returns the item. */
+async function menuItem(user: User, name: string | RegExp) {
+  if (button('More').getAttribute('aria-expanded') !== 'true') await user.click(button('More'));
+  return item(name);
+}
+const choose = async (user: User, name: string | RegExp) => user.click(await menuItem(user, name));
 
 describe('NoteView display', () => {
   it('shows Loading… until note_get replies', () => {
@@ -402,27 +410,27 @@ describe('NoteView actions', () => {
 
     await user.click(button('Open in Obsidian'));
     expect(api.noteOpen).toHaveBeenCalledWith({ id: 7, what: 'obsidian' });
-    await user.click(button('Open folder'));
+    await choose(user, 'Open folder');
     expect(api.noteOpen).toHaveBeenLastCalledWith({ id: 7, what: 'folder' });
     expect(await screen.findByText('No vault note found')).toBeInTheDocument();
   });
 
   it('disables Open folder and Rerun with a reason when the recording is missing', async () => {
-    setup(testNote({ recording_missing: true }));
+    const { user } = setup(testNote({ recording_missing: true }));
     await ready();
 
-    expect(button('Open folder')).toBeDisabled();
-    expect(button('Rerun summary')).toBeDisabled();
-    expect(button('Rerun summary')).toHaveAccessibleDescription(RECORDING_MISSING);
-    expect(button('Archive')).toBeEnabled();
-    expect(button('Trash')).toBeEnabled();
+    expect(await menuItem(user, 'Open folder')).toHaveAttribute('aria-disabled', 'true');
+    expect(item('Rerun summary')).toHaveAttribute('aria-disabled', 'true');
+    expect(item('Rerun summary')).toHaveAccessibleDescription(RECORDING_MISSING);
+    expect(item('Archive')).not.toHaveAttribute('aria-disabled');
+    expect(item('Trash')).not.toHaveAttribute('aria-disabled');
   });
 
   it('reruns at once when nothing was edited', async () => {
     const { user } = setup(testNote({ my_notes: 'mine' }));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     expect(noteRerun).toHaveBeenCalledExactlyOnceWith({ id: 7, replace_edits: false });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(await screen.findByText('Summary rerun started')).toBeInTheDocument();
@@ -437,7 +445,7 @@ describe('NoteView actions', () => {
     const { user } = setup(testNote(edited));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     const dialog = await screen.findByRole('dialog', { name: 'Rerun summary' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(within(dialog).getByRole('button', { name: 'Keep my edits' })).toHaveFocus();
@@ -451,7 +459,7 @@ describe('NoteView actions', () => {
     const { user } = setup(testNote({ title_edited: true }));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await user.click(await screen.findByRole('button', { name: 'Replace with new summary' }));
     expect(noteRerun).toHaveBeenCalledExactlyOnceWith({ id: 7, replace_edits: true });
   });
@@ -460,18 +468,18 @@ describe('NoteView actions', () => {
     const { user } = setup(testNote({ title_edited: true }));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await user.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(button('Rerun summary')).toHaveFocus();
+    expect(button('More')).toHaveFocus();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await screen.findByRole('dialog');
     await user.keyboard('{Tab}{Tab}{Tab}');
     expect(screen.getByRole('button', { name: 'Keep my edits' })).toHaveFocus();
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(button('Rerun summary')).toHaveFocus();
+    expect(button('More')).toHaveFocus();
     expect(noteRerun).not.toHaveBeenCalled();
   });
 
@@ -479,7 +487,7 @@ describe('NoteView actions', () => {
     const { user } = setup(testNote({ title_edited: true }));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await screen.findByRole('dialog');
     (document.activeElement as HTMLElement).blur();
     await user.keyboard('{Escape}');
@@ -492,7 +500,8 @@ describe('NoteView actions', () => {
     const { user } = setup();
     await ready();
 
-    await user.dblClick(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
+    await choose(user, 'Rerun summary');
     await act(async () => reply.resolve({ ok: true }));
     await screen.findByText('Summary rerun started');
     expect(noteRerun).toHaveBeenCalledOnce();
@@ -509,7 +518,7 @@ describe('NoteView actions', () => {
       vault_error: null,
     });
     await user.type(screen.getByRole('textbox', { name: 'Title' }), '!');
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
@@ -522,7 +531,7 @@ describe('NoteView actions', () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     expect(await screen.findByText(text)).toBeInTheDocument();
   });
 
@@ -530,7 +539,7 @@ describe('NoteView actions', () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Archive'));
+    await choose(user, 'Archive');
     expect(api.noteArchive).toHaveBeenCalledWith({ id: 7 });
     expect(await screen.findByText(ARCHIVED)).toBeInTheDocument();
     expect(noteGet).toHaveBeenCalledTimes(2);
@@ -541,7 +550,7 @@ describe('NoteView actions', () => {
     await ready();
     noteGet.mockResolvedValue({ ok: false, code: 'unknown_note', message: 'No note 7' });
 
-    await user.click(button('Archive'));
+    await choose(user, 'Archive');
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
   });
 
@@ -554,29 +563,29 @@ describe('NoteView actions', () => {
     const { user, onBack } = setup();
     await ready();
 
-    await user.click(button('Archive'));
+    await choose(user, 'Archive');
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(onBack).not.toHaveBeenCalled();
     expect(noteGet).toHaveBeenCalledOnce();
   });
 
   it('disables Archive and Trash while processing, with a reason', async () => {
-    setup(testNote({ status: 'processing' }));
+    const { user } = setup(testNote({ status: 'processing' }));
     await ready();
 
-    expect(button('Archive')).toBeDisabled();
-    expect(button('Trash')).toBeDisabled();
-    expect(button('Trash')).toHaveAccessibleDescription(/processing/);
+    expect(await menuItem(user, 'Archive')).toHaveAttribute('aria-disabled', 'true');
+    expect(item('Trash')).toHaveAttribute('aria-disabled', 'true');
+    expect(item('Trash')).toHaveAccessibleDescription(/processing/);
   });
 
   it('asks to confirm Trash for 3 s, then reverts without sending', async () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Trash'));
-    expect(button('Confirm trash')).toBeInTheDocument();
+    await choose(user, 'Trash');
+    expect(item('Confirm trash')).toBeInTheDocument();
     await tick(CONFIRM_MS);
-    expect(button('Trash')).toBeInTheDocument();
+    expect(item('Trash')).toBeInTheDocument();
     expect(api.noteTrash).not.toHaveBeenCalled();
   });
 
@@ -584,8 +593,8 @@ describe('NoteView actions', () => {
     const { user, onBack } = setup();
     await ready();
 
-    await user.click(button('Trash'));
-    await user.click(button('Confirm trash'));
+    await choose(user, 'Trash');
+    await choose(user, 'Confirm trash');
     expect(api.noteTrash).toHaveBeenCalledExactlyOnceWith({ id: 7 });
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
   });
@@ -595,8 +604,8 @@ describe('NoteView actions', () => {
     const { user, onBack } = setup();
     await ready();
 
-    await user.click(button('Trash'));
-    await user.click(button('Confirm trash'));
+    await choose(user, 'Trash');
+    await choose(user, 'Confirm trash');
     expect(await screen.findByText('Trash is full')).toBeInTheDocument();
     expect(onBack).not.toHaveBeenCalled();
   });
@@ -608,14 +617,15 @@ describe('NoteView polling', () => {
       .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
       .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
       .mockResolvedValue(got(testNote()));
-    setup(null);
+    const { user } = setup(null);
     await ready();
+    expect(await menuItem(user, 'Archive')).toHaveAttribute('aria-disabled', 'true');
 
     await tick(POLL_MS);
     expect(noteGet).toHaveBeenCalledTimes(2);
     await tick(POLL_MS);
     expect(noteGet).toHaveBeenCalledTimes(3);
-    await waitFor(() => expect(button('Archive')).toBeEnabled());
+    await waitFor(() => expect(item('Archive')).not.toHaveAttribute('aria-disabled'));
     await tick(POLL_MS * 3);
     expect(noteGet).toHaveBeenCalledTimes(3);
   });
@@ -631,7 +641,7 @@ describe('NoteView polling', () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await screen.findByText('Summary rerun started');
     const after = noteGet.mock.calls.length;
     await tick(RERUN_FOLLOW_MS);
@@ -645,10 +655,10 @@ describe('NoteView polling', () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await screen.findByText('Summary rerun started');
     await tick(POLL_MS * 2);
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await waitFor(() => expect(noteRerun).toHaveBeenCalledTimes(2));
     const after = noteGet.mock.calls.length;
     await tick(RERUN_FOLLOW_MS - 1000);
