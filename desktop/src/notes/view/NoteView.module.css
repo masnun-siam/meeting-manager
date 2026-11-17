@@ -158,29 +158,6 @@
   animation: spin 800ms linear infinite;
 }
 
-.actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--line);
-}
-
-.toolbar button:nth-child(3) {
-  margin-right: auto;
-}
-
-.reason {
-  color: var(--ink-faint);
-  font-size: var(--text-sm);
-}
-
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
