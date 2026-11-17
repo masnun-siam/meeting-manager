@@ -124,6 +124,12 @@ check "make: all and with= start the same as up" 'make -n up all with=x | grep -
 mkdir -p "$t/home/.cargo/bin" && cp "$bin/cargo" "$t/home/.cargo/bin/cargo" && : >"$t/calls"
 check "make: host cargo targets work without ~/.cargo/bin on PATH" 'HOME=$t/home PATH=/usr/bin:/bin make doctor && grep -q "^cargo run -q -p meeting -- doctor" "$t/calls"'
 
+# --- Quickstart: every make target the README and CLAUDE.md name exists, and the README starts with setup/up/check ---
+targets=$(sed -n 's/^\([a-z-]*\):.*/\1/p' "$repo/Makefile")
+named=$(grep -ohE '`?make [a-z-]+' "$repo/README.md" "$repo/CLAUDE.md" "$repo/docs/development.md" | sed 's/`//; s/make //' | sort -u)
+missing=$(for x in $named; do printf '%s\n' "$targets" | grep -qx "$x" || echo "$x"; done)
+check "quickstart: every documented make target exists" '[ -n "$named" ] && [ -z "$missing" ]'
+check "quickstart: README development block is make setup, up, check" 'sed -n "/^## Development/,/^\`\`\`\$/p;" "$repo/README.md" | grep -q "^make setup" && grep -A6 "^## Development" "$repo/README.md" | grep -q "^make up" && grep -A6 "^## Development" "$repo/README.md" | grep -q "^make check"'
 # --- CI and image pins agree ---
 w=$repo/.github/workflows
 check "ci: tool runs the changed-line coverage gate" 'grep -q "changed-lines-coverage.py" "$w/tool.yml"'

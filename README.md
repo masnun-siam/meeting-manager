@@ -77,8 +77,9 @@ Only the extracted audio goes to Deepgram, and only the transcript goes to Anthr
 ## Development
 
 ```sh
-cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
-cd extension && npm run build && npm run typecheck && npx biome ci . && npm test
+make setup   # once per clone: host tools, hook image (Docker), git hooks
+make up      # extension build (Docker) + desktop app (tauri dev); AGENT=<name> for a parallel session
+make check   # every gate, as CI
 ```
 
-CI runs the same gates per part on every pull request. Workflow, commit style and rules: [CONTRIBUTING.md](CONTRIBUTING.md). Start with [docs/README.md](docs/README.md) (architecture, development, per-component and per-feature docs). Requirements and decisions are in the PRD, [docs/prds/recorder/meeting-recorder.md](docs/prds/recorder/meeting-recorder.md). Agent instructions: [CLAUDE.md](CLAUDE.md).
+`make help` lists the rest; details in [docs/development.md](docs/development.md). CI runs the same gates per part on every pull request. Workflow, commit style and rules: [CONTRIBUTING.md](CONTRIBUTING.md). Start with [docs/README.md](docs/README.md) (architecture, development, per-component and per-feature docs). Requirements and decisions are in the PRD, [docs/prds/recorder/meeting-recorder.md](docs/prds/recorder/meeting-recorder.md). Agent instructions: [CLAUDE.md](CLAUDE.md).
