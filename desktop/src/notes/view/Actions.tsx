@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from 'react';
 import { type Note, noteArchive, noteOpen, noteRerun, noteTrash } from '../../api';
 import { ArchiveIcon, FolderIcon, SparkIcon, TrashIcon, VaultIcon } from '../../icons';
 import { attempt } from '../../recording/attempt';
+import styles from './Actions.module.css';
 import { hasEdits, NOT_WHILE_PROCESSING, problemText, RECORDING_MISSING } from './format';
-import styles from './NoteView.module.css';
 import { RerunDialog } from './RerunDialog';
 
 export const CONFIRM_MS = 3000;
@@ -21,14 +21,29 @@ type Props = {
   say: (message: string | null) => void;
 };
 
-/** Open in Obsidian, Open folder, Rerun summary, Archive and Trash (FR-17, FR-19, FR-21). */
+/** One entry of the More menu; later actions are inserted into the list in the PRD's order. */
+type MenuItem = {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  disabled: boolean;
+  /** Shown inside the menu and read as the item's description while it is disabled. */
+  reason: string | null;
+  danger?: boolean;
+  armed?: boolean;
+  /** A first confirm step: the menu stays open so the "Confirm …" item can be chosen. */
+  keepOpen?: boolean;
+  run: () => void;
+};
+
+/** Open in Obsidian, then a More menu with Open folder, Rerun summary, Archive and Trash (FR-13). */
 export function Actions(props: Props) {
   const { note, say } = props;
   const [armed, setArmed] = useState(false);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
-  const rerunButton = useRef<HTMLButtonElement>(null);
-  // Not `busy`: disabling Rerun would drop the focus the dialog hands back to it.
+  const more = useRef<HTMLButtonElement>(null);
+  // Not `busy`: a second Rerun waits on this instead of being disabled.
   const rerunning = useRef(false);
 
   useEffect(() => {
@@ -71,7 +86,7 @@ export function Actions(props: Props) {
 
   const closeDialog = () => {
     setAsking(false);
-    rerunButton.current?.focus();
+    more.current?.focus();
   };
 
   const archive = async () => {
@@ -105,6 +120,46 @@ export function Actions(props: Props) {
     else say(problemText(result.code, result.text));
   };
 
+  const missingReason = missing ? RECORDING_MISSING : null;
+  const processingReason = processing ? NOT_WHILE_PROCESSING : null;
+  const items: MenuItem[] = [
+    {
+      id: 'folder',
+      label: 'Open folder',
+      icon: <FolderIcon size={14} />,
+      disabled: missing,
+      reason: missingReason,
+      run: () => void open('folder'),
+    },
+    {
+      id: 'rerun',
+      label: 'Rerun summary',
+      icon: <SparkIcon size={14} />,
+      disabled: missing,
+      reason: missingReason,
+      run: () => void askRerun(),
+    },
+    {
+      id: 'archive',
+      label: 'Archive',
+      icon: <ArchiveIcon size={14} />,
+      disabled: processing || busy,
+      reason: processingReason,
+      run: () => void archive(),
+    },
+    {
+      id: 'trash',
+      label: armed ? 'Confirm trash' : 'Trash',
+      icon: <TrashIcon size={14} />,
+      disabled: processing || busy,
+      reason: processingReason,
+      danger: true,
+      armed,
+      keepOpen: !armed,
+      run: () => void trash(),
+    },
+  ];
+
   return (
     <div className={styles.actions}>
       <div className={styles.toolbar}>
@@ -112,56 +167,8 @@ export function Actions(props: Props) {
           <VaultIcon size={14} />
           Open in Obsidian
         </button>
-        <button
-          type="button"
-          disabled={missing}
-          aria-describedby={missing ? 'note-missing' : undefined}
-          onClick={() => open('folder')}
-        >
-          <FolderIcon size={14} />
-          Open folder
-        </button>
-        <button
-          ref={rerunButton}
-          type="button"
-          disabled={missing}
-          aria-describedby={missing ? 'note-missing' : undefined}
-          onClick={askRerun}
-        >
-          <SparkIcon size={14} />
-          Rerun summary
-        </button>
-        <button
-          type="button"
-          disabled={processing || busy}
-          aria-describedby={processing ? 'note-processing' : undefined}
-          onClick={archive}
-        >
-          <ArchiveIcon size={14} />
-          Archive
-        </button>
-        <button
-          type="button"
-          data-variant="danger"
-          data-armed={armed}
-          disabled={processing || busy}
-          aria-describedby={processing ? 'note-processing' : undefined}
-          onClick={trash}
-        >
-          <TrashIcon size={14} />
-          {armed ? 'Confirm trash' : 'Trash'}
-        </button>
+        <MoreMenu trigger={more} items={items} />
       </div>
-      {missing ? (
-        <p id="note-missing" className={styles.reason}>
-          {RECORDING_MISSING}
-        </p>
-      ) : null}
-      {processing ? (
-        <p id="note-processing" className={styles.reason}>
-          {NOT_WHILE_PROCESSING}
-        </p>
-      ) : null}
       {asking ? (
         <RerunDialog
           onCancel={closeDialog}
@@ -170,6 +177,143 @@ export function Actions(props: Props) {
             void rerun(replaceEdits);
           }}
         />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The WAI-ARIA menu button pattern: Enter, Space or the arrows open it, the arrows (wrapping),
+ * Home and End move, Escape closes it and returns focus to More, Tab or a click outside closes it.
+ */
+function MoreMenu({ trigger, items }: { trigger: RefObject<HTMLButtonElement | null>; items: MenuItem[] }) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const base = useId();
+  const wrapper = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  useEffect(() => {
+    if (open) refs.current[active]?.focus();
+  }, [open, active]);
+
+  useEffect(() => {
+    if (!open) return;
+    // A click outside, or focus leaving the items (Tab, or Shift+Tab onto More), closes it.
+    // Not `focusout`: WebKit blurs to nothing on a click on a button, which would close the
+    // menu before the click lands.
+    const onClick = (e: Event) => {
+      if (!wrapper.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onFocus = (e: Event) => {
+      if (!menu.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('focusin', onFocus);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('focusin', onFocus);
+    };
+  }, [open]);
+
+  const show = (at: number) => {
+    setActive(at);
+    setOpen(true);
+  };
+
+  const close = () => {
+    setOpen(false);
+    trigger.current?.focus();
+  };
+
+  const onTriggerKey = (e: KeyboardEvent) => {
+    const at: Record<string, number> = { ArrowDown: 0, ArrowUp: items.length - 1 };
+    if (!(e.key in at)) return;
+    e.preventDefault();
+    show(at[e.key]);
+  };
+
+  const onMenuKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      return;
+    }
+    const next: Record<string, number> = {
+      ArrowDown: (active + 1) % items.length,
+      ArrowUp: (active - 1 + items.length) % items.length,
+      Home: 0,
+      End: items.length - 1,
+    };
+    if (!(e.key in next)) return;
+    e.preventDefault();
+    setActive(next[e.key]);
+  };
+
+  const choose = (item: MenuItem) => {
+    if (item.disabled) return;
+    if (!item.keepOpen) close();
+    item.run();
+  };
+
+  const menuId = `${base}-menu`;
+  return (
+    <div ref={wrapper} className={styles.more}>
+      <button
+        ref={trigger}
+        type="button"
+        id={`${base}-trigger`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={menuId}
+        // Keeps focus on the item until the click closes the menu (else focusin closes it first).
+        onMouseDown={(e) => open && e.preventDefault()}
+        onClick={() => (open ? close() : show(0))}
+        onKeyDown={onTriggerKey}
+      >
+        More
+      </button>
+      {open ? (
+        <div
+          ref={menu}
+          role="menu"
+          id={menuId}
+          aria-labelledby={`${base}-trigger`}
+          tabIndex={-1}
+          className={styles.menu}
+          onKeyDown={onMenuKey}
+        >
+          {items.map((item, i) => (
+            <button
+              key={item.id}
+              ref={(el) => {
+                refs.current[i] = el;
+              }}
+              type="button"
+              role="menuitem"
+              tabIndex={i === active ? 0 : -1}
+              aria-disabled={item.disabled || undefined}
+              aria-labelledby={`${base}-${item.id}`}
+              aria-describedby={item.disabled && item.reason ? `${base}-${item.id}-reason` : undefined}
+              data-variant={item.danger ? 'danger' : undefined}
+              data-armed={item.armed}
+              className={styles.item}
+              onFocus={() => setActive(i)}
+              onClick={() => choose(item)}
+            >
+              {item.icon}
+              <span className={styles.text}>
+                <span id={`${base}-${item.id}`}>{item.label}</span>
+                {item.disabled && item.reason ? (
+                  <span id={`${base}-${item.id}-reason`} className={styles.reason}>
+                    {item.reason}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          ))}
+        </div>
       ) : null}
     </div>
   );
