@@ -137,6 +137,7 @@ check "quickstart: README development block is make setup, up, check" 'sed -n "/
 # --- CI and image pins agree ---
 w=$repo/.github/workflows
 check "ci: tool runs the changed-line coverage gate" 'grep -q "changed-lines-coverage.py" "$w/tool.yml"'
+check "ci: tool creates the folder its lcov report is written to" 'grep -q "mkdir -p coverage && cargo llvm-cov --workspace .*--output-path coverage/rust.lcov" "$w/tool.yml"'
 check "ci: extension and desktop guard their coverage logs" 'grep -q coverage-log-guard "$w/extension.yml" && grep -q coverage-log-guard "$w/desktop.yml"'
 gl_ci=$(grep -o '[0-9a-f]\{64\}  gl.tgz' "$w/guards.yml" | cut -d' ' -f1)
 check "ci: gitleaks checksum matches the hook image" '[ -n "$gl_ci" ] && grep -q "gl_sum=$gl_ci" "$repo/docker/hooks.Dockerfile"'

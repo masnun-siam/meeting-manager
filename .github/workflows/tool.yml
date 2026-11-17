@@ -47,7 +47,7 @@ jobs:
         working-directory: desktop
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo llvm-cov --workspace --locked --lcov --output-path coverage/rust.lcov 2>&1 | tee coverage-run.log
+      - run: mkdir -p coverage && cargo llvm-cov --workspace --locked --lcov --output-path coverage/rust.lcov 2>&1 | tee coverage-run.log
         shell: bash
       - run: scripts/repo-guards/coverage-log-guard.sh coverage-run.log coverage/rust.lcov
       - if: github.event_name == 'pull_request'
