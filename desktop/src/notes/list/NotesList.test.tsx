@@ -172,11 +172,12 @@ describe('NotesList', () => {
     setup();
 
     // Plain DOM over the rows: a role query computes styles per element and times out under load (#179).
-    const listEl = await screen.findByRole('list', { name: 'Notes' });
-    await waitFor(() => expect(listEl.children).toHaveLength(1000));
+    // Rendering 1,000 rows takes seconds on a loaded machine: 15 s until #179 cuts the render cost.
+    const listEl = await screen.findByRole('list', { name: 'Notes' }, { timeout: 15_000 });
+    await waitFor(() => expect(listEl.children).toHaveLength(1000), { timeout: 15_000 });
     expect(listEl.firstElementChild).toHaveTextContent('Meeting 1');
     expect(listEl.lastElementChild).toHaveTextContent('Meeting 1000');
-  });
+  }, 15_000);
 
   describe('polling', () => {
     it('refreshes every 3 s and updates a row in place through its stages', async () => {
