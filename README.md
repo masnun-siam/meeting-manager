@@ -204,7 +204,7 @@ The full map is in [docs/architecture.md](docs/architecture.md).
 | Job status | `~/Library/Application Support/meeting-manager/jobs/` |
 | Log | `~/Library/Logs/meeting-manager/meeting.log` (never contains the key or transcript text) |
 
-Every setting, path and `doctor` check: [docs/modules/recorder/setup.md](docs/modules/recorder/setup.md).
+Every setting, path and `doctor` check: [docs/features/setup.md](docs/features/setup.md).
 
 ## Troubleshooting
 
@@ -244,13 +244,14 @@ The host only accepts `<name>/recording.<ext>` under `recordings_dir`. Change it
 ```sh
 cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
 cd extension && npm run build && npm run typecheck && npx biome ci . && npm test
+cd desktop && npm run build && npm run typecheck && npx biome ci . && npm test
 ```
 
-`make help` lists the rest; details in [docs/development.md](docs/development.md). CI runs the same gates per part on every pull request. New features ship dark behind build-time flags ([FLAGS.md](FLAGS.md)).
+Details in [docs/development.md](docs/development.md). CI runs the same gates per part on every pull request. New features ship dark behind build-time flags ([FLAGS.md](FLAGS.md)).
 
 - Workflow, commit style and rules: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Documentation index: [docs/README.md](docs/README.md)
-- Requirements and decisions: [docs/prds/recorder/meeting-recorder.md](docs/prds/recorder/meeting-recorder.md)
+- Requirements and decisions: [docs/prds/meeting-recorder.md](docs/prds/meeting-recorder.md)
 - Agent instructions: [CLAUDE.md](CLAUDE.md)
 
 <div align="center">
