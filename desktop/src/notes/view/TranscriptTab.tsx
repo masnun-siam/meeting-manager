@@ -110,7 +110,8 @@ export function Tabs({
           <div
             role="tabpanel"
             id={`${base}-mynotes-panel`}
-            aria-labelledby={`${base}-mynotes-tab`}
+            // Named on its own: the tab's name gains ", has text", which is not the panel's.
+            aria-label="My notes"
             hidden={selected !== 'mynotes'}
           >
             {myNotes}

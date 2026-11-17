@@ -814,7 +814,7 @@ describe('NoteView My notes tab (FR-12)', () => {
     await user.keyboard('{ArrowRight}{ArrowRight}');
     expect(tabs[2]).toHaveFocus();
     expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, -1, 0]);
-    expect(screen.getByRole('tabpanel', { name: /^My notes/ })).toContainElement(
+    expect(screen.getByRole('tabpanel', { name: 'My notes' })).toContainElement(
       screen.getByRole('textbox', { name: 'My notes' }),
     );
     await user.keyboard('{ArrowRight}');
@@ -848,6 +848,7 @@ describe('NoteView My notes tab (FR-12)', () => {
     expect(noteUpdate).not.toHaveBeenCalled();
     expect(tab).toHaveAccessibleName('My notes, has text');
     expect(tab.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(screen.getByRole('tabpanel', { name: 'My notes' })).toContainElement(box);
 
     await user.clear(box);
     expect(tab).toHaveAccessibleName('My notes');
