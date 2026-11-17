@@ -173,17 +173,6 @@
   min-width: 0;
 }
 
-/* Clips the tab row's band to the column (clip, unlike hidden, keeps the tab row sticky). */
-.primary {
-  overflow-x: clip;
-}
-
-/* Pinned beside the summary only when it fits in the window (`useFitsInView`); otherwise it scrolls with the page. */
-.aside[data-sticky="true"] {
-  position: sticky;
-  top: var(--space-4);
-}
-
 .card {
   padding: var(--space-3) var(--space-4) var(--space-4);
   border: 1px solid var(--line);
@@ -215,15 +204,11 @@
   flex-direction: column;
 }
 
-/* The summary's Edit button sits on the tab row, at its right end, and sticks with it. */
+/* The summary's Edit/Done button: a right-aligned first row of the Summary panel. */
 .sectionHead {
-  position: sticky;
-  top: 3px;
-  z-index: 2;
   display: flex;
-  align-self: flex-end;
-  margin-top: calc(-1 * (var(--tab-row) + var(--space-4)));
-  margin-bottom: calc(var(--tab-row) + var(--space-4) - 28px);
+  justify-content: flex-end;
+  margin-bottom: var(--space-2);
 }
 
 .hint {
@@ -295,29 +280,28 @@
 }
 
 .tabs {
-  --tab-row: 32px;
-
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+
+  /* Clips the bar's band to the note column (clip, unlike hidden, keeps the bar sticky). */
+  overflow-x: clip;
 }
 
-/* Stays at the top while the summary or transcript scrolls; the band hides text passing under it. */
-.tablist {
+/* The tab row and the player slot: stays at the top of the page while it scrolls (D6). */
+.bar {
   position: sticky;
   top: 0;
   z-index: 1;
-  display: inline-flex;
-  align-self: flex-start;
-  gap: 2px;
-  padding: 3px;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
 }
 
-/* The band behind the sticky tab row, clipped to the column by .primary. */
-.tablist::before {
+/* The band behind the sticky bar: hides text passing under it, clipped to the column by .tabs. */
+.bar::before {
   position: absolute;
   inset: -6px -2000px;
   z-index: -1;
@@ -325,14 +309,27 @@
   content: "";
 }
 
-/* The pill itself, painted over the band (the band covers the tab list's own background). */
-.tablist::after {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
+.tablist {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-md);
   background: var(--surface-sunken);
-  content: "";
+}
+
+.playerSlot {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.playerSlot:empty {
+  display: none;
+}
+
+/* Keeps a focused or scrolled-to element clear of the sticky bar (WCAG 2.4.11). */
+.layout * {
+  scroll-margin-top: 64px;
 }
 
 .tablist [role="tab"] {
@@ -533,12 +530,9 @@
   }
 }
 
-@media (max-width: 900px) {
+/* Below 900 px window width the side column goes under the tab content (FR-11). */
+@media (max-width: 899px) {
   .layout {
-    grid-template-columns: 1fr;
-  }
-
-  .aside[data-sticky="true"] {
-    position: static;
+    grid-template-columns: minmax(0, 1fr);
   }
 }

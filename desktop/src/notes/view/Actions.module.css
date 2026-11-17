@@ -16,7 +16,7 @@
   position: relative;
 }
 
-/* Above the sticky tab row (z-index 2), below the Rerun dialog's backdrop (10). */
+/* Above the sticky tab bar (z-index 1), below the Rerun dialog's backdrop (10). */
 .menu {
   position: absolute;
   top: calc(100% + 4px);

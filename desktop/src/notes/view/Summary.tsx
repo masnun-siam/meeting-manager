@@ -36,6 +36,7 @@ export function Summary({ note, autosave, editable }: { note: Note; autosave: Au
 
   return (
     <section aria-labelledby={`${textarea}-heading`} className={styles.section}>
+      {/* A right-aligned first row of the panel: the bar's right side is the player's (FR-11). */}
       <div className={styles.sectionHead}>
         <h3 id={`${textarea}-heading`} className="sr-only">
           Summary

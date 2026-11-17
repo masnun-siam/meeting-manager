@@ -6,6 +6,7 @@ import * as api from '../../api';
 import { ARCHIVED, CONFIRM_MS } from './Actions';
 import { MY_NOTES_LIMIT, RECORDING_MISSING, TOO_LARGE, TOOL_MISSING } from './format';
 import { NoteView, UNSAVED } from './NoteView';
+import { Tabs } from './TranscriptTab';
 import { deferred, testNote } from './testNote';
 import { POLL_MS, RERUN_FOLLOW_MS } from './useNote';
 
@@ -692,5 +693,99 @@ describe('NoteView polling', () => {
 
     await tick(POLL_MS * 3);
     expect(noteGet).toHaveBeenCalledOnce();
+  });
+});
+
+describe('NoteView layout (FR-11)', () => {
+  const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+  it('orders the tab bar, then the panels, then the side column, with no pinning', async () => {
+    setup();
+    await ready();
+
+    const tablist = screen.getByRole('tablist', { name: 'Note' });
+    const panels = screen.getAllByRole('tabpanel', { hidden: true });
+    const speakers = screen.getByRole('region', { name: 'Speakers' });
+    const myNotes = screen.getByRole('textbox', { name: 'My notes' });
+    expect(panels).toHaveLength(2);
+    for (const panel of panels) {
+      expect(follows(tablist, panel)).toBe(true);
+      expect(follows(panel, myNotes)).toBe(true);
+    }
+    expect(follows(myNotes, speakers)).toBe(true);
+    expect(document.querySelector('[data-sticky]')).toBeNull();
+  });
+
+  it('keeps Transcript selected across polls and the reload that ends processing', async () => {
+    noteGet
+      .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
+      .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
+      .mockResolvedValue(got(testNote()));
+    const { user } = setup(null);
+    await ready();
+
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    await tick(POLL_MS);
+    await tick(POLL_MS);
+    expect(noteGet).toHaveBeenCalledTimes(3);
+    await menuItem(user, 'Archive');
+    await waitFor(() => expect(item('Archive')).not.toHaveAttribute('aria-disabled'));
+    expect(screen.getByRole('tab', { name: 'Transcript' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel', { name: 'Transcript' })).toBeVisible();
+  });
+
+  it('keeps Transcript selected after Rerun reloads the note', async () => {
+    const { user } = setup();
+    await ready();
+
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    await choose(user, 'Rerun summary');
+    await screen.findByText('Summary rerun started');
+    const before = noteGet.mock.calls.length;
+    await tick(POLL_MS);
+    expect(noteGet.mock.calls.length).toBeGreaterThan(before);
+    expect(screen.getByRole('tab', { name: 'Transcript' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('reaches the Summary Edit button with Tab from the tab row', async () => {
+    const { user } = setup();
+    await ready();
+
+    screen.getByRole('tab', { name: 'Summary' }).focus();
+    await user.tab();
+    expect(button('Edit')).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('textbox', { name: 'Summary (markdown)' })).toBeInTheDocument();
+  });
+
+  it('lists all 20 speakers in the side column', async () => {
+    const speakers = Array.from({ length: 20 }, (_, i) => ({
+      label: `Speaker ${i}`,
+      name: `Person ${i}`,
+      evidence: '',
+      name_edited: true,
+    }));
+    setup(testNote({ speakers }));
+    await ready();
+
+    expect(within(screen.getByRole('region', { name: 'Speakers' })).getAllByRole('listitem')).toHaveLength(20);
+  });
+
+  it('says "No transcript." for a note without one', async () => {
+    const { user } = setup(testNote({ transcript: null }));
+    await ready();
+
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    expect(screen.getByRole('tabpanel', { name: 'Transcript' })).toHaveTextContent('No transcript.');
+  });
+
+  it('puts the player in the bar with the tab row, before the panels', () => {
+    render(<Tabs summary={<p>summary</p>} transcript={null} aside={<p>aside</p>} player={<p>player</p>} />);
+
+    const tablist = screen.getByRole('tablist');
+    const player = screen.getByText('player');
+    expect(player.parentElement?.parentElement).toBe(tablist.parentElement);
+    expect(follows(player, screen.getByRole('tabpanel', { name: 'Summary' }))).toBe(true);
+    expect(follows(screen.getByText('summary'), screen.getByText('aside'))).toBe(true);
   });
 });
