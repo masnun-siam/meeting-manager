@@ -54,6 +54,11 @@ async function ready(title = 'Weekly sync') {
   return heading;
 }
 const button = (name: string | RegExp) => screen.getByRole('button', { name });
+/** Selects the My notes tab and returns its editor. */
+async function myNotesBox(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('tab', { name: /^My notes/ }));
+  return screen.getByRole('textbox', { name: 'My notes' });
+}
 const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
 
 describe('NoteView display', () => {
@@ -217,19 +222,20 @@ describe('NoteView display', () => {
     await user.keyboard('{Home}');
     expect(summaryTab).toHaveFocus();
     await user.keyboard('{ArrowLeft}');
-    expect(transcriptTab).toHaveFocus();
+    expect(screen.getByRole('tab', { name: 'My notes' })).toHaveFocus();
   });
 
   it.each(['processing', 'failed', 'no_speech'] as const)(
     'a %s note is read-only except "My notes"',
     async (status) => {
-      setup(testNote({ status, failed_stage: 'transcribe', error: 'Deepgram said no' }));
+      const { user } = setup(testNote({ status, failed_stage: 'transcribe', error: 'Deepgram said no' }));
       await ready();
 
       expect(screen.queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
       expect(screen.queryByRole('textbox', { name: /Name for/ })).not.toBeInTheDocument();
-      expect(screen.getByRole('textbox', { name: 'My notes' })).toBeInTheDocument();
+      await user.type(await myNotesBox(user), 'x');
+      expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('x');
     },
   );
 
@@ -254,7 +260,6 @@ describe('NoteView editing', () => {
 
     expect(screen.getByRole('textbox', { name: 'Title' })).toHaveValue('Weekly sync');
     expect(screen.getByRole('textbox', { name: 'Name for Speaker 1' })).toHaveValue('Rahim');
-    expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('');
     expect(screen.getByRole('heading', { level: 2, name: 'Action items' })).toBeInTheDocument();
 
     await user.click(button('Edit'));
@@ -270,7 +275,7 @@ describe('NoteView editing', () => {
     const { user } = setup();
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'deck');
+    await user.type(await myNotesBox(user), 'deck');
     expect(noteUpdate).not.toHaveBeenCalled();
     await tick(1000);
     expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, my_notes: 'deck' });
@@ -281,7 +286,7 @@ describe('NoteView editing', () => {
     const { user, onBack } = setup();
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.type(await myNotesBox(user), 'x');
     await user.click(button('Back'));
     expect(noteUpdate).toHaveBeenCalledWith({ id: 7, my_notes: 'x' });
     expect(onBack).toHaveBeenCalledOnce();
@@ -345,7 +350,7 @@ describe('NoteView editing', () => {
     const { user } = setup(testNote({ status: 'processing' }));
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.type(await myNotesBox(user), 'x');
     await user.tab();
     expect(noteUpdate).toHaveBeenCalledWith({ id: 7, my_notes: 'x' });
     await screen.findByText('All changes saved');
@@ -357,7 +362,7 @@ describe('NoteView editing', () => {
     const { user } = setup();
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.type(await myNotesBox(user), 'x');
     await user.tab();
     expect(await screen.findByText(TOO_LARGE)).toBeInTheDocument();
   });
@@ -366,8 +371,7 @@ describe('NoteView editing', () => {
     const { user, onBack } = setup();
     await ready();
 
-    const notes = screen.getByRole('textbox', { name: 'My notes' });
-    await user.click(notes);
+    await user.click(await myNotesBox(user));
     await user.paste('x'.repeat(MY_NOTES_LIMIT + 1));
     await user.click(button('Back'));
     expect(noteUpdate).not.toHaveBeenCalled();
@@ -669,7 +673,7 @@ describe('NoteView polling', () => {
     const { user } = setup(testNote({ status: 'processing' }));
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.type(await myNotesBox(user), 'x');
     noteUpdate.mockReturnValue(new Promise(() => {}));
     noteGet.mockClear();
     await tick(POLL_MS);
@@ -696,13 +700,11 @@ describe('NoteView layout (FR-11)', () => {
     const tablist = screen.getByRole('tablist', { name: 'Note' });
     const panels = screen.getAllByRole('tabpanel', { hidden: true });
     const speakers = screen.getByRole('region', { name: 'Speakers' });
-    const myNotes = screen.getByRole('textbox', { name: 'My notes' });
-    expect(panels).toHaveLength(2);
+    expect(panels).toHaveLength(3);
     for (const panel of panels) {
       expect(follows(tablist, panel)).toBe(true);
-      expect(follows(panel, myNotes)).toBe(true);
+      expect(follows(panel, speakers)).toBe(true);
     }
-    expect(follows(myNotes, speakers)).toBe(true);
     expect(document.querySelector('[data-sticky]')).toBeNull();
   });
 
@@ -769,12 +771,129 @@ describe('NoteView layout (FR-11)', () => {
   });
 
   it('puts the player in the bar with the tab row, before the panels', () => {
-    render(<Tabs summary={<p>summary</p>} transcript={null} aside={<p>aside</p>} player={<p>player</p>} />);
+    render(
+      <Tabs
+        summary={<p>summary</p>}
+        transcript={null}
+        myNotes={<p>mine</p>}
+        hasMyNotes={false}
+        aside={<p>aside</p>}
+        player={<p>player</p>}
+      />,
+    );
 
     const tablist = screen.getByRole('tablist');
     const player = screen.getByText('player');
     expect(player.parentElement?.parentElement).toBe(tablist.parentElement);
     expect(follows(player, screen.getByRole('tabpanel', { name: 'Summary' }))).toBe(true);
     expect(follows(screen.getByText('summary'), screen.getByText('aside'))).toBe(true);
+  });
+});
+
+describe('NoteView My notes tab (FR-12)', () => {
+  it('has three tabs, Summary first, and arrows, Home and End move across all of them', async () => {
+    const { user } = setup();
+    await ready();
+
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Summary', 'Transcript', 'My notes']);
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
+
+    tabs[0].focus();
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    expect(tabs[2]).toHaveFocus();
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, -1, 0]);
+    expect(screen.getByRole('tabpanel', { name: /^My notes/ })).toContainElement(
+      screen.getByRole('textbox', { name: 'My notes' }),
+    );
+    await user.keyboard('{ArrowRight}');
+    expect(tabs[0]).toHaveFocus();
+    await user.keyboard('{ArrowLeft}');
+    expect(tabs[2]).toHaveFocus();
+    await user.keyboard('{Home}');
+    expect(tabs[0]).toHaveFocus();
+    await user.keyboard('{End}');
+    expect(tabs[2]).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('has no "My notes" in the side column', async () => {
+    setup();
+    await ready();
+
+    expect(screen.queryByRole('textbox', { name: 'My notes' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'My notes' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Speakers' })).toBeVisible();
+  });
+
+  it('shows a dot on the tab only when "My notes" has text, also while typing', async () => {
+    const { user } = setup();
+    await ready();
+
+    const tab = screen.getByRole('tab', { name: 'My notes' });
+    expect(tab.querySelector('[aria-hidden="true"]')).toBeNull();
+
+    const box = await myNotesBox(user);
+    await user.type(box, 'a');
+    expect(noteUpdate).not.toHaveBeenCalled();
+    expect(tab).toHaveAccessibleName('My notes, has text');
+    expect(tab.querySelector('[aria-hidden="true"]')).not.toBeNull();
+
+    await user.clear(box);
+    expect(tab).toHaveAccessibleName('My notes');
+    expect(tab.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('shows the dot for a stored note with "My notes" text', async () => {
+    setup(testNote({ my_notes: 'mine' }));
+    await ready();
+
+    expect(screen.getByRole('tab', { name: 'My notes, has text' })).toBeInTheDocument();
+  });
+
+  it('keeps a draft across tab switches and saves it', async () => {
+    // Saves stall, so the draft is still a draft when the panel comes back.
+    noteUpdate.mockReturnValue(new Promise(() => {}));
+    const { user } = setup();
+    await ready();
+
+    await user.type(await myNotesBox(user), 'draft');
+    // Leaving the tab blurs the editor, which saves at once (FR-18).
+    await user.click(screen.getByRole('tab', { name: 'Summary' }));
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, my_notes: 'draft' });
+    expect(screen.getByRole('tab', { name: 'My notes, has text' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /^My notes/ }));
+    expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('draft');
+  });
+
+  it('grows the editor to its text', async () => {
+    vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get').mockReturnValue(1234);
+    const { user } = setup();
+    await ready();
+
+    const box = await myNotesBox(user);
+    await user.type(box, 'line{Enter}line');
+    expect(box.style.height).toBe('1234px');
+  });
+
+  it('keeps My notes selected and the text being typed across a poll', async () => {
+    const { user } = setup(testNote({ status: 'processing' }));
+    await ready();
+
+    await user.type(await myNotesBox(user), 'abc');
+    await tick(1000);
+    await tick(POLL_MS);
+    expect(screen.getByRole('tab', { name: /^My notes/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('abc');
+  });
+
+  it('renders no side column for a note with no speakers', async () => {
+    const { container } = setup(testNote({ speakers: [] }));
+    await ready();
+
+    expect(screen.queryByRole('region', { name: 'Speakers' })).not.toBeInTheDocument();
+    const panels = screen.getAllByRole('tabpanel', { hidden: true });
+    expect(panels[0].parentElement?.parentElement?.children).toHaveLength(1);
+    expect(container.textContent).not.toContain('Speakers');
   });
 });

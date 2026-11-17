@@ -189,13 +189,9 @@ function Editors({ note, autosave }: { note: Note; autosave: Autosave }) {
     <Tabs
       summary={<Summary note={note} autosave={autosave} editable={editable} />}
       transcript={note.transcript}
-      aside={
-        // "My notes" first: it is the user's own writing and must stay reachable however many speakers.
-        <>
-          <MyNotes autosave={autosave} />
-          <SpeakersPanel note={note} autosave={autosave} editable={editable} />
-        </>
-      }
+      myNotes={<MyNotes autosave={autosave} />}
+      hasMyNotes={autosave.value('my_notes').length > 0}
+      aside={note.speakers.length > 0 ? <SpeakersPanel note={note} autosave={autosave} editable={editable} /> : null}
     />
   );
 }
