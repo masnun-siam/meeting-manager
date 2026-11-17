@@ -32,15 +32,6 @@ if [ -z "$files" ]; then
 fi
 pick() { printf '%s\n' "$files" | grep -E "$1" || true; }
 
-# Added lines: the staged diff for a commit, the branch diff for a push (catches merge commits).
-added() {
-  case $stage in
-    commit) git diff --cached -U0 --no-color --diff-filter=ACMR -- "$@" ;;
-    push) git diff -U0 --no-color --diff-filter=ACMR "$base...HEAD" -- "$@" ;;
-    all) git diff -U0 --no-color --diff-filter=ACMR "$(git hash-object -t tree /dev/null)" HEAD -- "$@" ;;
-  esac
-}
-
 step "secrets"
 case $stage in
   commit) gitleaks git --pre-commit --staged --redact --no-banner . || fail "secrets in staged lines" ;;
@@ -54,20 +45,12 @@ case $stage in
 esac
 
 if [ "$stage" != all ]; then
-  step "no new lint, type or test suppressions"
-  # Code only: docs and these scripts name the patterns without using them.
-  hits=$(added '*.rs' '*.ts' '*.tsx' '*.js' | grep -E '^\+' | grep -v '^+++' \
-    | grep -nE '#!?\[(allow|expect)\(|cfg_attr\(.*(allow|expect)\(|biome-ignore|@ts-(ignore|nocheck|expect-error)|eslint-disable|\b(it|test|describe)\.(skip|only)\(|#\[ignore\]' || true)
-  [ -z "$hits" ] || { printf '%s\n' "$hits"; fail "new suppression (fix the cause instead)"; }
-
-  step "hygiene"
-  conflict=$(added . | grep -nE '^\+(<<<<<<<|>>>>>>>)( |$)' || true)
-  [ -z "$conflict" ] || { printf '%s\n' "$conflict"; fail "merge conflict markers"; }
-  while IFS= read -r f; do
-    [ -f "$f" ] || continue
-    size=$(wc -c <"$f")
-    [ "$size" -le 512000 ] || fail "$f is $((size / 1024)) KB (limit 500 KB)"
-  done <<<"$files"
+  # Same script as CI's hygiene job: suppressions, conflict markers, files over 500 KB.
+  case $stage in
+    commit) range=--cached ;;
+    push) range="$base...HEAD" ;;
+  esac
+  scripts/hooks/diff-guards.sh "$range" || fail "suppressions or hygiene"
 fi
 
 rs=$(pick '\.rs$')

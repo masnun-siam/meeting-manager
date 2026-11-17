@@ -71,6 +71,23 @@ echo 'export const c = 2;' >>extension/src/a.ts; git add extension/src/a.ts; res
 check "commit: biome gets the file relative to its package" '$g commit && calls | grep -q "^npx biome check .* src/a.ts$"'
 git reset -q; git checkout -q extension/src/a.ts
 
+# --- diff-guards.sh: suppressions and hygiene over a diff range (CI runs it over base...HEAD) ---
+dg=scripts/hooks/diff-guards.sh
+git checkout -q -b dg-probe
+printf '#[allow(dead_code)]\nfn s() {}\n' >>crates/meeting/src/a.rs; git commit -qam "suppression"
+check "diff-guards: a new #[allow] in the range fails" '! $dg origin/main...HEAD'
+git reset -q --hard origin/main
+head -c 600000 /dev/zero >big.bin; git add big.bin; git commit -qm "big"
+check "diff-guards: a 586 KB file in the range fails" '! $dg origin/main...HEAD'
+git reset -q --hard origin/main
+printf '<<<<<<< ours\n' >>extension/src/a.ts; git commit -qam "marker"
+check "diff-guards: a conflict marker in the range fails" '! $dg origin/main...HEAD'
+git reset -q --hard origin/main
+echo 'fn ok() {}' >>crates/meeting/src/a.rs; git commit -qam "clean"
+check "diff-guards: a clean range passes" '$dg origin/main...HEAD'
+check "diff-guards: an empty range passes" 'git reset -q --hard origin/main && $dg origin/main...HEAD'
+git checkout -q issue-1-x; git branch -q -D dg-probe
+
 # --- run.sh: protected branches (exit before Docker) ---
 check "run: a commit on main is refused" 'git checkout -q main && ! scripts/hooks/run.sh commit | grep -q x; git checkout -q issue-1-x'
 check "run: a commit on main names the rule" 'git checkout -q main; scripts/hooks/run.sh commit | grep -q "protected"; rc=$?; git checkout -q issue-1-x; [ $rc = 0 ]'
@@ -138,6 +155,7 @@ check "quickstart: README development block is make setup, up, check" 'sed -n "/
 w=$repo/.github/workflows
 check "ci: tool runs the changed-line coverage gate" 'grep -q "changed-lines-coverage.py" "$w/tool.yml"'
 check "ci: tool creates the folder its lcov report is written to" 'grep -q "mkdir -p coverage && cargo llvm-cov --workspace .*--output-path coverage/rust.lcov" "$w/tool.yml"'
+check "ci: guards run the suppression and hygiene checks over the PR range" 'grep -q "scripts/hooks/diff-guards.sh \"origin/" "$w/guards.yml"'
 check "ci: extension and desktop guard their coverage logs" 'grep -q coverage-log-guard "$w/extension.yml" && grep -q coverage-log-guard "$w/desktop.yml"'
 gl_ci=$(grep -o '[0-9a-f]\{64\}  gl.tgz' "$w/guards.yml" | cut -d' ' -f1)
 check "ci: gitleaks checksum matches the hook image" '[ -n "$gl_ci" ] && grep -q "gl_sum=$gl_ci" "$repo/docker/hooks.Dockerfile"'

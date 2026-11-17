@@ -33,6 +33,16 @@ jobs:
       - uses: actions/checkout@v5
       - run: make test-tooling
 
+  hygiene:
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # Suppressions, conflict markers and files over 500 KB in the PR's added lines, as the hooks check them.
+      - run: scripts/hooks/diff-guards.sh "origin/${{ github.base_ref }}...HEAD"
+
   pr-body:
     runs-on: ubuntu-latest
     steps:
