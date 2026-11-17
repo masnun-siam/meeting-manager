@@ -433,8 +433,10 @@ mod tests {
                 move || fixed.store(true, Ordering::SeqCst)
             }),
         );
-        // Keep a rebuild pending past the first health tick (20 ms), then let it succeed.
-        for _ in 0..50 {
+        // Keep a rebuild pending past the first health tick (20 ms), then let it succeed. Bounded
+        // by time, not count: on a loaded runner 50 short sleeps overshot the 500 ms give-up.
+        let burst = Instant::now();
+        while burst.elapsed() < 60 * MS {
             fake.tx.send(Msg::Changed).unwrap();
             thread::sleep(2 * MS);
         }
