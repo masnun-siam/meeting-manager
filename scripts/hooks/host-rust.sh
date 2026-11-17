@@ -14,9 +14,10 @@ jobs=$("$guards/changed-files.sh" --jobs)
 logs=.hook-logs
 mkdir -p "$logs" coverage
 
+# Pre-push checks the crate only when it changed (owner, #186); make check and CI always do.
 if [ "$stage" = push ]; then
   files=$(BLUBIRD_NO_FETCH=1 "$guards/changed-files.sh" --push) || { echo "cannot resolve the files to check"; exit 1; }
-  if ! printf '%s\n' "$files" | grep -qE '^(desktop/src-tauri/|crates/meeting/|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+  if ! printf '%s\n' "$files" | grep -q '^desktop/src-tauri/'; then
     echo "Tauri crate: nothing to check"
     exit 0
   fi

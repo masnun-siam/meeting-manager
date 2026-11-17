@@ -98,12 +98,12 @@ Three path-filtered workflows run on pull requests and pushes to `main`, `guards
 | Stage | Checks (`scripts/hooks/gates.sh`) |
 |---|---|
 | pre-commit | no commits on `main`; only the root `CLAUDE.md`; no generated agent files; secrets in staged lines; no new lint, type or test suppressions (`#[allow`, `@ts-ignore`, `biome-ignore`, `it.skip`, …); no file over 500 KB; no conflict markers; `rustfmt`; `biome check` |
-| pre-push | no push to `main`; files changed since `origin/main`: secrets in the branch's commits, the commit checks again, clippy, `tsc`, the related tests with coverage and ≥80% of changed lines covered; then the Tauri crate on the host when it or `crates/meeting` changed |
+| pre-push | no push to `main`; files changed since `origin/main`: secrets in the branch's commits, the commit checks again, clippy, `tsc`, the related tests with coverage and ≥80% of changed lines covered; then the Tauri crate on the host only when `desktop/src-tauri/` changed (`make check` and CI always build it) |
 
 - Workers: `max(1, nproc - 2)` where the work runs; `HOOK_JOBS` overrides.
 - Two `meeting` tests need macOS and are `#[cfg(target_os = "macos")]`: they run in macOS CI only.
 - Test stubs that are exec'd are written with `test_support::write_script`, never `fs::write`: on Linux a parallel test's fork can hold the write descriptor and the exec fails with "Text file busy".
-- Pre-push for a one-file change in `crates/meeting` takes about 80 s warm (the full `meeting` suite with coverage plus the Tauri crate); a new worktree's first push builds the Tauri crate cold (about 8 min).
+- Pre-push skips the Tauri crate unless `desktop/src-tauri/` changed (owner decision, #186): a `crates/meeting` change that breaks it is caught by `make check` and CI. A new worktree's first push that touches the Tauri crate builds it cold (about 8 min).
 - Formatting rules: [extension.md](extension.md#conventions) (biome), `cargo fmt` defaults (Rust).
 
 ## Releasing

@@ -100,6 +100,16 @@ check "push: Rust change runs clippy and llvm-cov" 'calls | grep -q "cargo clipp
 check "push: uncovered Rust change fails" 'STUB_LCOV="$cov_bad" $g push; [ $? = 1 ]'
 check "push: a missing coverage report fails" 'STUB_LCOV="" $g push; [ $? = 1 ]'
 check "push: failing tests fail" 'STUB_CARGO_RC=1 STUB_LCOV="$cov_ok" $g push; [ $? = 1 ]'
+# host-rust.sh: pre-push builds the Tauri crate only when desktop/src-tauri changed (owner, #186).
+h=scripts/hooks/host-rust.sh; reset_calls
+printf '#!/bin/sh\nexit 0\n' >"$bin/cargo-llvm-cov" && chmod +x "$bin/cargo-llvm-cov"
+check "tauri: a crates/meeting change alone has nothing to check" 'HOME=$t/nohome $h push | grep -qx "Tauri crate: nothing to check"'
+check "tauri: a crates/meeting change alone runs no cargo" '! calls | grep -q meeting-desktop'
+mkdir -p desktop/src-tauri/src desktop/dist && echo 'fn d() {}' >desktop/src-tauri/src/d.rs && : >desktop/dist/index.html
+git add desktop/src-tauri && git commit -qm "tauri change"; reset_calls
+check "tauri: a desktop/src-tauri change runs clippy on the crate" 'STUB_LCOV="SF:$r/desktop/src-tauri/src/d.rs\nDA:1,1\nend_of_record\n" HOME=$t/nohome $h push; calls | grep -q "cargo clippy -p meeting-desktop"'
+check "tauri: a failing desktop/src-tauri clippy fails the push" 'STUB_CARGO_RC=1 HOME=$t/nohome $h push; [ $? = 1 ]'
+git reset -q --hard origin/main
 unset BLUBIRD_NO_FETCH
 
 # --- Makefile ---
