@@ -7,8 +7,8 @@ pub(crate) mod media;
 mod trash;
 
 use std::collections::{HashMap, HashSet};
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use meeting::Language;
 use meeting::config::check_recording;
@@ -281,7 +281,13 @@ pub fn delete_recording(env: &Env, notes: &Notes, id: i64) -> Reply {
     let config = env
         .config()
         .map_err(|reason| reply::err("delete_failed", reason))?;
-    let recording = check_recording(&config.recordings_dir, &row.recording_path).map_err(|_| {
+    // The rule follows a symlink to its target, which could be another note's recording: a
+    // symlinked `recording.<ext>` is refused, so only the row's own file can move.
+    let linked = fs::symlink_metadata(&row.recording_path).is_ok_and(|m| m.is_symlink());
+    let own = check_recording(&config.recordings_dir, &row.recording_path)
+        .ok()
+        .filter(|_| !linked);
+    let recording = own.ok_or_else(|| {
         tracing::warn!(id, "recording not in its own folder, not deleted");
         reply::err(
             "delete_failed",
@@ -1672,6 +1678,11 @@ mod tests {
         let outside = home.join("Elsewhere/2026-10-19 1430/recording.webm");
         let renamed = home.join("Recordings/2026-10-19 1500/audio.webm");
         let linked = home.join("Recordings/2026-10-19 1600/recording.webm");
+        // A link to another note's recording, inside the recordings folder.
+        let sibling = f.recording("2026-10-19 1700");
+        let linked_in = home.join("Recordings/2026-10-19 1800/recording.webm");
+        fs::create_dir_all(linked_in.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&sibling, &linked_in).unwrap();
         for path in [&outside, &renamed] {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, b"audio").unwrap();
@@ -1679,7 +1690,7 @@ mod tests {
         fs::create_dir_all(linked.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&outside, &linked).unwrap();
 
-        for path in [&outside, &renamed, &linked] {
+        for path in [&outside, &renamed, &linked, &linked_in] {
             let id = f
                 .store()
                 .merge_run(path, &done("Secret plans", "2026-10-19T14:30"))
