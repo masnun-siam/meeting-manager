@@ -92,6 +92,8 @@ struct RunInfo {
     recorded_at: String,
     language: Option<Language>,
     event: Option<EventLink>,
+    /// Read from `context.json` whatever the context flag; `[]` without a usable file.
+    attendees: Vec<String>,
 }
 
 /// What a run has recorded so far; `meta` stays `None` until the stage plan is known.
@@ -185,7 +187,7 @@ impl State<'_> {
             event: run.event.clone(),
             source: run.source,
             recorded_at: run.recorded_at.clone(),
-            attendees: None,
+            attendees: Some(run.attendees.clone()),
         };
         fill(&mut result);
         track
@@ -575,13 +577,14 @@ fn start_tracking(
         recorded_at,
         language: language.or(stored.map(|m| m.language)),
         event: ctx.and_then(|c| c.calendar_event.as_ref()).map(event_link),
+        attendees: ctx.map(context::attendee_names).unwrap_or_default(),
     };
     let start = RunStart {
         recording: &p.recording,
         source: run.source,
         recorded_at: &run.recorded_at,
         language: run.language,
-        attendees: None,
+        attendees: Some(&run.attendees),
     };
     if let Err(e) = store.start_run(&start) {
         tracing::warn!("store start failed: {}", store::error_kind(&e));
@@ -1503,6 +1506,7 @@ mod tests {
     fn the_row_is_processing_while_claude_runs() {
         let mut env = setup("pipe-store-inflight", vec![(200, EN)]);
         env.with_desktop();
+        env.write_context(&desktop_event());
         // An earlier failure, so the test sees the run clear it.
         stub(&env.tools, "exit 1");
         failed(env.run(Some(Language::En), None).0);
@@ -1536,6 +1540,7 @@ mod tests {
         let during = during.expect("a row while the run is in flight");
         assert_eq!(during.status, Status::Processing);
         assert_eq!((during.failed_stage, during.error), (None, None));
+        assert_eq!(during.attendees, Some(vec!["Rahim".to_string()]));
         done(ending);
         assert_eq!(env.row().status, Status::Done);
     }
@@ -1833,6 +1838,89 @@ mod tests {
         assert_eq!(env.row().event, Some(event_link()));
         assert_eq!((env.sent(), env.note()), baseline);
         assert_eq!(reads(), 0);
+    }
+
+    fn names(list: &[&str]) -> Option<Vec<String>> {
+        Some(list.iter().map(|n| n.to_string()).collect())
+    }
+
+    /// A Meet context with a three-name roster and no calendar match.
+    fn meet_roster() -> Value {
+        let mut context = meet();
+        context["meeting_id"] = json!("xyz-abcd-efg");
+        context["participants"] = json!([{"name": "Me", "self": true},
+            {"name": "Rahim", "self": false}, {"name": "Nadia", "self": false}]);
+        context
+    }
+
+    #[test]
+    fn attendees_are_stored_with_the_context_flag_off_and_go_nowhere_else() {
+        let mut env = setup("pipe-attendees-off", vec![(200, EN)]);
+        let baseline = env.baseline();
+        env.with_desktop();
+        env.write_context(&desktop_event());
+        done(env.run(None, None).0);
+        assert_eq!(env.row().attendees, names(&["Rahim"]));
+        assert_eq!((env.sent(), env.note()), baseline);
+
+        // A rerun rewrites them from the current file.
+        env.write_context(&meet_roster());
+        done(env.run(None, None).0);
+        assert_eq!(env.row().attendees, names(&["Me", "Rahim", "Nadia"]));
+        assert_eq!((env.sent(), env.note()), baseline);
+    }
+
+    #[test]
+    fn a_meet_roster_is_stored_with_the_context_flag_on() {
+        let mut env = setup("pipe-attendees-roster", vec![(200, EN)]);
+        env.with_desktop();
+        env.with_context(&meet_roster());
+        let _calendar = serve_calendar(vec![ok(GOOGLE)]);
+        done(env.run(Some(Language::En), None).0);
+        let row = env.row();
+        assert_eq!(row.status, Status::Done);
+        assert_eq!(row.attendees, names(&["Me", "Rahim", "Nadia"]));
+    }
+
+    #[test]
+    fn attendees_are_kept_by_failed_and_no_speech_runs() {
+        let mut env = setup("pipe-attendees-failed", vec![(200, EN)]);
+        env.with_desktop();
+        env.write_context(&desktop_event());
+        stub(&env.tools, "exit 1");
+        failed(env.run(Some(Language::En), None).0);
+        let row = env.row();
+        assert_eq!(
+            (row.status, row.attendees),
+            (Status::Failed, names(&["Rahim"]))
+        );
+
+        let mut env = setup("pipe-attendees-empty", vec![(200, EMPTY)]);
+        env.with_desktop();
+        env.write_context(&desktop_event());
+        assert_eq!(done(env.run(Some(Language::En), None).0), NO_SPEECH);
+        let row = env.row();
+        assert_eq!(
+            (row.status, row.attendees),
+            (Status::NoSpeech, names(&["Rahim"]))
+        );
+    }
+
+    #[test]
+    fn no_usable_context_stores_an_empty_list() {
+        let mut env = setup("pipe-attendees-none", vec![(200, EN); 3]);
+        env.with_desktop();
+        done(env.run(Some(Language::En), None).0);
+        assert_eq!(env.row().attendees, names(&[]));
+
+        let mut rejected = desktop_event();
+        rejected["version"] = json!(2);
+        for content in ["{garbled".to_string(), rejected.to_string()] {
+            fs::write(env.file("context.json"), content).unwrap();
+            done(env.run(Some(Language::En), None).0);
+            let row = env.row();
+            assert_eq!((row.status, row.attendees), (Status::Done, names(&[])));
+        }
     }
 
     #[test]
