@@ -6,6 +6,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import * as api from './api';
+import type { NoteRerunError } from './api';
 
 type Case = [name: string, run: () => Promise<unknown>, command: string, args: Record<string, unknown> | undefined];
 
@@ -58,6 +59,15 @@ const cases: Case[] = [
   ],
   ['noteRerun', () => api.noteRerun({ id: 7, replace_edits: true }), 'note_rerun', { id: 7, replace_edits: true }],
   ['noteOpen', () => api.noteOpen({ id: 7, what: 'folder' }), 'note_open', { id: 7, what: 'folder' }],
+  [
+    'noteOpen recording',
+    () => api.noteOpen({ id: 7, what: 'recording' }),
+    'note_open',
+    { id: 7, what: 'recording' },
+  ],
+  ['noteCopy', () => api.noteCopy({ id: 7, format: 'rich' }), 'note_copy', { id: 7, format: 'rich' }],
+  ['speakerSuggestions', () => api.speakerSuggestions({ id: 7 }), 'speaker_suggestions', { id: 7 }],
+  ['noteDeleteRecording', () => api.noteDeleteRecording({ id: 7 }), 'note_delete_recording', { id: 7 }],
   ['rescan', () => api.rescan(), 'rescan', undefined],
   ['rescanStatus', () => api.rescanStatus(), 'rescan_status', undefined],
   ['health', () => api.health(), 'health', undefined],
@@ -76,8 +86,22 @@ beforeEach(() => {
 
 describe('api', () => {
   it('has one case per exported command', () => {
-    expect(cases.map(([name]) => name).sort()).toEqual(Object.keys(api).sort());
-    expect(cases).toHaveLength(26);
+    const commands = new Set(cases.map(([name]) => name.split(' ')[0]));
+    const exported = Object.keys(api).filter((name) => name !== 'recordingUrl');
+    expect([...commands].sort()).toEqual(exported.sort());
+    expect(commands.size).toBe(29);
+  });
+
+  it('builds the recording URL the player loads, without invoking anything', () => {
+    expect(api.recordingUrl(7)).toBe('recording://localhost/7');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('takes recording_deleted as a rerun error code, and no unknown code', () => {
+    const deleted: NoteRerunError = 'recording_deleted';
+    // @ts-expect-error: not a code `note_rerun` answers.
+    const unknown: NoteRerunError = 'no_such_code';
+    expect([deleted, unknown]).toHaveLength(2);
   });
 
   it.each(cases)('%s invokes its command with snake_case arguments', async (_name, run, command, args) => {
@@ -101,6 +125,13 @@ describe('api', () => {
     invoke.mockResolvedValue(reply);
 
     await expect(api.recorderStatus()).resolves.toBe(reply);
+  });
+
+  it('returns a delete-recording error reply unchanged', async () => {
+    const reply = { ok: false, code: 'already_processing', message: 'The note is being processed' };
+    invoke.mockResolvedValue(reply);
+
+    await expect(api.noteDeleteRecording({ id: 7 })).resolves.toBe(reply);
   });
 
   it.each([

@@ -33,6 +33,7 @@ function row(extra: Partial<NotesListRow> = {}): NotesListRow {
     stage: null,
     error: null,
     recording_missing: false,
+    recording_deleted: false,
     ...extra,
   };
 }
