@@ -25,7 +25,11 @@ use crate::jobs::now_utc;
 const INFERRED: &str = " (inferred)";
 const MY_NOTES_MAX_BYTES: usize = 1_048_576;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const MIGRATIONS: &[&str] = &[SCHEMA_V1];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
+const USED_BEFORE_MAX: usize = 50;
+
+/// The setting set to `"true"` once the one-time attendee fill has finished (FR-3).
+pub const ATTENDEES_FILLED: &str = "attendees_filled";
 
 // `meetings_fts.rowid` is `meetings.id`. The triggers fire only for the indexed columns, so the
 // frequent status-only updates never re-index a large transcript.
@@ -78,11 +82,18 @@ CREATE TRIGGER meetings_ad AFTER DELETE ON meetings BEGIN
 END;
 "#;
 
+// The FTS triggers fire only for the indexed columns, so neither column re-indexes anything.
+const SCHEMA_V2: &str = r#"
+ALTER TABLE meetings ADD COLUMN attendees TEXT;
+ALTER TABLE meetings ADD COLUMN recording_deleted_at TEXT;
+"#;
+
 const COLUMNS: &str = "id, recording_path, source, recorded_at, duration_s, language, status, \
      failed_stage, error, title, title_edited, body_md, body_edited, speakers, my_notes, \
-     transcript, event, vault_note_path, created_at, updated_at";
+     transcript, event, vault_note_path, created_at, updated_at, attendees, recording_deleted_at";
 const LIST_COLUMNS: &str = "m.id, m.recording_path, m.source, m.recorded_at, m.duration_s, \
-     m.language, m.status, m.failed_stage, m.error, m.title";
+     m.language, m.status, m.failed_stage, m.error, m.title, \
+     m.recording_deleted_at IS NOT NULL AS recording_deleted";
 
 pub fn default_path(home: &Path) -> PathBuf {
     home.join("Library/Application Support/meeting-manager/notes.sqlite")
@@ -200,6 +211,11 @@ pub struct Row {
     pub vault_note_path: Option<PathBuf>,
     pub created_at: String,
     pub updated_at: String,
+    /// `None` until something filled it; `Some(vec![])` means looked and found none.
+    pub attendees: Option<Vec<String>>,
+    /// Set by Delete recording (FR-9); never sent to the UI (D14).
+    #[serde(skip)]
+    pub recording_deleted_at: Option<String>,
 }
 
 /// What `list` and `earlier` return: never the transcript, body, speakers or "My notes".
@@ -215,6 +231,7 @@ pub struct ListRow {
     pub failed_stage: Option<String>,
     pub error: Option<String>,
     pub title: Option<String>,
+    pub recording_deleted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -223,6 +240,8 @@ pub struct RunStart<'a> {
     pub source: Source,
     pub recorded_at: &'a str,
     pub language: Option<Language>,
+    /// `None` keeps the stored list.
+    pub attendees: Option<&'a [String]>,
 }
 
 /// The outcome of one pipeline run. A `None` never overwrites a stored value.
@@ -241,6 +260,7 @@ pub struct RunResult {
     pub event: Option<EventLink>,
     pub source: Source,
     pub recorded_at: String,
+    pub attendees: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -375,21 +395,25 @@ impl Store {
     /// Marks the recording's row as processing (creating it), leaving every note field alone.
     pub fn start_run(&self, run: &RunStart) -> anyhow::Result<i64> {
         let now = now_utc();
+        let attendees = run.attendees.map(serde_json::to_string).transpose()?;
         self.conn
             .query_row(
                 "INSERT INTO meetings (recording_path, source, recorded_at, language, status, \
-                 created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'processing', ?5, ?5) \
+                 created_at, updated_at, attendees) \
+                 VALUES (?1, ?2, ?3, ?4, 'processing', ?5, ?5, ?6) \
                  ON CONFLICT(recording_path) DO UPDATE SET status = 'processing', \
                  failed_stage = NULL, error = NULL, source = excluded.source, \
                  recorded_at = excluded.recorded_at, \
                  language = coalesce(excluded.language, language), \
+                 attendees = coalesce(excluded.attendees, attendees), \
                  updated_at = excluded.updated_at RETURNING id",
                 params![
                     utf8(run.recording)?,
                     run.source.as_str(),
                     run.recorded_at,
                     run.language.map(language_str),
-                    now
+                    now,
+                    attendees
                 ],
                 |r| r.get(0),
             )
@@ -557,6 +581,87 @@ impl Store {
         Ok(())
     }
 
+    /// Sets (UTC now) or clears the "recording deleted" mark (FR-9, FR-10). Leaves `updated_at`
+    /// alone (D14). No matching row is not an error.
+    pub fn set_recording_deleted(&self, id: i64, deleted: bool) -> anyhow::Result<()> {
+        self.conn
+            .execute(
+                "UPDATE meetings SET recording_deleted_at = ?1 WHERE id = ?2",
+                params![deleted.then(now_utc), id],
+            )
+            .context("cannot write the notes database")?;
+        Ok(())
+    }
+
+    /// The recording paths of the rows whose recording was deleted.
+    pub fn deleted_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT recording_path FROM meetings WHERE recording_deleted_at IS NOT NULL \
+                 ORDER BY id",
+            )
+            .context("cannot read the notes database")?;
+        let paths = statement
+            .query_map([], |r| r.get::<_, String>(0).map(PathBuf::from))
+            .and_then(Iterator::collect)
+            .context("cannot read the notes database")?;
+        Ok(paths)
+    }
+
+    /// Id and recording path of every row whose attendees were never filled (a `[]` is filled).
+    pub fn without_attendees(&self) -> anyhow::Result<Vec<(i64, PathBuf)>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT id, recording_path FROM meetings WHERE attendees IS NULL ORDER BY id")
+            .context("cannot read the notes database")?;
+        let rows = statement
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get::<_, String>(1).map(PathBuf::from)?))
+            })
+            .and_then(Iterator::collect)
+            .context("cannot read the notes database")?;
+        Ok(rows)
+    }
+
+    /// Writes the attendees only while none are stored, so a list a run or rescan wrote first
+    /// wins. No matching row is not an error.
+    pub fn fill_attendees(&self, id: i64, names: &[String]) -> anyhow::Result<()> {
+        self.conn
+            .execute(
+                "UPDATE meetings SET attendees = ?1 WHERE id = ?2 AND attendees IS NULL",
+                params![serde_json::to_string(names)?, id],
+            )
+            .context("cannot write the notes database")?;
+        Ok(())
+    }
+
+    /// FR-4: the speaker names the user typed, across all notes, newest note first, distinct
+    /// ignoring case (the newest spelling wins), at most 50.
+    pub fn used_before(&self) -> anyhow::Result<Vec<String>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT speakers FROM meetings ORDER BY updated_at DESC, id DESC")
+            .context("cannot read the notes database")?;
+        let rows: Vec<Vec<SpeakerRow>> = statement
+            .query_map([], |r| json(&r.get::<_, String>(0)?, "speakers"))
+            .and_then(Iterator::collect)
+            .context("cannot read the notes database")?;
+        // SQLite's `lower()` folds ASCII only, so the case-insensitive dedupe happens here.
+        let mut seen = std::collections::HashSet::new();
+        let mut names = Vec::new();
+        let edited = rows.into_iter().flatten().filter(|s| s.name_edited);
+        for name in edited.filter_map(|s| s.name) {
+            if names.len() == USED_BEFORE_MAX {
+                break;
+            }
+            if !name.trim().is_empty() && seen.insert(name.to_lowercase()) {
+                names.push(name);
+            }
+        }
+        Ok(names)
+    }
+
     // IMMEDIATE takes the write lock before the first read: a deferred read-then-write upgrade
     // can fail at once with SQLITE_BUSY_SNAPSHOT instead of waiting for the busy timeout.
     fn write_tx(&self) -> anyhow::Result<Transaction<'_>> {
@@ -692,6 +797,11 @@ fn row_of(r: &rusqlite::Row) -> rusqlite::Result<Row> {
             .map(PathBuf::from),
         created_at: r.get("created_at")?,
         updated_at: r.get("updated_at")?,
+        attendees: r
+            .get::<_, Option<String>>("attendees")?
+            .map(|text| json(&text, "attendees"))
+            .transpose()?,
+        recording_deleted_at: r.get("recording_deleted_at")?,
     })
 }
 
@@ -707,6 +817,7 @@ fn list_row_of(r: &rusqlite::Row) -> rusqlite::Result<ListRow> {
         failed_stage: r.get("failed_stage")?,
         error: r.get("error")?,
         title: r.get("title")?,
+        recording_deleted: r.get("recording_deleted")?,
     })
 }
 
@@ -725,15 +836,21 @@ fn find(
     .context("cannot read the notes database")
 }
 
-/// Inserts the row, or updates the one holding its recording path. `id`, `created_at` and
-/// `vault_note_path` of an existing row are never changed here.
+/// Inserts the row, or updates the one holding its recording path. `id`, `created_at`,
+/// `vault_note_path` and `recording_deleted_at` of an existing row are never changed here.
 fn save(conn: &Connection, row: &Row) -> anyhow::Result<()> {
     let event = row.event.as_ref().map(serde_json::to_string).transpose()?;
+    let attendees = row
+        .attendees
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
     conn.execute(
         "INSERT INTO meetings (recording_path, source, recorded_at, duration_s, language, \
          status, failed_stage, error, title, title_edited, body_md, body_edited, speakers, \
-         my_notes, transcript, event, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
+         my_notes, transcript, event, created_at, updated_at, attendees) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, \
+         ?19) \
          ON CONFLICT(recording_path) DO UPDATE SET source = excluded.source, \
          recorded_at = excluded.recorded_at, duration_s = excluded.duration_s, \
          language = excluded.language, status = excluded.status, \
@@ -741,7 +858,8 @@ fn save(conn: &Connection, row: &Row) -> anyhow::Result<()> {
          title_edited = excluded.title_edited, body_md = excluded.body_md, \
          body_edited = excluded.body_edited, speakers = excluded.speakers, \
          my_notes = excluded.my_notes, transcript = excluded.transcript, \
-         event = excluded.event, updated_at = excluded.updated_at",
+         event = excluded.event, updated_at = excluded.updated_at, \
+         attendees = excluded.attendees",
         params![
             utf8(&row.recording_path)?,
             row.source.as_str(),
@@ -761,6 +879,7 @@ fn save(conn: &Connection, row: &Row) -> anyhow::Result<()> {
             event,
             row.created_at,
             row.updated_at,
+            attendees,
         ],
     )
     .context("cannot write the notes database")?;
@@ -791,6 +910,8 @@ fn merged(stored: Option<Row>, recording: &Path, result: &RunResult, now: &str) 
         vault_note_path: None,
         created_at: now.to_owned(),
         updated_at: String::new(),
+        attendees: None,
+        recording_deleted_at: None,
     });
     row.speakers = merged_speakers(&row.speakers, &result.speakers);
     if let (false, Some(title)) = (row.title_edited, &result.title) {
@@ -803,6 +924,7 @@ fn merged(stored: Option<Row>, recording: &Path, result: &RunResult, now: &str) 
     row.duration_s = result.duration_s.or(row.duration_s);
     row.transcript = result.transcript.clone().or(row.transcript);
     row.event = result.event.clone().or(row.event);
+    row.attendees = result.attendees.clone().or(row.attendees);
     row.status = result.status;
     row.failed_stage = result.failed_stage.clone();
     row.error = result.error.clone();
@@ -1012,6 +1134,7 @@ mod tests {
             event: None,
             source: Source::Browser,
             recorded_at: "2026-10-19T14:30".into(),
+            attendees: None,
         }
     }
 
@@ -1112,7 +1235,7 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(mode(&path), 0o600);
-        assert_eq!(get("user_version"), "Integer(1)");
+        assert_eq!(get("user_version"), "Integer(2)");
         assert_eq!(get("journal_mode"), "Text(\"wal\")");
         assert_eq!(get("busy_timeout"), "Integer(5000)");
         let mut statement = store
@@ -1192,8 +1315,10 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(row.title.as_deref(), Some("Kept"));
-        assert_eq!(version, 1);
+        assert_eq!((row.attendees, row.recording_deleted_at), (None, None));
+        assert_eq!(version, 2);
         drop(store);
+        assert!(Store::open(&path).is_ok());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1326,6 +1451,7 @@ mod tests {
             source: Source::Browser,
             recorded_at: "2026-10-19T14:30",
             language: None,
+            attendees: None,
         };
         let id = store.start_run(&start).unwrap();
         let fresh = store.get(id).unwrap().unwrap();
@@ -1648,6 +1774,7 @@ mod tests {
             source: Source::Browser,
             recorded_at: "2026-10-19T14:30",
             language: None,
+            attendees: None,
         };
         let no_speech = RunResult {
             status: Status::NoSpeech,
@@ -1909,7 +2036,7 @@ mod tests {
                 .conn
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(version, 1);
+            assert_eq!(version, 2);
         }
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -2311,6 +2438,7 @@ mod tests {
                 failed_stage: None,
                 error: None,
                 title: Some("T".into()),
+                recording_deleted: false,
             }]
         );
         let json = serde_json::to_value(&listed[0]).unwrap();
@@ -2444,6 +2572,289 @@ mod tests {
         let row = store.merge_run(Path::new(REC), &done("T2", "B2")).unwrap();
         assert_eq!(row.title.as_deref(), Some("Mine"));
         drop((store, other));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A row at `path` holding `speakers` as (name, name_edited), last changed at `updated_at`.
+    fn with_speakers(store: &Store, path: &str, updated_at: &str, speakers: &[(&str, bool)]) {
+        let id = add(store, path, "2026-10-19T14:30", "T", "");
+        let speakers: Vec<SpeakerRow> = speakers
+            .iter()
+            .enumerate()
+            .map(|(i, (name, name_edited))| SpeakerRow {
+                label: format!("Speaker {i}"),
+                name: Some((*name).into()),
+                evidence: String::new(),
+                name_edited: *name_edited,
+            })
+            .collect();
+        store
+            .conn
+            .execute(
+                "UPDATE meetings SET speakers = ?1, updated_at = ?2 WHERE id = ?3",
+                params![serde_json::to_string(&speakers).unwrap(), updated_at, id],
+            )
+            .unwrap();
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn attendees_follow_runs_and_none_never_erases() {
+        let (dir, store) = store("store-attendees-runs");
+        let start = |attendees: Option<&[String]>| {
+            store
+                .start_run(&RunStart {
+                    recording: Path::new(REC),
+                    source: Source::Browser,
+                    recorded_at: "2026-10-19T14:30",
+                    language: None,
+                    attendees,
+                })
+                .unwrap()
+        };
+        let first = names(&["Rahim", "Karim"]);
+        let id = start(Some(&first));
+        assert_eq!(
+            store.get(id).unwrap().unwrap().attendees,
+            Some(first.clone())
+        );
+        start(None);
+        assert_eq!(
+            store.get(id).unwrap().unwrap().attendees,
+            Some(first.clone())
+        );
+        let second = names(&["Selina"]);
+        start(Some(&second));
+        assert_eq!(
+            store.get(id).unwrap().unwrap().attendees,
+            Some(second.clone())
+        );
+
+        let row = store.merge_run(Path::new(REC), &done("T", "B")).unwrap();
+        assert_eq!(row.attendees, Some(second));
+        let third = RunResult {
+            attendees: Some(names(&["Rahim"])),
+            ..done("T", "B")
+        };
+        let row = store.merge_run(Path::new(REC), &third).unwrap();
+        assert_eq!(row.attendees, Some(names(&["Rahim"])));
+        let empty = RunResult {
+            attendees: Some(vec![]),
+            ..done("T", "B")
+        };
+        let row = store.merge_run(Path::new(REC), &empty).unwrap();
+        assert_eq!(row.attendees, Some(vec![]));
+        assert_eq!(store.get(id).unwrap().unwrap().attendees, Some(vec![]));
+        assert!(store.without_attendees().unwrap().is_empty());
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fill_attendees_fills_only_rows_never_filled() {
+        let (dir, store) = store("store-attendees-fill");
+        let a = add(&store, "/r/a.webm", "2026-10-19T14:30", "A", "");
+        let b = add(&store, "/r/b.webm", "2026-10-19T14:31", "B", "");
+        let filled = RunResult {
+            attendees: Some(vec![]),
+            ..done("C", "")
+        };
+        store.merge_run(Path::new("/r/c.webm"), &filled).unwrap();
+        assert_eq!(
+            store.without_attendees().unwrap(),
+            [
+                (a, PathBuf::from("/r/a.webm")),
+                (b, PathBuf::from("/r/b.webm"))
+            ]
+        );
+        let before = store.get(a).unwrap().unwrap();
+        store.fill_attendees(a, &names(&["Rahim"])).unwrap();
+        store.fill_attendees(a, &names(&["Other"])).unwrap();
+        store.fill_attendees(999, &names(&["Nobody"])).unwrap();
+        let after = store.get(a).unwrap().unwrap();
+        assert_eq!(after.attendees, Some(names(&["Rahim"])));
+        assert_eq!(after.updated_at, before.updated_at);
+        let ran_first = RunResult {
+            attendees: Some(names(&["From run"])),
+            ..done("B", "")
+        };
+        store.merge_run(Path::new("/r/b.webm"), &ran_first).unwrap();
+        store.fill_attendees(b, &names(&["From fill"])).unwrap();
+        assert_eq!(
+            store.get(b).unwrap().unwrap().attendees,
+            Some(names(&["From run"]))
+        );
+        assert!(store.without_attendees().unwrap().is_empty());
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_deleted_mark_is_set_cleared_and_kept_by_runs_and_edits() {
+        let (dir, store) = store("store-deleted-mark");
+        let a = add(&store, "/r/a.webm", "2026-10-19T14:30", "A", "");
+        add(&store, "/r/b.webm", "2026-10-19T14:31", "B", "");
+        let before = store.get(a).unwrap().unwrap();
+        let fts = |store: &Store| -> i64 {
+            store
+                .conn
+                .query_row("SELECT count(*) FROM meetings_fts", [], |r| r.get(0))
+                .unwrap()
+        };
+        let indexed = fts(&store);
+        assert!(store.deleted_paths().unwrap().is_empty());
+
+        store.set_recording_deleted(a, true).unwrap();
+        store.set_recording_deleted(999, true).unwrap();
+        let marked = store.get(a).unwrap().unwrap();
+        let at = marked.recording_deleted_at.clone().unwrap();
+        assert_eq!(at.len(), 20);
+        assert!(at.ends_with('Z') && at.as_bytes()[10] == b'T');
+        assert_eq!(marked.updated_at, before.updated_at);
+        assert_eq!(fts(&store), indexed);
+        assert_eq!(store.deleted_paths().unwrap(), [Path::new("/r/a.webm")]);
+        let listed = store.list(None).unwrap();
+        let deleted: Vec<(i64, bool)> =
+            listed.iter().map(|r| (r.id, r.recording_deleted)).collect();
+        assert!(deleted.contains(&(a, true)));
+        assert_eq!(deleted.iter().filter(|(_, d)| *d).count(), 1);
+
+        store
+            .start_run(&RunStart {
+                recording: Path::new("/r/a.webm"),
+                source: Source::Browser,
+                recorded_at: "2026-10-19T14:30",
+                language: None,
+                attendees: Some(&names(&["Rahim"])),
+            })
+            .unwrap();
+        store.merge_run(Path::new("/r/a.webm"), &failed()).unwrap();
+        store.edit(a, Edit::MyNotes("mine".into())).unwrap();
+        store.clear_edits(a).unwrap();
+        store
+            .moved(Path::new("/r/a.webm"), Path::new("/archive/a.webm"))
+            .unwrap();
+        let kept = store.get(a).unwrap().unwrap();
+        assert_eq!(kept.recording_deleted_at, Some(at));
+        assert_eq!(
+            store.deleted_paths().unwrap(),
+            [Path::new("/archive/a.webm")]
+        );
+
+        let edited_at = kept.updated_at.clone();
+        store.set_recording_deleted(a, false).unwrap();
+        let cleared = store.get(a).unwrap().unwrap();
+        assert_eq!(cleared.recording_deleted_at, None);
+        assert_eq!(cleared.updated_at, edited_at);
+        assert!(store.deleted_paths().unwrap().is_empty());
+        assert!(
+            store
+                .list(None)
+                .unwrap()
+                .iter()
+                .all(|r| !r.recording_deleted)
+        );
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_deleted_mark_is_never_serialised() {
+        let (dir, store) = store("store-deleted-serde");
+        let id = add(&store, "/r/a.webm", "2026-10-19T14:30", "A", "");
+        store.set_recording_deleted(id, true).unwrap();
+        let row = store.get(id).unwrap().unwrap();
+        assert!(row.recording_deleted_at.is_some());
+        let json = serde_json::to_value(&row).unwrap();
+        assert!(json.get("recording_deleted_at").is_none());
+        assert_eq!(json["attendees"], serde_json::Value::Null);
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn used_before_is_edited_names_newest_first_distinct_ignoring_case() {
+        let (dir, store) = store("store-used-before");
+        assert!(store.used_before().unwrap().is_empty());
+        with_speakers(
+            &store,
+            "/r/old.webm",
+            "2026-10-01T00:00:00Z",
+            &[("Rahim", true), ("Selina", true), ("Inferred", false)],
+        );
+        with_speakers(
+            &store,
+            "/r/new.webm",
+            "2026-10-03T00:00:00Z",
+            &[
+                ("RAHIM", true),
+                ("Élodie", true),
+                ("  ", true),
+                ("Guess", false),
+            ],
+        );
+        with_speakers(
+            &store,
+            "/r/tie.webm",
+            "2026-10-01T00:00:00Z",
+            &[("élodie", true), ("Karim", true)],
+        );
+        // Newest `updated_at` first; the tie goes to the newest id; speaker order within a row.
+        assert_eq!(
+            store.used_before().unwrap(),
+            names(&["RAHIM", "Élodie", "Karim", "Selina"])
+        );
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn used_before_follows_real_renames_and_caps_at_50() {
+        let (dir, store) = store("store-used-before-cap");
+        let id = store.merge_run(Path::new(REC), &done("T", "B")).unwrap().id;
+        assert!(store.used_before().unwrap().is_empty());
+        rename_to(&store, id, "Speaker 10", "Karim");
+        assert_eq!(store.used_before().unwrap(), names(&["Karim"]));
+
+        let many: Vec<String> = (0..60).map(|i| format!("Name {i:02}")).collect();
+        let pairs: Vec<(&str, bool)> = many.iter().map(|n| (n.as_str(), true)).collect();
+        with_speakers(&store, "/r/many.webm", "2099-01-01T00:00:00Z", &pairs);
+        let used = store.used_before().unwrap();
+        assert_eq!(used.len(), USED_BEFORE_MAX);
+        assert_eq!(used, many[..50]);
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_attendees_name_the_column_only() {
+        let (dir, store) = store("store-invalid-attendees");
+        let id = store.merge_run(Path::new(REC), &done("T", "B")).unwrap().id;
+        store
+            .conn
+            .execute("UPDATE meetings SET attendees = '{\"secret\":1}'", [])
+            .unwrap();
+        let message = format!("{:#}", store.get(id).err().unwrap());
+        assert!(message.contains("invalid attendees"));
+        assert!(!message.contains("secret"));
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn attendees_filled_is_a_setting() {
+        let (dir, store) = store("store-attendees-filled");
+        assert_eq!(ATTENDEES_FILLED, "attendees_filled");
+        assert_eq!(store.setting(ATTENDEES_FILLED).unwrap(), None);
+        store.set_setting(ATTENDEES_FILLED, "true").unwrap();
+        assert_eq!(
+            store.setting(ATTENDEES_FILLED).unwrap().as_deref(),
+            Some("true")
+        );
+        drop(store);
         fs::remove_dir_all(&dir).unwrap();
     }
 

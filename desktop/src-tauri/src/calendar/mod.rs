@@ -871,6 +871,7 @@ pub(crate) mod tests {
             }),
             source: Source::Desktop,
             recorded_at: at.into(),
+            attendees: None,
         };
         let path = PathBuf::from(format!("/rec/{folder}/recording.m4a"));
         store.merge_run(&path, &result).unwrap().id

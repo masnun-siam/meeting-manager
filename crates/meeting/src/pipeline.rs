@@ -185,6 +185,7 @@ impl State<'_> {
             event: run.event.clone(),
             source: run.source,
             recorded_at: run.recorded_at.clone(),
+            attendees: None,
         };
         fill(&mut result);
         track
@@ -580,6 +581,7 @@ fn start_tracking(
         source: run.source,
         recorded_at: &run.recorded_at,
         language: run.language,
+        attendees: None,
     };
     if let Err(e) = store.start_run(&start) {
         tracing::warn!("store start failed: {}", store::error_kind(&e));
