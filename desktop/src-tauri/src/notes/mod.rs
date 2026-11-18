@@ -507,6 +507,7 @@ mod tests {
             event: None,
             source: Source::Browser,
             recorded_at: recorded_at.into(),
+            attendees: None,
         }
     }
 
@@ -673,6 +674,7 @@ mod tests {
                 source: Source::Desktop,
                 recorded_at: at,
                 language: None,
+                attendees: None,
             };
             (store.start_run(&run).unwrap(), recording)
         };

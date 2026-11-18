@@ -829,6 +829,8 @@ mod tests {
             vault_note_path: None,
             created_at: String::new(),
             updated_at: String::new(),
+            attendees: None,
+            recording_deleted_at: None,
         }
     }
 

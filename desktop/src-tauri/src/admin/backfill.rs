@@ -136,6 +136,7 @@ pub fn read_folder(recording: &Path, jobs: &[Job]) -> RunResult {
             .map(pipeline::event_link),
         source: pipeline::source_of(recording, ctx.as_ref()),
         recorded_at,
+        attendees: None,
     };
     if let Some(summary) = summary {
         result.status = Status::Done;

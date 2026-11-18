@@ -1016,6 +1016,7 @@ mod tests {
                 source: Source::Browser,
                 recorded_at: "2026-10-19T14:30",
                 language: None,
+                attendees: None,
             })
             .unwrap()
     }
