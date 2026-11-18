@@ -1,4 +1,4 @@
-import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Note } from '../../api';
 import { BackIcon } from '../../icons';
 import { formatDuration, formatRecorded, languageLabel, sourceLabel } from '../list/format';
@@ -182,44 +182,16 @@ function Status({ note }: { note: Note }) {
   );
 }
 
-/**
- * Whether the sidebar fits in the scrolling view, so it can stay pinned beside the summary. A taller
- * one scrolls with the page: pinned, its end would be out of reach, and a scroll area of its own
- * would trap the wheel.
- */
-function useFitsInView(ref: RefObject<HTMLElement | null>): boolean {
-  const [fits, setFits] = useState(true);
-  useEffect(() => {
-    const element = ref.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-    const view = element.closest('main') ?? document.documentElement;
-    const check = () => setFits(element.offsetHeight + STICKY_MARGIN <= view.clientHeight);
-    const observer = new ResizeObserver(check);
-    observer.observe(element);
-    observer.observe(view);
-    return () => observer.disconnect();
-  }, [ref]);
-  return fits;
-}
-
-/** Room left above and below the pinned sidebar. */
-const STICKY_MARGIN = 32;
-
 /** Summary and speaker names are editable only for a `done` note; "My notes" always. */
 function Editors({ note, autosave }: { note: Note; autosave: Autosave }) {
   const editable = note.status === 'done';
-  const aside = useRef<HTMLDivElement>(null);
-  const sticky = useFitsInView(aside);
   return (
-    <div className={styles.layout}>
-      <div className={styles.primary}>
-        <Tabs summary={<Summary note={note} autosave={autosave} editable={editable} />} transcript={note.transcript} />
-      </div>
-      {/* "My notes" first: it is the user's own writing and must stay reachable however many speakers. */}
-      <div ref={aside} className={styles.aside} data-sticky={sticky}>
-        <MyNotes autosave={autosave} />
-        <SpeakersPanel note={note} autosave={autosave} editable={editable} />
-      </div>
-    </div>
+    <Tabs
+      summary={<Summary note={note} autosave={autosave} editable={editable} />}
+      transcript={note.transcript}
+      myNotes={<MyNotes autosave={autosave} />}
+      hasMyNotes={autosave.value('my_notes').length > 0}
+      aside={note.speakers.length > 0 ? <SpeakersPanel note={note} autosave={autosave} editable={editable} /> : null}
+    />
   );
 }

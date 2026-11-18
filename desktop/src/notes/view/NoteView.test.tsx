@@ -6,6 +6,7 @@ import * as api from '../../api';
 import { ARCHIVED, CONFIRM_MS } from './Actions';
 import { MY_NOTES_LIMIT, RECORDING_MISSING, TOO_LARGE, TOOL_MISSING } from './format';
 import { NoteView, UNSAVED } from './NoteView';
+import { Tabs } from './TranscriptTab';
 import { deferred, testNote } from './testNote';
 import { POLL_MS, RERUN_FOLLOW_MS } from './useNote';
 
@@ -53,7 +54,20 @@ async function ready(title = 'Weekly sync') {
   return heading;
 }
 const button = (name: string | RegExp) => screen.getByRole('button', { name });
+/** Selects the My notes tab and returns its editor. */
+async function myNotesBox(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('tab', { name: /^My notes/ }));
+  return screen.getByRole('textbox', { name: 'My notes' });
+}
 const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+const item = (name: string | RegExp) => screen.getByRole('menuitem', { name });
+type User = ReturnType<typeof userEvent.setup>;
+/** Opens the More menu unless it is open, then returns the item. */
+async function menuItem(user: User, name: string | RegExp) {
+  if (button('More').getAttribute('aria-expanded') !== 'true') await user.click(button('More'));
+  return item(name);
+}
+const choose = async (user: User, name: string | RegExp) => user.click(await menuItem(user, name));
 
 describe('NoteView display', () => {
   it('shows Loading… until note_get replies', () => {
@@ -216,19 +230,20 @@ describe('NoteView display', () => {
     await user.keyboard('{Home}');
     expect(summaryTab).toHaveFocus();
     await user.keyboard('{ArrowLeft}');
-    expect(transcriptTab).toHaveFocus();
+    expect(screen.getByRole('tab', { name: 'My notes' })).toHaveFocus();
   });
 
   it.each(['processing', 'failed', 'no_speech'] as const)(
     'a %s note is read-only except "My notes"',
     async (status) => {
-      setup(testNote({ status, failed_stage: 'transcribe', error: 'Deepgram said no' }));
+      const { user } = setup(testNote({ status, failed_stage: 'transcribe', error: 'Deepgram said no' }));
       await ready();
 
       expect(screen.queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
       expect(screen.queryByRole('textbox', { name: /Name for/ })).not.toBeInTheDocument();
-      expect(screen.getByRole('textbox', { name: 'My notes' })).toBeInTheDocument();
+      await user.type(await myNotesBox(user), 'x');
+      expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('x');
     },
   );
 
@@ -253,7 +268,6 @@ describe('NoteView editing', () => {
 
     expect(screen.getByRole('textbox', { name: 'Title' })).toHaveValue('Weekly sync');
     expect(screen.getByRole('textbox', { name: 'Name for Speaker 1' })).toHaveValue('Rahim');
-    expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('');
     expect(screen.getByRole('heading', { level: 2, name: 'Action items' })).toBeInTheDocument();
 
     await user.click(button('Edit'));
@@ -269,7 +283,7 @@ describe('NoteView editing', () => {
     const { user } = setup();
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'deck');
+    await user.type(await myNotesBox(user), 'deck');
     expect(noteUpdate).not.toHaveBeenCalled();
     await tick(1000);
     expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, my_notes: 'deck' });
@@ -280,7 +294,7 @@ describe('NoteView editing', () => {
     const { user, onBack } = setup();
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.type(await myNotesBox(user), 'x');
     await user.click(button('Back'));
     expect(noteUpdate).toHaveBeenCalledWith({ id: 7, my_notes: 'x' });
     expect(onBack).toHaveBeenCalledOnce();
@@ -344,7 +358,7 @@ describe('NoteView editing', () => {
     const { user } = setup(testNote({ status: 'processing' }));
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.type(await myNotesBox(user), 'x');
     await user.tab();
     expect(noteUpdate).toHaveBeenCalledWith({ id: 7, my_notes: 'x' });
     await screen.findByText('All changes saved');
@@ -356,7 +370,7 @@ describe('NoteView editing', () => {
     const { user } = setup();
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.type(await myNotesBox(user), 'x');
     await user.tab();
     expect(await screen.findByText(TOO_LARGE)).toBeInTheDocument();
   });
@@ -365,8 +379,7 @@ describe('NoteView editing', () => {
     const { user, onBack } = setup();
     await ready();
 
-    const notes = screen.getByRole('textbox', { name: 'My notes' });
-    await user.click(notes);
+    await user.click(await myNotesBox(user));
     await user.paste('x'.repeat(MY_NOTES_LIMIT + 1));
     await user.click(button('Back'));
     expect(noteUpdate).not.toHaveBeenCalled();
@@ -402,27 +415,27 @@ describe('NoteView actions', () => {
 
     await user.click(button('Open in Obsidian'));
     expect(api.noteOpen).toHaveBeenCalledWith({ id: 7, what: 'obsidian' });
-    await user.click(button('Open folder'));
+    await choose(user, 'Open folder');
     expect(api.noteOpen).toHaveBeenLastCalledWith({ id: 7, what: 'folder' });
     expect(await screen.findByText('No vault note found')).toBeInTheDocument();
   });
 
   it('disables Open folder and Rerun with a reason when the recording is missing', async () => {
-    setup(testNote({ recording_missing: true }));
+    const { user } = setup(testNote({ recording_missing: true }));
     await ready();
 
-    expect(button('Open folder')).toBeDisabled();
-    expect(button('Rerun summary')).toBeDisabled();
-    expect(button('Rerun summary')).toHaveAccessibleDescription(RECORDING_MISSING);
-    expect(button('Archive')).toBeEnabled();
-    expect(button('Trash')).toBeEnabled();
+    expect(await menuItem(user, 'Open folder')).toHaveAttribute('aria-disabled', 'true');
+    expect(item('Rerun summary')).toHaveAttribute('aria-disabled', 'true');
+    expect(item('Rerun summary')).toHaveAccessibleDescription(RECORDING_MISSING);
+    expect(item('Archive')).not.toHaveAttribute('aria-disabled');
+    expect(item('Trash')).not.toHaveAttribute('aria-disabled');
   });
 
   it('reruns at once when nothing was edited', async () => {
     const { user } = setup(testNote({ my_notes: 'mine' }));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     expect(noteRerun).toHaveBeenCalledExactlyOnceWith({ id: 7, replace_edits: false });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(await screen.findByText('Summary rerun started')).toBeInTheDocument();
@@ -437,7 +450,7 @@ describe('NoteView actions', () => {
     const { user } = setup(testNote(edited));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     const dialog = await screen.findByRole('dialog', { name: 'Rerun summary' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(within(dialog).getByRole('button', { name: 'Keep my edits' })).toHaveFocus();
@@ -451,7 +464,7 @@ describe('NoteView actions', () => {
     const { user } = setup(testNote({ title_edited: true }));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await user.click(await screen.findByRole('button', { name: 'Replace with new summary' }));
     expect(noteRerun).toHaveBeenCalledExactlyOnceWith({ id: 7, replace_edits: true });
   });
@@ -460,18 +473,18 @@ describe('NoteView actions', () => {
     const { user } = setup(testNote({ title_edited: true }));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await user.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(button('Rerun summary')).toHaveFocus();
+    expect(button('More')).toHaveFocus();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await screen.findByRole('dialog');
     await user.keyboard('{Tab}{Tab}{Tab}');
     expect(screen.getByRole('button', { name: 'Keep my edits' })).toHaveFocus();
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(button('Rerun summary')).toHaveFocus();
+    expect(button('More')).toHaveFocus();
     expect(noteRerun).not.toHaveBeenCalled();
   });
 
@@ -479,7 +492,7 @@ describe('NoteView actions', () => {
     const { user } = setup(testNote({ title_edited: true }));
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await screen.findByRole('dialog');
     (document.activeElement as HTMLElement).blur();
     await user.keyboard('{Escape}');
@@ -492,7 +505,8 @@ describe('NoteView actions', () => {
     const { user } = setup();
     await ready();
 
-    await user.dblClick(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
+    await choose(user, 'Rerun summary');
     await act(async () => reply.resolve({ ok: true }));
     await screen.findByText('Summary rerun started');
     expect(noteRerun).toHaveBeenCalledOnce();
@@ -509,7 +523,7 @@ describe('NoteView actions', () => {
       vault_error: null,
     });
     await user.type(screen.getByRole('textbox', { name: 'Title' }), '!');
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
@@ -522,7 +536,7 @@ describe('NoteView actions', () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     expect(await screen.findByText(text)).toBeInTheDocument();
   });
 
@@ -530,7 +544,7 @@ describe('NoteView actions', () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Archive'));
+    await choose(user, 'Archive');
     expect(api.noteArchive).toHaveBeenCalledWith({ id: 7 });
     expect(await screen.findByText(ARCHIVED)).toBeInTheDocument();
     expect(noteGet).toHaveBeenCalledTimes(2);
@@ -541,7 +555,7 @@ describe('NoteView actions', () => {
     await ready();
     noteGet.mockResolvedValue({ ok: false, code: 'unknown_note', message: 'No note 7' });
 
-    await user.click(button('Archive'));
+    await choose(user, 'Archive');
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
   });
 
@@ -554,29 +568,29 @@ describe('NoteView actions', () => {
     const { user, onBack } = setup();
     await ready();
 
-    await user.click(button('Archive'));
+    await choose(user, 'Archive');
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(onBack).not.toHaveBeenCalled();
     expect(noteGet).toHaveBeenCalledOnce();
   });
 
   it('disables Archive and Trash while processing, with a reason', async () => {
-    setup(testNote({ status: 'processing' }));
+    const { user } = setup(testNote({ status: 'processing' }));
     await ready();
 
-    expect(button('Archive')).toBeDisabled();
-    expect(button('Trash')).toBeDisabled();
-    expect(button('Trash')).toHaveAccessibleDescription(/processing/);
+    expect(await menuItem(user, 'Archive')).toHaveAttribute('aria-disabled', 'true');
+    expect(item('Trash')).toHaveAttribute('aria-disabled', 'true');
+    expect(item('Trash')).toHaveAccessibleDescription(/processing/);
   });
 
   it('asks to confirm Trash for 3 s, then reverts without sending', async () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Trash'));
-    expect(button('Confirm trash')).toBeInTheDocument();
+    await choose(user, 'Trash');
+    expect(item('Confirm trash')).toBeInTheDocument();
     await tick(CONFIRM_MS);
-    expect(button('Trash')).toBeInTheDocument();
+    expect(item('Trash')).toBeInTheDocument();
     expect(api.noteTrash).not.toHaveBeenCalled();
   });
 
@@ -584,8 +598,8 @@ describe('NoteView actions', () => {
     const { user, onBack } = setup();
     await ready();
 
-    await user.click(button('Trash'));
-    await user.click(button('Confirm trash'));
+    await choose(user, 'Trash');
+    await choose(user, 'Confirm trash');
     expect(api.noteTrash).toHaveBeenCalledExactlyOnceWith({ id: 7 });
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
   });
@@ -595,8 +609,8 @@ describe('NoteView actions', () => {
     const { user, onBack } = setup();
     await ready();
 
-    await user.click(button('Trash'));
-    await user.click(button('Confirm trash'));
+    await choose(user, 'Trash');
+    await choose(user, 'Confirm trash');
     expect(await screen.findByText('Trash is full')).toBeInTheDocument();
     expect(onBack).not.toHaveBeenCalled();
   });
@@ -608,14 +622,15 @@ describe('NoteView polling', () => {
       .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
       .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
       .mockResolvedValue(got(testNote()));
-    setup(null);
+    const { user } = setup(null);
     await ready();
+    expect(await menuItem(user, 'Archive')).toHaveAttribute('aria-disabled', 'true');
 
     await tick(POLL_MS);
     expect(noteGet).toHaveBeenCalledTimes(2);
     await tick(POLL_MS);
     expect(noteGet).toHaveBeenCalledTimes(3);
-    await waitFor(() => expect(button('Archive')).toBeEnabled());
+    await waitFor(() => expect(item('Archive')).not.toHaveAttribute('aria-disabled'));
     await tick(POLL_MS * 3);
     expect(noteGet).toHaveBeenCalledTimes(3);
   });
@@ -631,7 +646,7 @@ describe('NoteView polling', () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await screen.findByText('Summary rerun started');
     const after = noteGet.mock.calls.length;
     await tick(RERUN_FOLLOW_MS);
@@ -645,10 +660,10 @@ describe('NoteView polling', () => {
     const { user } = setup();
     await ready();
 
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await screen.findByText('Summary rerun started');
     await tick(POLL_MS * 2);
-    await user.click(button('Rerun summary'));
+    await choose(user, 'Rerun summary');
     await waitFor(() => expect(noteRerun).toHaveBeenCalledTimes(2));
     const after = noteGet.mock.calls.length;
     await tick(RERUN_FOLLOW_MS - 1000);
@@ -668,7 +683,7 @@ describe('NoteView polling', () => {
     const { user } = setup(testNote({ status: 'processing' }));
     await ready();
 
-    await user.type(screen.getByRole('textbox', { name: 'My notes' }), 'x');
+    await user.type(await myNotesBox(user), 'x');
     noteUpdate.mockReturnValue(new Promise(() => {}));
     noteGet.mockClear();
     await tick(POLL_MS);
@@ -682,5 +697,215 @@ describe('NoteView polling', () => {
 
     await tick(POLL_MS * 3);
     expect(noteGet).toHaveBeenCalledOnce();
+  });
+});
+
+describe('NoteView layout (FR-11)', () => {
+  const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+  it('orders the tab bar, then the panels, then the side column, with no pinning', async () => {
+    setup();
+    await ready();
+
+    const tablist = screen.getByRole('tablist', { name: 'Note' });
+    const panels = screen.getAllByRole('tabpanel', { hidden: true });
+    const speakers = screen.getByRole('region', { name: 'Speakers' });
+    expect(panels).toHaveLength(3);
+    for (const panel of panels) {
+      expect(follows(tablist, panel)).toBe(true);
+      expect(follows(panel, speakers)).toBe(true);
+    }
+    expect(document.querySelector('[data-sticky]')).toBeNull();
+  });
+
+  it('keeps Transcript selected across polls and the reload that ends processing', async () => {
+    noteGet
+      .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
+      .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
+      .mockResolvedValue(got(testNote()));
+    const { user } = setup(null);
+    await ready();
+
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    await tick(POLL_MS);
+    await tick(POLL_MS);
+    expect(noteGet).toHaveBeenCalledTimes(3);
+    await menuItem(user, 'Archive');
+    await waitFor(() => expect(item('Archive')).not.toHaveAttribute('aria-disabled'));
+    expect(screen.getByRole('tab', { name: 'Transcript' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel', { name: 'Transcript' })).toBeVisible();
+  });
+
+  it('keeps Transcript selected after Rerun reloads the note', async () => {
+    const { user } = setup();
+    await ready();
+
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    await choose(user, 'Rerun summary');
+    await screen.findByText('Summary rerun started');
+    const before = noteGet.mock.calls.length;
+    await tick(POLL_MS);
+    expect(noteGet.mock.calls.length).toBeGreaterThan(before);
+    expect(screen.getByRole('tab', { name: 'Transcript' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('reaches the Summary Edit button with Tab from the tab row', async () => {
+    const { user } = setup();
+    await ready();
+
+    screen.getByRole('tab', { name: 'Summary' }).focus();
+    await user.tab();
+    expect(button('Edit')).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('textbox', { name: 'Summary (markdown)' })).toBeInTheDocument();
+  });
+
+  it('lists all 20 speakers in the side column', async () => {
+    const speakers = Array.from({ length: 20 }, (_, i) => ({
+      label: `Speaker ${i}`,
+      name: `Person ${i}`,
+      evidence: '',
+      name_edited: true,
+    }));
+    setup(testNote({ speakers }));
+    await ready();
+
+    expect(within(screen.getByRole('region', { name: 'Speakers' })).getAllByRole('listitem')).toHaveLength(20);
+  });
+
+  it('says "No transcript." for a note without one', async () => {
+    const { user } = setup(testNote({ transcript: null }));
+    await ready();
+
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    expect(screen.getByRole('tabpanel', { name: 'Transcript' })).toHaveTextContent('No transcript.');
+  });
+
+  it('puts the player in the bar with the tab row, before the panels', () => {
+    render(
+      <Tabs
+        summary={<p>summary</p>}
+        transcript={null}
+        myNotes={<p>mine</p>}
+        hasMyNotes={false}
+        aside={<p>aside</p>}
+        player={<p>player</p>}
+      />,
+    );
+
+    const tablist = screen.getByRole('tablist');
+    const player = screen.getByText('player');
+    expect(player.parentElement?.parentElement).toBe(tablist.parentElement);
+    expect(follows(player, screen.getByRole('tabpanel', { name: 'Summary' }))).toBe(true);
+    expect(follows(screen.getByText('summary'), screen.getByText('aside'))).toBe(true);
+  });
+});
+
+describe('NoteView My notes tab (FR-12)', () => {
+  it('has three tabs, Summary first, and arrows, Home and End move across all of them', async () => {
+    const { user } = setup();
+    await ready();
+
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Summary', 'Transcript', 'My notes']);
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
+
+    tabs[0].focus();
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    expect(tabs[2]).toHaveFocus();
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, -1, 0]);
+    expect(screen.getByRole('tabpanel', { name: 'My notes' })).toContainElement(
+      screen.getByRole('textbox', { name: 'My notes' }),
+    );
+    await user.keyboard('{ArrowRight}');
+    expect(tabs[0]).toHaveFocus();
+    await user.keyboard('{ArrowLeft}');
+    expect(tabs[2]).toHaveFocus();
+    await user.keyboard('{Home}');
+    expect(tabs[0]).toHaveFocus();
+    await user.keyboard('{End}');
+    expect(tabs[2]).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('has no "My notes" in the side column', async () => {
+    setup();
+    await ready();
+
+    expect(screen.queryByRole('textbox', { name: 'My notes' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'My notes' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Speakers' })).toBeVisible();
+  });
+
+  it('shows a dot on the tab only when "My notes" has text, also while typing', async () => {
+    const { user } = setup();
+    await ready();
+
+    const tab = screen.getByRole('tab', { name: 'My notes' });
+    expect(tab.querySelector('[aria-hidden="true"]')).toBeNull();
+
+    const box = await myNotesBox(user);
+    await user.type(box, 'a');
+    expect(noteUpdate).not.toHaveBeenCalled();
+    expect(tab).toHaveAccessibleName('My notes, has text');
+    expect(tab.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(screen.getByRole('tabpanel', { name: 'My notes' })).toContainElement(box);
+
+    await user.clear(box);
+    expect(tab).toHaveAccessibleName('My notes');
+    expect(tab.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('shows the dot for a stored note with "My notes" text', async () => {
+    setup(testNote({ my_notes: 'mine' }));
+    await ready();
+
+    expect(screen.getByRole('tab', { name: 'My notes, has text' })).toBeInTheDocument();
+  });
+
+  it('keeps a draft across tab switches and saves it', async () => {
+    // Saves stall, so the draft is still a draft when the panel comes back.
+    noteUpdate.mockReturnValue(new Promise(() => {}));
+    const { user } = setup();
+    await ready();
+
+    await user.type(await myNotesBox(user), 'draft');
+    // Leaving the tab blurs the editor, which saves at once (FR-18).
+    await user.click(screen.getByRole('tab', { name: 'Summary' }));
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, my_notes: 'draft' });
+    expect(screen.getByRole('tab', { name: 'My notes, has text' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /^My notes/ }));
+    expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('draft');
+  });
+
+  it('grows the editor to its text', async () => {
+    vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get').mockReturnValue(1234);
+    const { user } = setup();
+    await ready();
+
+    const box = await myNotesBox(user);
+    await user.type(box, 'line{Enter}line');
+    expect(box.style.height).toBe('1234px');
+  });
+
+  it('keeps My notes selected and the text being typed across a poll', async () => {
+    const { user } = setup(testNote({ status: 'processing' }));
+    await ready();
+
+    await user.type(await myNotesBox(user), 'abc');
+    await tick(1000);
+    await tick(POLL_MS);
+    expect(screen.getByRole('tab', { name: /^My notes/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('abc');
+  });
+
+  it('renders no side column for a note with no speakers', async () => {
+    const { container } = setup(testNote({ speakers: [] }));
+    await ready();
+
+    expect(screen.queryByRole('region', { name: 'Speakers' })).not.toBeInTheDocument();
+    const panels = screen.getAllByRole('tabpanel', { hidden: true });
+    expect(panels[0].parentElement?.parentElement?.children).toHaveLength(1);
+    expect(container.textContent).not.toContain('Speakers');
   });
 });

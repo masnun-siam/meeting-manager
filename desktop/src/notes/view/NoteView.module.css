@@ -158,34 +158,16 @@
   animation: spin 800ms linear infinite;
 }
 
-.actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--line);
-}
-
-.toolbar button:nth-child(3) {
-  margin-right: auto;
-}
-
-.reason {
-  color: var(--ink-faint);
-  font-size: var(--text-sm);
-}
-
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
   align-items: start;
   gap: var(--space-5);
+}
+
+/* No speakers, no side column (FR-12): the tab content takes the full width. */
+.layout:not(:has(> .aside)) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .primary,
@@ -194,17 +176,6 @@
   flex-direction: column;
   gap: var(--space-3);
   min-width: 0;
-}
-
-/* Clips the tab row's band to the column (clip, unlike hidden, keeps the tab row sticky). */
-.primary {
-  overflow-x: clip;
-}
-
-/* Pinned beside the summary only when it fits in the window (`useFitsInView`); otherwise it scrolls with the page. */
-.aside[data-sticky="true"] {
-  position: sticky;
-  top: var(--space-4);
 }
 
 .card {
@@ -238,15 +209,11 @@
   flex-direction: column;
 }
 
-/* The summary's Edit button sits on the tab row, at its right end, and sticks with it. */
+/* The summary's Edit/Done button: a right-aligned first row of the Summary panel. */
 .sectionHead {
-  position: sticky;
-  top: 3px;
-  z-index: 2;
   display: flex;
-  align-self: flex-end;
-  margin-top: calc(-1 * (var(--tab-row) + var(--space-4)));
-  margin-bottom: calc(var(--tab-row) + var(--space-4) - 28px);
+  justify-content: flex-end;
+  margin-bottom: var(--space-2);
 }
 
 .hint {
@@ -265,6 +232,17 @@
   min-height: 420px;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
+}
+
+/* "My notes" (FR-12): as wide as the tab, at least 60% of the window, growing with its text
+   (MyNotes.tsx sets the height), so the page scrolls rather than the editor. */
+.myNotes {
+  display: block;
+  width: 100%;
+  min-height: 60vh;
+  overflow: hidden;
+  resize: none;
+  line-height: 1.6;
 }
 
 /* The rendered summary: reading type, comfortable measure. */
@@ -318,29 +296,28 @@
 }
 
 .tabs {
-  --tab-row: 32px;
-
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+
+  /* Clips the bar's band to the note column (clip, unlike hidden, keeps the bar sticky). */
+  overflow-x: clip;
 }
 
-/* Stays at the top while the summary or transcript scrolls; the band hides text passing under it. */
-.tablist {
+/* The tab row and the player slot: stays at the top of the page while it scrolls (D6). */
+.bar {
   position: sticky;
   top: 0;
   z-index: 1;
-  display: inline-flex;
-  align-self: flex-start;
-  gap: 2px;
-  padding: 3px;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
 }
 
-/* The band behind the sticky tab row, clipped to the column by .primary. */
-.tablist::before {
+/* The band behind the sticky bar: hides text passing under it, clipped to the column by .tabs. */
+.bar::before {
   position: absolute;
   inset: -6px -2000px;
   z-index: -1;
@@ -348,14 +325,27 @@
   content: "";
 }
 
-/* The pill itself, painted over the band (the band covers the tab list's own background). */
-.tablist::after {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
+.tablist {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-md);
   background: var(--surface-sunken);
-  content: "";
+}
+
+.playerSlot {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.playerSlot:empty {
+  display: none;
+}
+
+/* Keeps a focused or scrolled-to element clear of the sticky bar (WCAG 2.4.11). */
+.layout * {
+  scroll-margin-top: 64px;
 }
 
 .tablist [role="tab"] {
@@ -365,6 +355,17 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink-soft);
+}
+
+/* The My notes tab's "has text" mark; its name says so too (", has text"). */
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
 }
 
 .tablist [aria-selected="true"],
@@ -556,12 +557,9 @@
   }
 }
 
-@media (max-width: 900px) {
+/* Below 900 px window width the side column goes under the tab content (FR-11). */
+@media (max-width: 899px) {
   .layout {
-    grid-template-columns: 1fr;
-  }
-
-  .aside[data-sticky="true"] {
-    position: static;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
