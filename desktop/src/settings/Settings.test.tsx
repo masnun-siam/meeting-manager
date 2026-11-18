@@ -61,12 +61,15 @@ describe('Settings', () => {
     await screen.findByText('Version 0.1.0');
 
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual([
+      'Recording',
       'Calendars',
       'Updates',
       'Meetings',
       'Folders',
       'Health',
     ]);
+    await user.tab();
+    expect(screen.getByRole('checkbox', { name: 'Show floating indicator while recording' })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole('checkbox', { name: /Work/ })).toHaveFocus();
     await user.tab();

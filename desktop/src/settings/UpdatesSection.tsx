@@ -3,6 +3,7 @@ import { setAutoUpdate, type UpdateStatus, updateCheck, updateInstall } from '..
 import { RetryIcon } from '../icons';
 import { attempt } from '../recording/attempt';
 import { useRecorderStatus } from '../recording/useRecorderStatus';
+import { type Saved, SettingCheckbox } from './SettingCheckbox';
 import styles from './Settings.module.css';
 import { isBusy, useUpdateStatus } from './useUpdateStatus';
 
@@ -91,7 +92,11 @@ export function UpdatesSection() {
     <section aria-labelledby="settings-updates" className={styles.section}>
       <h3 id="settings-updates">Updates</h3>
       {status !== null && <p>Version {status.version}</p>}
-      <AutoUpdateBox initial={status?.auto_update ?? null} />
+      <SettingCheckbox
+        label="Install updates automatically"
+        initial={status?.auto_update ?? null}
+        save={saveAutoUpdate}
+      />
       <div className={styles.actionRow}>
         <button type="button" disabled={status === null || starting || isBusy(state)} onClick={check}>
           <RetryIcon size={14} />
@@ -135,61 +140,7 @@ function Alert({ text }: { text: string | null }) {
   );
 }
 
-/**
- * Install updates automatically: shows a toggle at once, saves the latest one, and on a failed save returns to the
- * last value the app confirmed with the reason. `initial` is `update_status`'s `auto_update`; once toggled here, the box
- * shows this view's value.
- */
-function AutoUpdateBox({ initial }: { initial: boolean | null }) {
-  // Null until toggled here: until then the box follows `initial`.
-  const [own, setOwn] = useState<boolean | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const wanted = useRef<boolean | null>(null);
-  const confirmed = useRef<boolean | null>(null);
-  const queue = useRef<Promise<void>>(Promise.resolve());
-  const latest = useRef(0);
-  const active = useRef(true);
-
-  useEffect(() => {
-    active.current = true;
-    return () => {
-      active.current = false;
-    };
-  }, []);
-
-  const show = (value: boolean) => {
-    wanted.current = value;
-    setOwn(value);
-  };
-
-  function toggle() {
-    const next = !(wanted.current ?? initial);
-    show(next);
-    setProblem(null);
-    const request = ++latest.current;
-    queue.current = queue.current.then(async () => {
-      const reply = await attempt(() => setAutoUpdate({ enabled: next }));
-      if (!active.current) return;
-      if (reply.ok) confirmed.current = reply.reply.auto_update;
-      if (request !== latest.current) return;
-      if (reply.ok) {
-        show(reply.reply.auto_update);
-      } else {
-        show(confirmed.current ?? initial === true);
-        setProblem(reply.text);
-      }
-    });
-  }
-
-  return (
-    <>
-      <label className={styles.toggle}>
-        <input type="checkbox" checked={own ?? initial === true} disabled={initial === null} onChange={toggle} />{' '}
-        Install updates automatically
-      </label>
-      <p role="status" className={styles.problem}>
-        {problem}
-      </p>
-    </>
-  );
+async function saveAutoUpdate(enabled: boolean): Promise<Saved> {
+  const reply = await attempt(() => setAutoUpdate({ enabled }));
+  return reply.ok ? { ok: true, value: reply.reply.auto_update } : reply;
 }
