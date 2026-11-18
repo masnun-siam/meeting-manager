@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from './api';
 
 vi.mock('./api', async () => (await import('./api.mock')).mockApi());
@@ -13,6 +13,10 @@ vi.mock('./calendar/Upcoming', () => ({
 }));
 
 import { App } from './App';
+import { stubMedia } from './notes/view/mediaStub';
+
+// An opened note mounts the recording player, which jsdom cannot play.
+beforeEach(() => stubMedia());
 
 const entry = (name: string) => within(screen.getByRole('navigation', { name: 'Main' })).getByRole('button', { name });
 

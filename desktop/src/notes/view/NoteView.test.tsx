@@ -1,10 +1,11 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Note } from '../../api';
 import * as api from '../../api';
 import { ARCHIVED, CONFIRM_MS } from './Actions';
 import { MY_NOTES_LIMIT, RECORDING_MISSING, TOO_LARGE, TOOL_MISSING } from './format';
+import { media, stubMedia } from './mediaStub';
 import { NoteView, UNSAVED } from './NoteView';
 import { Tabs } from './TranscriptTab';
 import { deferred, testNote } from './testNote';
@@ -32,9 +33,12 @@ beforeEach(() => {
   vi.mocked(api.noteOpen).mockResolvedValue({ ok: true });
   vi.mocked(api.noteArchive).mockResolvedValue({ ok: true });
   vi.mocked(api.noteTrash).mockResolvedValue({ ok: true });
+  stubMedia();
 });
 
 afterEach(() => {
+  // Unmount while the media stubs are in place: the player pauses and reloads its element on the way out.
+  cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -718,6 +722,52 @@ describe('NoteView layout (FR-11)', () => {
     expect(document.querySelector('[data-sticky]')).toBeNull();
   });
 
+  it('keeps the recording playing in the bar across tab switches (FR-5)', async () => {
+    const { user } = setup();
+    await ready();
+    const audio = document.querySelector('audio') as HTMLAudioElement;
+    media.duration = 3600;
+    fireEvent.loadedMetadata(audio);
+    await user.click(button('Play'));
+
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    await user.click(screen.getByRole('tab', { name: 'Summary' }));
+
+    expect(document.querySelector('audio')).toBe(audio);
+    expect(media.paused).toBe(false);
+    expect(
+      within(screen.getByRole('group', { name: 'Recording player' })).getByRole('button', { name: 'Pause' }),
+    ).toBeInTheDocument();
+  });
+
+  it('stops the recording when Back unmounts the note', async () => {
+    const { user, onBack } = setup();
+    await ready();
+    fireEvent.loadedMetadata(document.querySelector('audio') as HTMLAudioElement);
+    await user.click(button('Play'));
+
+    await user.click(button('Back'));
+    expect(onBack).toHaveBeenCalled();
+    cleanup();
+
+    expect(media.paused).toBe(true);
+  });
+
+  it('shows the player for a processing note with a recording (FR-5)', async () => {
+    setup(testNote({ status: 'processing', transcript: null, body_md: null }));
+    await ready();
+
+    expect(screen.getByRole('group', { name: 'Recording player' })).toBeInTheDocument();
+  });
+
+  it('shows Recording deleted in the bar for a note whose recording was deleted', async () => {
+    setup(testNote({ media: null, recording_deleted: true }));
+    await ready();
+
+    expect(screen.getByText('Recording deleted')).toBeInTheDocument();
+    expect(document.querySelector('audio')).toBeNull();
+  });
+
   it('keeps Transcript selected across polls and the reload that ends processing', async () => {
     noteGet
       .mockResolvedValueOnce(got(testNote({ status: 'processing' })))
@@ -749,11 +799,18 @@ describe('NoteView layout (FR-11)', () => {
     expect(screen.getByRole('tab', { name: 'Transcript' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('reaches the Summary Edit button with Tab from the tab row', async () => {
+  it('reaches the Summary Edit button with Tab from the tab row, past the player', async () => {
     const { user } = setup();
     await ready();
+    fireEvent.loadedMetadata(document.querySelector('audio') as HTMLAudioElement);
 
     screen.getByRole('tab', { name: 'Summary' }).focus();
+    await user.tab();
+    expect(button('Play')).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('slider', { name: 'Seek' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('combobox', { name: 'Speed' })).toHaveFocus();
     await user.tab();
     expect(button('Edit')).toHaveFocus();
     await user.keyboard('{Enter}');
