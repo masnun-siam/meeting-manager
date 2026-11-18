@@ -16,6 +16,7 @@ vi.mock('../../api', async () => (await import('../../api.mock')).mockApi());
 const noteGet = vi.mocked(api.noteGet);
 const noteUpdate = vi.mocked(api.noteUpdate);
 const noteRerun = vi.mocked(api.noteRerun);
+const speakerSuggestions = vi.mocked(api.speakerSuggestions);
 
 const got = (note: Note) => ({ ok: true as const, note });
 
@@ -33,6 +34,7 @@ beforeEach(() => {
   vi.mocked(api.noteOpen).mockResolvedValue({ ok: true });
   vi.mocked(api.noteArchive).mockResolvedValue({ ok: true });
   vi.mocked(api.noteTrash).mockResolvedValue({ ok: true });
+  speakerSuggestions.mockResolvedValue({ ok: true, attendees: [], earlier: [] });
   stubMedia();
 });
 
@@ -245,7 +247,7 @@ describe('NoteView display', () => {
 
       expect(screen.queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('textbox', { name: /Name for/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('combobox', { name: /Name for/ })).not.toBeInTheDocument();
       await user.type(await myNotesBox(user), 'x');
       expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('x');
     },
@@ -271,7 +273,7 @@ describe('NoteView editing', () => {
     await ready();
 
     expect(screen.getByRole('textbox', { name: 'Title' })).toHaveValue('Weekly sync');
-    expect(screen.getByRole('textbox', { name: 'Name for Speaker 1' })).toHaveValue('Rahim');
+    expect(screen.getByRole('combobox', { name: 'Name for Speaker 1' })).toHaveValue('Rahim');
     expect(screen.getByRole('heading', { level: 2, name: 'Action items' })).toBeInTheDocument();
 
     await user.click(button('Edit'));
@@ -322,7 +324,7 @@ describe('NoteView editing', () => {
     const { user } = setup();
     await ready();
 
-    const name = screen.getByRole('textbox', { name: 'Name for Speaker 1' });
+    const name = screen.getByRole('combobox', { name: 'Name for Speaker 1' });
     await user.clear(name);
     await user.type(name, 'Rahim Uddin');
     await user.tab();
@@ -407,7 +409,164 @@ describe('NoteView editing', () => {
   });
 });
 
+describe('NoteView speaker suggestions (FR-4)', () => {
+  const nameField = () => screen.getByRole('combobox', { name: 'Name for Speaker 1' });
+
+  it('fetches once per view and saves a keyboard pick at once', async () => {
+    speakerSuggestions.mockResolvedValue({ ok: true, attendees: ['Rahim', 'Nadia'], earlier: ['Rahnat'] });
+    const { user } = setup();
+    await ready();
+
+    await user.click(nameField());
+    expect(screen.getByRole('group', { name: 'Attendees' })).toBeInTheDocument();
+    await user.click(screen.getByRole('combobox', { name: 'Name for Speaker 0' }));
+    await user.clear(nameField());
+    await user.type(nameField(), 'na');
+    expect(
+      within(screen.getByRole('listbox'))
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual(['Nadia', 'Rahnat']);
+    await user.keyboard('{ArrowDown}{Enter}');
+
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, speaker: { label: 'Speaker 1', name: 'Nadia' } });
+    expect(speakerSuggestions).toHaveBeenCalledExactlyOnceWith({ id: 7 });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('a click pick saves at once, not the half-typed text', async () => {
+    speakerSuggestions.mockResolvedValue({ ok: true, attendees: ['Nadia'], earlier: [] });
+    const { user } = setup();
+    await ready();
+
+    await user.clear(nameField());
+    await user.type(nameField(), 'Na');
+    await user.click(screen.getByRole('option', { name: 'Nadia' }));
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, speaker: { label: 'Speaker 1', name: 'Nadia' } });
+  });
+
+  it('picking the current name sends nothing', async () => {
+    speakerSuggestions.mockResolvedValue({ ok: true, attendees: ['Rahim'], earlier: [] });
+    const { user } = setup();
+    await ready();
+
+    await user.click(nameField());
+    await user.click(screen.getByRole('option', { name: 'Rahim' }));
+    await tick(1000);
+    expect(noteUpdate).not.toHaveBeenCalled();
+    expect(nameField()).toHaveValue('Rahim');
+  });
+
+  it('Escape keeps the typed text, which saves as a typed rename', async () => {
+    speakerSuggestions.mockResolvedValue({ ok: true, attendees: ['Rahim Uddin'], earlier: [] });
+    const { user } = setup();
+    await ready();
+
+    await user.type(nameField(), ' U{Escape}');
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Weekly sync' })).toBeInTheDocument();
+    expect(noteUpdate).not.toHaveBeenCalled();
+    await tick(1000);
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, speaker: { label: 'Speaker 1', name: 'Rahim U' } });
+  });
+
+  it.each([
+    [
+      'a failed call',
+      () => speakerSuggestions.mockResolvedValue({ ok: false, code: 'store_unavailable', message: 'store gone' }),
+    ],
+    ['a rejected call', () => speakerSuggestions.mockRejectedValue(new Error('ipc down'))],
+    ['empty lists', () => speakerSuggestions.mockResolvedValue({ ok: true, attendees: [], earlier: [] })],
+  ])('%s: no list and no message, the field still renames', async (_, arrange) => {
+    arrange();
+    const { user } = setup();
+    await ready();
+
+    await user.clear(nameField());
+    await user.type(nameField(), 'Someone New');
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    for (const alert of screen.queryAllByRole('alert')) expect(alert).toBeEmptyDOMElement();
+    expect(screen.queryByText(/store gone|ipc down|unavailable/i)).not.toBeInTheDocument();
+    await user.tab();
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, speaker: { label: 'Speaker 1', name: 'Someone New' } });
+  });
+
+  it.each(['processing', 'failed', 'no_speech'] as const)('a %s note does not fetch suggestions', async (status) => {
+    setup(testNote({ status, failed_stage: 'transcribe', error: 'e' }));
+    await ready();
+    expect(speakerSuggestions).not.toHaveBeenCalled();
+  });
+
+  it('a done note without speakers does not fetch suggestions', async () => {
+    setup(testNote({ speakers: [] }));
+    await ready();
+    expect(speakerSuggestions).not.toHaveBeenCalled();
+  });
+
+  it('ignores a reply that arrives after leaving the note', async () => {
+    const reply = deferred<Awaited<ReturnType<typeof api.speakerSuggestions>>>();
+    speakerSuggestions.mockReturnValue(reply.promise);
+    const errors = vi.spyOn(console, 'error');
+    const { unmount } = setup();
+    await ready();
+    unmount();
+    await act(async () => reply.resolve({ ok: true, attendees: ['Nadia'], earlier: [] }));
+    expect(errors).not.toHaveBeenCalled();
+  });
+});
+
 describe('NoteView actions', () => {
+  it('Copy sends and awaits the unsaved My notes draft before note_copy', async () => {
+    const order: string[] = [];
+    const saved = deferred<Awaited<ReturnType<typeof api.noteUpdate>>>();
+    noteUpdate.mockImplementation((req) => {
+      order.push(`update ${JSON.stringify(req)}`);
+      return saved.promise.then((reply) => {
+        order.push('update replied');
+        return reply;
+      });
+    });
+    vi.mocked(api.noteCopy).mockImplementation(async (req) => {
+      order.push(`copy ${req.format}`);
+      return { ok: true };
+    });
+    const { user } = setup();
+    await ready();
+
+    await user.type(await myNotesBox(user), 'deck');
+    await user.click(button('Copy markdown'));
+    expect(api.noteCopy).not.toHaveBeenCalled();
+    await act(async () =>
+      saved.resolve({ ok: true, note: testNote({ my_notes: 'deck' }), vault: 'ok', vault_error: null }),
+    );
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    expect(order).toEqual(['update {"id":7,"my_notes":"deck"}', 'update replied', 'copy markdown']);
+  });
+
+  it('still copies the stored note when the flushed save is refused (D14)', async () => {
+    // Every attempt is refused: the blur and the flush both send the draft.
+    noteUpdate.mockResolvedValue({ ok: false, code: 'too_large', message: 'my_notes is too large' });
+    vi.mocked(api.noteCopy).mockResolvedValue({ ok: true });
+    const { user } = setup();
+    await ready();
+
+    await user.type(await myNotesBox(user), 'x');
+    await user.click(button('Copy formatted'));
+    await waitFor(() => expect(api.noteCopy).toHaveBeenCalledExactlyOnceWith({ id: 7, format: 'rich' }));
+    expect(await screen.findByText(TOO_LARGE)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+  });
+
+  it('shows a failed copy in the note status line', async () => {
+    vi.mocked(api.noteCopy).mockResolvedValue({ ok: false, code: 'clipboard_failed', message: 'pasteboard busy' });
+    const { user } = setup();
+    await ready();
+
+    await user.click(button('Copy markdown'));
+    expect(await screen.findByText("Couldn't copy: pasteboard busy")).toBeInTheDocument();
+    expect(button('Copy markdown')).toBeInTheDocument();
+  });
+
   it('opens the note in Obsidian and the folder, and shows missing_file', async () => {
     vi.mocked(api.noteOpen).mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({
       ok: false,

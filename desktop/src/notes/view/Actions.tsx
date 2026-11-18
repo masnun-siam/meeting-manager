@@ -1,14 +1,19 @@
 import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from 'react';
-import { type Note, noteArchive, noteOpen, noteRerun, noteTrash } from '../../api';
-import { ArchiveIcon, FolderIcon, SparkIcon, TrashIcon, VaultIcon } from '../../icons';
+import { type Note, noteArchive, noteCopy, noteOpen, noteRerun, noteTrash } from '../../api';
+import { ArchiveIcon, CheckIcon, CopyIcon, FolderIcon, SparkIcon, TrashIcon, VaultIcon } from '../../icons';
 import { attempt } from '../../recording/attempt';
 import styles from './Actions.module.css';
 import { hasEdits, NOT_WHILE_PROCESSING, problemText, RECORDING_MISSING } from './format';
 import { RerunDialog } from './RerunDialog';
 
 export const CONFIRM_MS = 3000;
+export const COPIED_MS = 2000;
+export const COPIED = 'Copied';
 export const RERUN_STARTED = 'Summary rerun started';
 export const ARCHIVED = 'Archived';
+
+type CopyFormat = 'markdown' | 'rich';
+const COPY_LABELS: Record<CopyFormat, string> = { markdown: 'Copy markdown', rich: 'Copy formatted' };
 
 type Props = {
   note: Note;
@@ -36,21 +41,32 @@ type MenuItem = {
   run: () => void;
 };
 
-/** Open in Obsidian, then a More menu with Open folder, Rerun summary, Archive and Trash (FR-13). */
+/** Copy markdown, Copy formatted and Open in Obsidian, then a More menu with Open folder, Rerun summary, Archive and Trash (FR-13). */
 export function Actions(props: Props) {
   const { note, say } = props;
   const [armed, setArmed] = useState(false);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
+  // A new object on every success, so a second copy within 2 s restarts the timer.
+  const [copied, setCopied] = useState<{ format: CopyFormat } | null>(null);
+  const [copying, setCopying] = useState(false);
   const more = useRef<HTMLButtonElement>(null);
   // Not `busy`: a second Rerun waits on this instead of being disabled.
   const rerunning = useRef(false);
+  // `copying` is a render behind a fast second click; this ref is not.
+  const copyInFlight = useRef(false);
 
   useEffect(() => {
     if (!armed) return;
     const timer = setTimeout(() => setArmed(false), CONFIRM_MS);
     return () => clearTimeout(timer);
   }, [armed]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(null), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
 
   const processing = note.status === 'processing';
   const missing = note.recording_missing;
@@ -59,6 +75,24 @@ export function Actions(props: Props) {
     say(null);
     const result = await attempt(() => noteOpen({ id: note.id, what }));
     if (!result.ok) say(problemText(result.code, result.text));
+  };
+
+  /** Flushes pending saves first: the Rust side copies the stored note (D14: even if a save failed). */
+  const copy = async (format: CopyFormat) => {
+    if (copyInFlight.current) return;
+    copyInFlight.current = true;
+    setCopying(true);
+    say(null);
+    await props.flushAll();
+    const result = await attempt(() => noteCopy({ id: note.id, format }));
+    copyInFlight.current = false;
+    setCopying(false);
+    if (result.ok) {
+      setCopied({ format });
+      return;
+    }
+    setCopied(null);
+    say(problemText(result.code, result.text));
   };
 
   const rerun = async (replaceEdits: boolean) => {
@@ -163,11 +197,34 @@ export function Actions(props: Props) {
   return (
     <div className={styles.actions}>
       <div className={styles.toolbar}>
+        {(['markdown', 'rich'] as const).map((format) => {
+          const done = copied?.format === format;
+          return (
+            <button
+              key={format}
+              type="button"
+              // Not `disabled`: that would drop focus from the button just pressed.
+              aria-disabled={copying || undefined}
+              onClick={() => void copy(format)}
+            >
+              {done ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+              {/* The hidden label keeps the width, so "Copied" does not shift the buttons after it. */}
+              <span className={styles.label}>
+                <span>{done ? COPIED : COPY_LABELS[format]}</span>
+                <span aria-hidden="true">{COPY_LABELS[format]}</span>
+              </span>
+            </button>
+          );
+        })}
         <button type="button" onClick={() => open('obsidian')}>
           <VaultIcon size={14} />
           Open in Obsidian
         </button>
         <MoreMenu trigger={more} items={items} />
+      </div>
+      {/* Always mounted, so the change to "Copied" is announced without moving focus. */}
+      <div role="status" className={styles.visuallyHidden}>
+        {copied ? COPIED : null}
       </div>
       {asking ? (
         <RerunDialog
