@@ -3,6 +3,7 @@
 
 mod copy;
 mod markdown;
+pub(crate) mod media;
 
 use std::collections::HashMap;
 use std::io;
