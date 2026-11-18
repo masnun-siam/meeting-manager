@@ -48,6 +48,7 @@ describe('format', () => {
     ['store_unavailable', 'disk I/O error', "Notes database can't be opened: disk I/O error"],
     ['tool_missing', 'Processing tool not found (x); run `meeting install`', TOOL_MISSING],
     ['too_large', 'my_notes is too large', TOO_LARGE],
+    ['clipboard_failed', 'pasteboard busy', "Couldn't copy: pasteboard busy"],
     ['already_processing', 'already processing', 'already processing'],
     [null, 'Could not reach the Meeting app: x', 'Could not reach the Meeting app: x'],
   ])('%s shows %s', (code, text, want) => {

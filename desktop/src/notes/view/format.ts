@@ -40,6 +40,8 @@ export function problemText(code: string | null, text: string): string {
       return TOOL_MISSING;
     case 'too_large':
       return TOO_LARGE;
+    case 'clipboard_failed':
+      return `Couldn't copy: ${text}`;
     default:
       return text;
   }

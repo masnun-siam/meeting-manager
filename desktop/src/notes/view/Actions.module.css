@@ -71,3 +71,29 @@
   font-size: var(--text-sm);
   font-weight: 400;
 }
+
+.toolbar > button[aria-disabled="true"] {
+  cursor: progress;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.label {
+  display: inline-grid;
+  justify-items: start;
+}
+
+.label > span {
+  grid-area: 1 / 1;
+}
+
+.label > span[aria-hidden] {
+  visibility: hidden;
+}

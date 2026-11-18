@@ -408,6 +408,57 @@ describe('NoteView editing', () => {
 });
 
 describe('NoteView actions', () => {
+  it('Copy sends and awaits the unsaved My notes draft before note_copy', async () => {
+    const order: string[] = [];
+    const saved = deferred<Awaited<ReturnType<typeof api.noteUpdate>>>();
+    noteUpdate.mockImplementation((req) => {
+      order.push(`update ${JSON.stringify(req)}`);
+      return saved.promise.then((reply) => {
+        order.push('update replied');
+        return reply;
+      });
+    });
+    vi.mocked(api.noteCopy).mockImplementation(async (req) => {
+      order.push(`copy ${req.format}`);
+      return { ok: true };
+    });
+    const { user } = setup();
+    await ready();
+
+    await user.type(await myNotesBox(user), 'deck');
+    await user.click(button('Copy markdown'));
+    expect(api.noteCopy).not.toHaveBeenCalled();
+    await act(async () =>
+      saved.resolve({ ok: true, note: testNote({ my_notes: 'deck' }), vault: 'ok', vault_error: null }),
+    );
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    expect(order).toEqual(['update {"id":7,"my_notes":"deck"}', 'update replied', 'copy markdown']);
+  });
+
+  it('still copies the stored note when the flushed save is refused (D14)', async () => {
+    // Every attempt is refused: the blur and the flush both send the draft.
+    noteUpdate.mockResolvedValue({ ok: false, code: 'too_large', message: 'my_notes is too large' });
+    vi.mocked(api.noteCopy).mockResolvedValue({ ok: true });
+    const { user } = setup();
+    await ready();
+
+    await user.type(await myNotesBox(user), 'x');
+    await user.click(button('Copy formatted'));
+    await waitFor(() => expect(api.noteCopy).toHaveBeenCalledExactlyOnceWith({ id: 7, format: 'rich' }));
+    expect(await screen.findByText(TOO_LARGE)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+  });
+
+  it('shows a failed copy in the note status line', async () => {
+    vi.mocked(api.noteCopy).mockResolvedValue({ ok: false, code: 'clipboard_failed', message: 'pasteboard busy' });
+    const { user } = setup();
+    await ready();
+
+    await user.click(button('Copy markdown'));
+    expect(await screen.findByText("Couldn't copy: pasteboard busy")).toBeInTheDocument();
+    expect(button('Copy markdown')).toBeInTheDocument();
+  });
+
   it('opens the note in Obsidian and the folder, and shows missing_file', async () => {
     vi.mocked(api.noteOpen).mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({
       ok: false,

@@ -1,9 +1,9 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Note } from '../../api';
 import * as api from '../../api';
-import { Actions, ARCHIVED, CONFIRM_MS } from './Actions';
+import { Actions, ARCHIVED, CONFIRM_MS, COPIED_MS } from './Actions';
 import { NOT_WHILE_PROCESSING, RECORDING_MISSING } from './format';
 import { deferred, testNote } from './testNote';
 
@@ -16,6 +16,7 @@ beforeEach(() => {
   vi.mocked(api.noteRerun).mockResolvedValue({ ok: true });
   vi.mocked(api.noteArchive).mockResolvedValue({ ok: true });
   vi.mocked(api.noteTrash).mockResolvedValue({ ok: true });
+  vi.mocked(api.noteCopy).mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -49,8 +50,12 @@ const names = () => screen.getAllByRole('menuitem').map((el) => el.textContent);
 const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
 
 describe('Actions toolbar', () => {
-  it('shows Open in Obsidian and a closed More menu button', () => {
+  it('shows the copy buttons, Open in Obsidian and a closed More menu button, in that order', () => {
     setup();
+    const order = ['Copy markdown', 'Copy formatted', 'Open in Obsidian', 'More'];
+    expect(screen.getAllByRole('button').slice(0, 4)).toEqual(
+      order.map((name) => screen.getByRole('button', { name })),
+    );
     expect(screen.getByRole('button', { name: 'Open in Obsidian' })).toBeInTheDocument();
     expect(more()).toHaveAttribute('aria-haspopup', 'menu');
     expect(more()).toHaveAttribute('aria-expanded', 'false');
@@ -253,5 +258,134 @@ describe('Actions Trash confirm', () => {
     await user.click(more());
     expect(item('Trash')).toBeInTheDocument();
     expect(api.noteTrash).not.toHaveBeenCalled();
+  });
+});
+
+const copyButton = (name: string) => screen.getByRole('button', { name });
+
+describe('Actions copy', () => {
+  it.each([
+    ['Copy markdown', 'markdown'],
+    ['Copy formatted', 'rich'],
+  ] as const)('%s copies once with format %s, after flushing pending saves', async (name, format) => {
+    const flushed = deferred<void>();
+    const { user, flushAll } = setup();
+    flushAll.mockReturnValue(flushed.promise);
+    await user.click(copyButton(name));
+    expect(flushAll).toHaveBeenCalledOnce();
+    expect(api.noteCopy).not.toHaveBeenCalled();
+    await act(async () => flushed.resolve());
+    expect(api.noteCopy).toHaveBeenCalledExactlyOnceWith({ id: 7, format });
+  });
+
+  it.each([
+    ['done', {}],
+    ['processing', { status: 'processing' }],
+    ['failed', { status: 'failed', failed_stage: 'transcribe', error: 'x' }],
+    ['no_speech', { status: 'no_speech' }],
+    ['recording missing', { recording_missing: true }],
+    ['recording deleted', { recording_deleted: true, recording_missing: true }],
+  ] as const)('offers both copy buttons, enabled, for a %s note', (_, extra) => {
+    setup(testNote(extra as Partial<Note>));
+    for (const name of ['Copy markdown', 'Copy formatted']) {
+      expect(copyButton(name)).toBeEnabled();
+      expect(copyButton(name)).not.toHaveAttribute('aria-disabled');
+    }
+  });
+
+  it('names the clicked button Copied for 2 s, announced, with focus kept', async () => {
+    const { user } = setup();
+    await user.click(copyButton('Copy markdown'));
+    const copied = await screen.findByRole('button', { name: 'Copied' });
+    expect(copied).toHaveFocus();
+    expect(copyButton('Copy formatted')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Copied');
+    await tick(COPIED_MS - 500);
+    expect(copyButton('Copied')).toBeInTheDocument();
+    await tick(500);
+    expect(copyButton('Copy markdown')).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  });
+
+  it('restarts the 2 s on a second copy, and only the last clicked reads Copied', async () => {
+    const { user } = setup();
+    await user.click(copyButton('Copy markdown'));
+    await screen.findByRole('button', { name: 'Copied' });
+    await tick(1500);
+    await user.click(copyButton('Copied'));
+    await waitFor(() => expect(api.noteCopy).toHaveBeenCalledTimes(2));
+    await tick(1500);
+    expect(copyButton('Copied')).toBeInTheDocument();
+    await tick(500);
+    expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
+
+    await user.click(copyButton('Copy markdown'));
+    await screen.findByRole('button', { name: 'Copied' });
+    await user.click(copyButton('Copy formatted'));
+    await waitFor(() => expect(copyButton('Copy markdown')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Copied' })).toHaveTextContent('Copied');
+    expect(api.noteCopy).toHaveBeenLastCalledWith({ id: 7, format: 'rich' });
+  });
+
+  it('sends no second call while a copy is in flight', async () => {
+    const reply = deferred<Awaited<ReturnType<typeof api.noteCopy>>>();
+    vi.mocked(api.noteCopy).mockReturnValue(reply.promise);
+    const { user } = setup();
+    await user.click(copyButton('Copy markdown'));
+    await waitFor(() => expect(copyButton('Copy markdown')).toHaveAttribute('aria-disabled', 'true'));
+    expect(copyButton('Copy formatted')).toHaveAttribute('aria-disabled', 'true');
+    expect(copyButton('Copy markdown')).toHaveFocus();
+    await user.click(copyButton('Copy markdown'));
+    await user.click(copyButton('Copy formatted'));
+    expect(api.noteCopy).toHaveBeenCalledOnce();
+    await act(async () => reply.resolve({ ok: true }));
+    expect(await screen.findByRole('button', { name: 'Copied' })).not.toHaveAttribute('aria-disabled');
+  });
+
+  it.each([
+    ['clipboard_failed', 'pasteboard busy', "Couldn't copy: pasteboard busy"],
+    ['store_unavailable', 'disk I/O error', "Notes database can't be opened: disk I/O error"],
+    ['unknown_note', 'No note 7', 'No note 7'],
+  ] as const)('shows a %s reply in the status line and never reads Copied', async (code, message, text) => {
+    vi.mocked(api.noteCopy).mockResolvedValue({ ok: false, code, message });
+    const { user, say } = setup();
+    await user.click(copyButton('Copy formatted'));
+    await waitFor(() => expect(say).toHaveBeenLastCalledWith(text));
+    expect(say).toHaveBeenNthCalledWith(1, null);
+    expect(copyButton('Copy formatted')).not.toHaveAttribute('aria-disabled');
+    expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
+  });
+
+  it('shows a rejected call as Could not reach the Meeting app', async () => {
+    vi.mocked(api.noteCopy).mockRejectedValue(new Error('ipc down'));
+    const { user, say } = setup();
+    await user.click(copyButton('Copy markdown'));
+    await waitFor(() =>
+      expect(say).toHaveBeenLastCalledWith(expect.stringMatching(/^Could not reach the Meeting app/)),
+    );
+    expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
+  });
+
+  it('operates with Tab, Enter and Space', async () => {
+    const { user } = setup();
+    await user.tab();
+    expect(copyButton('Copy markdown')).toHaveFocus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(api.noteCopy).toHaveBeenLastCalledWith({ id: 7, format: 'markdown' }));
+    await user.tab();
+    expect(copyButton('Copy formatted')).toHaveFocus();
+    await user.keyboard(' ');
+    await waitFor(() => expect(api.noteCopy).toHaveBeenLastCalledWith({ id: 7, format: 'rich' }));
+    expect(await screen.findByRole('button', { name: 'Copied' })).toHaveFocus();
+  });
+
+  it('clears the timer on unmount', async () => {
+    const { user } = setup();
+    await user.click(copyButton('Copy markdown'));
+    await screen.findByRole('button', { name: 'Copied' });
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    cleanup();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
