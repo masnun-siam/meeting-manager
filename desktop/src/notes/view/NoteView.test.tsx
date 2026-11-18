@@ -685,7 +685,21 @@ describe('NoteView actions', () => {
     expect(item('Archive')).not.toHaveAttribute('aria-disabled');
     expect(item('Trash')).not.toHaveAttribute('aria-disabled');
     await user.keyboard('{Escape}');
-    expect(screen.getByRole('tab', { name: /^My notes/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'My notes, has text' })).toBeInTheDocument();
+    expect(await myNotesBox(user)).toHaveValue('Call Nadia');
+  });
+
+  it('shows the gone-note error when the note vanished before Delete recording', async () => {
+    vi.mocked(api.noteDeleteRecording).mockResolvedValue({ ok: false, code: 'unknown_note', message: 'No note 7' });
+    const { user } = setup();
+    await ready();
+    noteGet.mockResolvedValue({ ok: false, code: 'unknown_note', message: 'No note 7' });
+
+    await choose(user, 'Delete recording');
+    await choose(user, 'Confirm delete');
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 2 })).not.toBeInTheDocument());
+    expect(screen.getAllByRole('status')[0]).toHaveTextContent('No note 7');
+    expect(button('Back')).toBeInTheDocument();
   });
 
   it('pauses the playing player before the archive request', async () => {
