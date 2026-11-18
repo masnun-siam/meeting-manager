@@ -1,8 +1,6 @@
 //! Copy a note to the macOS general pasteboard (FR-1, FR-2, D10): the note without its transcript
 //! (D1), as markdown plain text, or as HTML with that markdown as the plain-text fallback.
 
-use std::path::Path;
-
 use meeting::Language;
 use meeting::store::{self, Row, Source};
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
@@ -11,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::markdown::render_html;
-use super::{Notes, Reply, find, open_store};
+use super::{Notes, Reply, find, folder_name, open_store};
 use crate::env::Env;
 use crate::reply;
 
@@ -48,7 +46,9 @@ pub fn copy(env: &Env, notes: &Notes, id: i64, format: CopyFormat) -> Reply {
 pub fn markdown(row: &Row) -> String {
     let heading = format!(
         "# {}",
-        row.title.clone().unwrap_or_else(|| folder_name(row))
+        row.title
+            .clone()
+            .unwrap_or_else(|| folder_name(&row.recording_path))
     );
     let mut facts = facts_line(row);
     if let Some(event) = &row.event {
@@ -75,15 +75,6 @@ pub fn markdown(row: &Row) -> String {
     let mut out = blocks.join("\n\n");
     out.push('\n');
     out
-}
-
-/// The meeting folder's name, as the notes list shows it for a note without a title.
-fn folder_name(row: &Row) -> String {
-    row.recording_path
-        .parent()
-        .and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default()
 }
 
 /// `<date and time> · <duration> · <language> · <source>`, unknown parts left out. The formats

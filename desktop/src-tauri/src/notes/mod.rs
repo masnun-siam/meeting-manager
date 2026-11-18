@@ -319,12 +319,7 @@ fn list_json(row: &ListRow, stages: &HashMap<PathBuf, Stage>) -> Value {
         Status::Failed => (row.failed_stage.clone(), row.error.clone()),
         Status::Done | Status::NoSpeech => (None, None),
     };
-    let folder_name = row
-        .recording_path
-        .parent()
-        .and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let folder_name = folder_name(&row.recording_path);
     json!({
         "id": row.id,
         "title": row.title,
@@ -338,6 +333,15 @@ fn list_json(row: &ListRow, stages: &HashMap<PathBuf, Stage>) -> Value {
         "error": error,
         "recording_missing": !row.recording_path.is_file(),
     })
+}
+
+/// The meeting folder's name: what the UI shows for a note without a title.
+fn folder_name(recording: &Path) -> String {
+    recording
+        .parent()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// The row as the note view needs it: its fields, the transcript with current names, the
