@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { calendarName, hasEdits, problemText, shownName, TOO_LARGE, TOOL_MISSING, tooLarge } from './format';
+import {
+  calendarName,
+  formatClock,
+  hasEdits,
+  problemText,
+  recordingOpenProblem,
+  shownName,
+  TOO_LARGE,
+  TOOL_MISSING,
+  tooLarge,
+} from './format';
 import { testNote } from './testNote';
 
 describe('shownName (store::shown_name)', () => {
@@ -42,5 +52,31 @@ describe('format', () => {
     [null, 'Could not reach the Meeting app: x', 'Could not reach the Meeting app: x'],
   ])('%s shows %s', (code, text, want) => {
     expect(problemText(code, text)).toBe(want);
+  });
+});
+
+describe('formatClock (FR-5)', () => {
+  it('writes h:mm:ss, whole seconds, hours unpadded', () => {
+    expect(formatClock(0)).toBe('0:00:00');
+    expect(formatClock(12.9)).toBe('0:00:12');
+    expect(formatClock(3 * 3600)).toBe('3:00:00');
+    expect(formatClock(36_000 + 61)).toBe('10:01:01');
+  });
+
+  it('reads a length not known yet, or a negative time, as 0', () => {
+    expect(formatClock(Number.NaN)).toBe('0:00:00');
+    expect(formatClock(Number.POSITIVE_INFINITY)).toBe('0:00:00');
+    expect(formatClock(-4)).toBe('0:00:00');
+  });
+});
+
+describe('recordingOpenProblem (FR-7, FR-8)', () => {
+  it('prefixes the reason macOS gave for open_failed', () => {
+    expect(recordingOpenProblem('open_failed', 'no app')).toBe("Couldn't open the recording: no app");
+  });
+
+  it('words other codes as problemText does', () => {
+    expect(recordingOpenProblem('tool_missing', 'x')).toBe(TOOL_MISSING);
+    expect(recordingOpenProblem('missing_file', 'Recording missing')).toBe('Recording missing');
   });
 });

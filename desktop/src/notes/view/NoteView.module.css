@@ -343,9 +343,10 @@
   display: none;
 }
 
-/* Keeps a focused or scrolled-to element clear of the sticky bar (WCAG 2.4.11). */
+/* Keeps a focused or scrolled-to element clear of the sticky bar (WCAG 2.4.11): sized for the
+   bar wrapped onto two rows (68 px, the player under the tabs in a narrow window) plus its band. */
 .layout * {
-  scroll-margin-top: 64px;
+  scroll-margin-top: 100px;
 }
 
 .tablist [role="tab"] {

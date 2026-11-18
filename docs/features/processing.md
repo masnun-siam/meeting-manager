@@ -96,16 +96,17 @@ With `FEATURE_DESKTOP_APP=1` in the tool build (`Pipeline.desktop`), every run a
 
 | When | Store call | Row |
 |---|---|---|
-| Lock held, `meta.json` and `context.json` read | `start_run` | `processing`, `failed_stage` and `error` cleared; `source`, `recorded_at`, language |
-| `writing`, after `summary.md` | `merge_run`, then `set_vault_note_path` | `done`: title, `body_md` (the summary without its `# title` line), speakers, language, `duration_s`, transcript (the utterance lines), event link, note path |
-| No speech | `merge_run` | `no_speech`, title `No speech detected`, empty transcript, no body |
-| Any failure after the lock | `merge_run` from `State::fail` | `failed`, `failed_stage` (the stage name) and `error` (the first line of the reason, without the stage prefix); an earlier title, body, speakers and transcript stay |
+| Lock held, `meta.json` and `context.json` read | `start_run` | `processing`, `failed_stage` and `error` cleared; `source`, `recorded_at`, language, `attendees` |
+| `writing`, after `summary.md` | `merge_run`, then `set_vault_note_path` | `done`: title, `body_md` (the summary without its `# title` line), speakers, language, `duration_s`, transcript (the utterance lines), event link, `attendees`, note path |
+| No speech | `merge_run` | `no_speech`, title `No speech detected`, empty transcript, no body, `attendees` |
+| Any failure after the lock | `merge_run` from `State::fail` | `failed`, `failed_stage` (the stage name) and `error` (the first line of the reason, without the stage prefix); an earlier title, body, speakers and transcript stay; `attendees` is rewritten |
 
 - A run refused before the lock is held (bad path, missing recording, `already processing`) never touches the row.
 - `source` is `browser` for `recording.webm`, `desktop` when a valid `context.json` has `platform: "desktop"`, else `import`.
 - Reruns keep edits: `merge_run` keeps a title, body or speaker name edited in the app and never changes "My notes". The vault note is then written from the merged row (`vault::compose_body`: `# <title>`, the body, `## My notes` when not empty; `speakers` from `store::shown_name`), so the note file follows an edited title. Job title, notification and `done` title are the note's title. `summary.md` and `meta.json` keep Claude's output.
 - `calendar_event` in `context.json` becomes the row's `event` (`occurrence_id`, `series_id`, `title`, `start`, `end`, `calendar`), with the context flag on or off. With the context flag also on it is the calendar match: the Keychain is not read, nothing is fetched, and the context block and the note's `meeting_title`, `attendees` and `calendar: "matched"` are built as from an iCal match, even when the context also has a meeting ID. The event's `calendar` name goes only to the store. With the desktop flag off the event is ignored.
 - `calendar_event` limits (`context::check`): an empty or over-255-character `occurrence_id` or `series_id`, a `start` or `end` that is not ISO 8601 with an offset, or a wrong type, missing or unknown field drops only the event (logged as `calendar_event dropped: <rule>`). `title` is cut to 300 characters, `organizer`, `calendar` and attendee names to 100, `description` to 20,000, attendees to 200, and an attendee whose name contains `@` is removed; any cut lists `calendar_event` in `truncated` (so the block says `partial: calendar_event`).
+- `attendees` (`context::attendee_names`, PRD `docs/prds/note-view-upgrades.md` FR-3) is read from `context.json`, with the context flag on or off: the `calendar_event` attendees who did not decline, else the `participants` roster (`self` included); trimmed, blanks skipped, cut to 100 characters, deduplicated ignoring case (first spelling kept), at most 200, in file order. It is `[]` when the file is missing or fails a rule (only the rule is logged, by `context::load`). Every run rewrites it from the current file. It is never sent to Claude or written to the vault by this feature (the note's own `attendees:` frontmatter still needs the context flag).
 - A store that cannot be opened or written never fails the run: it is logged as `store open|start|merge|note path failed: <kind>` (`store::error_kind`) and the note is written from Claude's output.
 
 ## Context block

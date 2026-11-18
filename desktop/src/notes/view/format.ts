@@ -6,6 +6,9 @@ export const TOO_LARGE = '"My notes" is over 1 MB, so it was not saved. Shorten 
 export const MY_NOTES_LIMIT = 1_048_576;
 export const RECORDING_MISSING = 'Recording missing';
 export const NOT_WHILE_PROCESSING = 'Not available while the note is processing';
+export const RECORDING_DELETED = 'Recording deleted';
+export const LOADING_RECORDING = 'Loading recording…';
+export const UNPLAYABLE = "This recording can't be played in Meeting.";
 
 export function eventStart(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -42,4 +45,16 @@ export function problemText(code: string | null, text: string): string {
     default:
       return text;
   }
+}
+
+/** A failed Open recording (FR-7, FR-8): an `open_failed` reason is prefixed, other codes as `problemText`. */
+export function recordingOpenProblem(code: string | null, text: string): string {
+  return code === 'open_failed' ? `Couldn't open the recording: ${text}` : problemText(code, text);
+}
+
+/** A player time as `h:mm:ss` (FR-5): `0:00:12`, `3:00:00`. Not a number (no length yet) reads as 0. */
+export function formatClock(seconds: number): string {
+  const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${Math.floor(total / 3600)}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
 }

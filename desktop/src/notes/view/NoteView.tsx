@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import type { Note } from '../../api';
 import { BackIcon } from '../../icons';
 import { formatDuration, formatRecorded, languageLabel, sourceLabel } from '../list/format';
@@ -6,6 +6,7 @@ import { Actions } from './Actions';
 import { calendarName, eventStart } from './format';
 import { MyNotes } from './MyNotes';
 import styles from './NoteView.module.css';
+import { Player, type PlayerHandle } from './Player';
 import { SpeakersPanel } from './SpeakersPanel';
 import { Summary } from './Summary';
 import { Tabs } from './TranscriptTab';
@@ -36,6 +37,8 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const back = useRef<HTMLButtonElement>(null);
+  // Set by the player; #210 hands `seek` to the transcript and #211 calls `pause` first.
+  const [, setPlayer] = useState<PlayerHandle | null>(null);
 
   useEffect(() => {
     if (state.kind === 'ready') heading.current?.focus();
@@ -113,7 +116,11 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
             onBack={onBack}
             say={setMessage}
           />
-          <Editors note={note} autosave={autosave} />
+          <Editors
+            note={note}
+            autosave={autosave}
+            player={<Player note={note} say={setMessage} reload={reload} onHandle={setPlayer} />}
+          />
         </>
       ) : null}
     </article>
@@ -183,7 +190,7 @@ function Status({ note }: { note: Note }) {
 }
 
 /** Summary and speaker names are editable only for a `done` note; "My notes" always. */
-function Editors({ note, autosave }: { note: Note; autosave: Autosave }) {
+function Editors({ note, autosave, player }: { note: Note; autosave: Autosave; player: ReactNode }) {
   const editable = note.status === 'done';
   return (
     <Tabs
@@ -192,6 +199,7 @@ function Editors({ note, autosave }: { note: Note; autosave: Autosave }) {
       myNotes={<MyNotes autosave={autosave} />}
       hasMyNotes={autosave.value('my_notes').length > 0}
       aside={note.speakers.length > 0 ? <SpeakersPanel note={note} autosave={autosave} editable={editable} /> : null}
+      player={player}
     />
   );
 }
