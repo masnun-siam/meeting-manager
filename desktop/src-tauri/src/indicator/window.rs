@@ -85,7 +85,9 @@ pub fn panel<R: Runtime>(window: &WebviewWindow<R>, mtm: MainThreadMarker) {
     };
     let class: &AnyClass = IndicatorPanel::class();
     // SAFETY: `IndicatorPanel` adds no ivars and only overrides two getters, and an `NSPanel`
-    // is an `NSWindow`; this is how a Tauri window becomes a panel without a new crate.
+    // is an `NSWindow` with the same instance size (tested below), so the object Tauri
+    // allocated fits the new class and tao's own ivars stay where tao reads them. This is how a
+    // Tauri window becomes a panel without a new crate.
     unsafe {
         objc2::ffi::object_setClass(ns as *const NSWindow as *mut AnyObject, class);
     }
@@ -117,4 +119,22 @@ pub fn screens(mtm: MainThreadMarker) -> Option<(Vec<Rect>, Rect)> {
     };
     let frames = all.iter().map(|s| rect(s.frame())).collect();
     Some((frames, rect(all[0].visibleFrame())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panel_fits_in_the_memory_of_the_window_it_replaces() {
+        assert_eq!(
+            IndicatorPanel::class().instance_size(),
+            NSWindow::class().instance_size()
+        );
+        assert_eq!(
+            NSPanel::class().instance_size(),
+            NSWindow::class().instance_size()
+        );
+        assert!(IndicatorPanel::class().superclass() == Some(NSPanel::class()));
+    }
 }
