@@ -3,6 +3,7 @@
 //! of whether the main window shows. Link text is never logged (FR-12): only the action and the
 //! outcome or ignore reason.
 
+use std::mem;
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,9 +16,10 @@ use crate::recorder::{Reason, Recorder};
 
 const SCHEME: &str = "meeting-manager";
 const HOST: &str = "record";
-/// How long a launch waits for a link before showing the main window (FR-4: under 1 s). At
-/// least twice the gap measured on a bundled cold `open` (see the PR for #235).
-pub const LAUNCH_GRACE: Duration = Duration::from_millis(300);
+/// How long a launch waits for a link before showing the main window (FR-4: under 1 s). On a
+/// bundled cold `open` macOS delivered the link before `setup` every time (#235's PR), so
+/// this is only a margin for a slow launch.
+pub const LAUNCH_GRACE: Duration = Duration::from_millis(100);
 
 /// What a link asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -185,22 +187,45 @@ enum Decision {
     Decided,
 }
 
-/// Managed state: whether a link arrived before the launch decision, and when the app launched.
+/// Managed state: whether a link arrived before the launch decision, and the actions of links
+/// macOS delivered before `setup` (a cold launch does that), run once the recorder exists.
 struct LinkLaunch {
     decision: Mutex<Decision>,
-    launched: Instant,
+    /// `None` before `on_launch`.
+    launched: Mutex<Option<Instant>>,
+    queued: Mutex<Vec<Action>>,
 }
 
 impl Default for LinkLaunch {
     fn default() -> Self {
         LinkLaunch {
             decision: Mutex::new(Decision::Waiting),
-            launched: Instant::now(),
+            launched: Mutex::new(None),
+            queued: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl LinkLaunch {
+    /// Keeps `action` for `launch` when the app has not launched yet; `false` when it has.
+    fn queue(&self, action: Action) -> bool {
+        let launched = self.launched.lock().unwrap_or_else(PoisonError::into_inner);
+        if launched.is_some() {
+            return false;
+        }
+        self.queued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(action);
+        true
+    }
+
+    /// Marks the launch; returns the actions queued before it, in order.
+    fn launch(&self) -> Vec<Action> {
+        *self.launched.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        mem::take(&mut *self.queued.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
     /// Records a link; `true` for the first one before the decision.
     fn link_arrived(&self) -> bool {
         let mut decision = self.decision.lock().unwrap_or_else(PoisonError::into_inner);
@@ -233,7 +258,9 @@ fn launch_state<R: Runtime>(app: &AppHandle<R>) -> tauri::State<'_, LinkLaunch> 
 /// Called once at startup, after the tray. The main window starts hidden; it shows after
 /// `LAUNCH_GRACE` unless a link arrived first (FR-4, D18).
 pub fn on_launch<R: Runtime>(app: &AppHandle<R>) {
-    launch_state(app);
+    for action in launch_state(app).launch() {
+        handle(app, action);
+    }
     let timer = app.clone();
     let spawned = thread::Builder::new()
         .name("link-launch".into())
@@ -259,15 +286,23 @@ pub fn on_launch<R: Runtime>(app: &AppHandle<R>) {
 pub fn on_opened<R: Runtime>(app: &AppHandle<R>, urls: Vec<Url>) {
     let launch = launch_state(app);
     if launch.link_arrived() {
-        tracing::info!(
-            "link: first link {} ms after launch",
-            launch.launched.elapsed().as_millis()
-        );
+        match *launch
+            .launched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            Some(at) => tracing::info!(
+                "link: first link {} ms after launch",
+                at.elapsed().as_millis()
+            ),
+            None => tracing::info!("link: first link before launch"),
+        }
     }
     for url in urls {
         match parse(&url) {
             Err(reason) => tracing::info!("{}", ignored_line(reason)),
-            Ok(action) => handle(app, action),
+            Ok(action) if !launch.queue(action) => handle(app, action),
+            Ok(_) => {}
         }
     }
 }
@@ -275,6 +310,7 @@ pub fn on_opened<R: Runtime>(app: &AppHandle<R>, urls: Vec<Url>) {
 /// Runs `action` off the main thread: Start may block on a permission prompt.
 fn handle<R: Runtime>(app: &AppHandle<R>, action: Action) {
     let Some(state) = app.try_state::<App>() else {
+        tracing::warn!("link: {} not run: the app has not started", action.kind());
         return;
     };
     let recorder = state.recorder.clone();
@@ -623,6 +659,19 @@ mod tests {
         assert!(linked.link_arrived());
         assert!(!linked.link_arrived());
         assert!(!linked.decide());
+    }
+
+    #[test]
+    fn links_before_the_launch_wait_for_it_and_later_ones_run_at_once() {
+        let launch = LinkLaunch::default();
+        assert!(launch.queue(Action::Start(Some(Language::En))));
+        assert!(launch.queue(Action::Pause));
+        assert_eq!(
+            launch.launch(),
+            [Action::Start(Some(Language::En)), Action::Pause]
+        );
+        assert!(!launch.queue(Action::Stop));
+        assert_eq!(launch.launch(), []);
     }
 
     #[test]
