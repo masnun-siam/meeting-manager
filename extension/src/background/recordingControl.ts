@@ -171,13 +171,19 @@ async function start(language: RecorderStatus['language']): Promise<void> {
   }
 }
 
+/**
+ * Changes the status at once. Before `offscreen_started` the offscreen document would ignore the command,
+ * so nothing is sent; `offscreenStarted` then sends the pause if the status is still `paused`.
+ */
 async function pauseOrResume(type: 'pause' | 'resume'): Promise<void> {
   const status = await readStatus();
   const at = Date.now();
   const state = transition(status.state, { type, at });
   if (state === status.state) return;
   await commit({ ...status, state });
-  await sendToOffscreen({ type: type === 'pause' ? 'offscreen_pause' : 'offscreen_resume' });
+  if (status.micIncluded !== null) {
+    await sendToOffscreen({ type: type === 'pause' ? 'offscreen_pause' : 'offscreen_resume' });
+  }
   if (state.phase === 'paused') await closeSegment(at);
   else if (state.phase === 'recording') await openSegment(at, state.recordedMs);
 }
@@ -197,6 +203,7 @@ async function offscreenStarted(micIncluded: boolean): Promise<void> {
   if (status.state.phase === 'idle') return;
   await writeStatus({ ...status, micIncluded });
   if (status.state.phase === 'saving') await sendToOffscreen({ type: 'offscreen_stop' });
+  else if (status.state.phase === 'paused') await sendToOffscreen({ type: 'offscreen_pause' });
 }
 
 async function offscreenStopped(reason: StopReason): Promise<void> {
