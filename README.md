@@ -148,7 +148,7 @@ Full guide, including building the app from source, updating and uninstalling: *
 
 ### From the desktop app
 
-Press **Start recording** in the top bar, or open an event under **Upcoming** to record it with its attendees. To start and stop from a hotkey (Raycast, Shortcuts or `open`), use the `meeting-manager://record/…` links: **[quick record guide](docs/guides/quick-record.md)**. Finished meetings show up under **All notes**, where you can edit the summary, rename speakers and add your own notes.
+Press **Start recording** in the top bar, or open an event under **Upcoming** to record it with its attendees. To start and stop from a hotkey (Raycast, Alfred, Shortcuts or `open`), use the `meeting-manager://record/…` links: **[quick record guide](docs/guides/quick-record.md)**. Finished meetings show up under **All notes**, where you can edit the summary, rename speakers and add your own notes.
 
 ### From the terminal
 
