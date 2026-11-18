@@ -363,6 +363,7 @@ fn start_worker<R: Runtime>(app: &AppHandle<R>) -> Option<Sender<Action>> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use super::*;
     use crate::recorder::tests::{Rig, mic_denied_capture, ok_capture, rig};
@@ -402,6 +403,70 @@ mod tests {
         for (link, expected) in rows {
             assert_eq!(parsed(link), Ok(expected), "{link}");
         }
+    }
+
+    /// The seven links of the Alfred workflow's `rec` list (alfred-workflow FR-2), in order.
+    const ALFRED_LINKS: [&str; 7] = [
+        "meeting-manager://record/toggle",
+        "meeting-manager://record/start",
+        "meeting-manager://record/start?language=en",
+        "meeting-manager://record/start?language=bn",
+        "meeting-manager://record/pause",
+        "meeting-manager://record/resume",
+        "meeting-manager://record/stop",
+    ];
+
+    /// Every `meeting-manager:` link in an Alfred `info.plist`, plain string work so no plist
+    /// crate is needed (alfred-workflow D9). The scheme matches in any case, as the app's
+    /// parser does. A link ends at a quote (JSON item), `<` (XML string) or whitespace.
+    fn workflow_links(plist: &str) -> Vec<String> {
+        // ASCII lowercasing keeps byte offsets, so indices found in it slice `plist`.
+        plist
+            .to_ascii_lowercase()
+            .match_indices("meeting-manager:")
+            .map(|(start, _)| {
+                let rest = &plist[start..];
+                let end = rest
+                    .find(|c: char| c == '"' || c == '<' || c.is_whitespace())
+                    .unwrap_or(rest.len());
+                rest[..end].replace("&amp;", "&")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_alfred_workflow_opens_only_links_the_app_acts_on() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../alfred/info.plist");
+        let plist = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let links = workflow_links(&plist);
+        for link in &links {
+            assert!(
+                parsed(link).is_ok(),
+                "the Alfred workflow opens {link}, which the app ignores"
+            );
+        }
+        for link in ALFRED_LINKS {
+            assert!(
+                links.iter().any(|found| found == link),
+                "the Alfred workflow lacks {link}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_alfred_link_extractor_finds_every_link() {
+        let plist = "<string>meeting-manager://record/stop</string>\n\
+            <string>[{\"arg\":\"meeting-manager://record/start?language=en\"}]</string>\n\
+            meeting-manager://record/pause Meeting-Manager://record/a?x=1&amp;y=2";
+        assert_eq!(
+            workflow_links(plist),
+            [
+                "meeting-manager://record/stop",
+                "meeting-manager://record/start?language=en",
+                "meeting-manager://record/pause",
+                "Meeting-Manager://record/a?x=1&y=2",
+            ]
+        );
     }
 
     #[test]
