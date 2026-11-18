@@ -208,7 +208,11 @@ export function Actions(props: Props) {
               onClick={() => void copy(format)}
             >
               {done ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-              {done ? COPIED : COPY_LABELS[format]}
+              {/* The hidden label keeps the width, so "Copied" does not shift the buttons after it. */}
+              <span className={styles.label}>
+                <span>{done ? COPIED : COPY_LABELS[format]}</span>
+                <span aria-hidden="true">{COPY_LABELS[format]}</span>
+              </span>
             </button>
           );
         })}

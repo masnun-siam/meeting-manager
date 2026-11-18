@@ -52,8 +52,10 @@ const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
 describe('Actions toolbar', () => {
   it('shows the copy buttons, Open in Obsidian and a closed More menu button, in that order', () => {
     setup();
-    const toolbar = screen.getAllByRole('button').map((el) => el.textContent);
-    expect(toolbar.slice(0, 4)).toEqual(['Copy markdown', 'Copy formatted', 'Open in Obsidian', 'More']);
+    const order = ['Copy markdown', 'Copy formatted', 'Open in Obsidian', 'More'];
+    expect(screen.getAllByRole('button').slice(0, 4)).toEqual(
+      order.map((name) => screen.getByRole('button', { name })),
+    );
     expect(screen.getByRole('button', { name: 'Open in Obsidian' })).toBeInTheDocument();
     expect(more()).toHaveAttribute('aria-haspopup', 'menu');
     expect(more()).toHaveAttribute('aria-expanded', 'false');
