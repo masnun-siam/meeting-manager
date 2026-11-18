@@ -1328,12 +1328,16 @@ mod tests {
         let gone = f.meeting("gone", "Gone");
         let kept = f.meeting("kept", "K");
         write_beside(&kept, "context.json", &roster(&["Me"]));
+        let empty = f.meeting("empty", "Empty");
+        write_beside(&empty, "context.json", &roster(&["Me"]));
         f.backfill().unwrap();
         forget_attendees(&f);
         let store = f.store();
         store
             .fill_attendees(f.row(&kept).id, &["Kept".into()])
             .unwrap();
+        // An empty list counts as filled: it stays empty although the file names someone.
+        store.fill_attendees(f.row(&empty).id, &[]).unwrap();
         // The folder is gone but its row is still stored (no Rescan since).
         fs::remove_dir_all(gone.parent().unwrap()).unwrap();
         // Works with no config: it only reads the stored recording paths.
@@ -1345,6 +1349,7 @@ mod tests {
         assert_eq!(attendees(&f, &none), Some(vec![]));
         assert_eq!(attendees(&f, &gone), Some(vec![]));
         assert_eq!(attendees(&f, &kept), names(&["Kept"]));
+        assert_eq!(attendees(&f, &empty), Some(vec![]));
         assert_eq!(
             store.setting(store::ATTENDEES_FILLED).unwrap().as_deref(),
             Some("true")
