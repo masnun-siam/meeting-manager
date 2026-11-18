@@ -2,6 +2,7 @@
 //! reads the store through `Env`; none takes a path or a command line from the UI.
 
 mod markdown;
+pub(crate) mod media;
 
 use std::collections::HashMap;
 use std::io;
