@@ -1512,6 +1512,8 @@ mod tests {
         failed(env.run(Some(Language::En), None).0);
         assert_eq!(env.row().status, Status::Failed);
         fs::remove_file(env.tools.join("stdin.txt")).unwrap();
+        // Other names than the failed run stored, so the test sees `start_run` write them.
+        env.write_context(&meet_roster());
 
         let go = env.tools.join("go");
         stub(
@@ -1540,7 +1542,7 @@ mod tests {
         let during = during.expect("a row while the run is in flight");
         assert_eq!(during.status, Status::Processing);
         assert_eq!((during.failed_stage, during.error), (None, None));
-        assert_eq!(during.attendees, Some(vec!["Rahim".to_string()]));
+        assert_eq!(during.attendees, names(&["Me", "Rahim", "Nadia"]));
         done(ending);
         assert_eq!(env.row().status, Status::Done);
     }
