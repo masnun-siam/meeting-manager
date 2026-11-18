@@ -71,6 +71,29 @@ pub fn check_recording(recordings_dir: &Path, path: &Path) -> Result<PathBuf, St
     if !canonical.is_file() {
         return Err(format!("{} is not a file", path.display()));
     }
+    check_layout(recordings_dir, path, canonical)
+}
+
+/// As `check_recording`, for a recording whose file is gone but whose folder is still there
+/// (the app deleted it, FR-10): the folder is canonicalised and the file name joined to it.
+pub fn check_recording_folder(recordings_dir: &Path, path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!("{} is not an absolute path", path.display()));
+    }
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(format!("{} is not a file", path.display()));
+    };
+    let folder = fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    if !folder.is_dir() {
+        return Err(format!("{} is not a folder", parent.display()));
+    }
+    check_layout(recordings_dir, path, folder.join(name))
+}
+
+/// The rules both checks share: `canonical` is `recording.<ext>` directly inside
+/// `<recordings_dir>/<name>` or `<recordings_dir>/Archive/<name>`. `path` is what the caller
+/// gave, for the messages.
+fn check_layout(recordings_dir: &Path, path: &Path, canonical: PathBuf) -> Result<PathBuf, String> {
     let root = fs::canonicalize(recordings_dir)
         .map_err(|e| format!("{}: {e}", recordings_dir.display()))?;
     if !canonical.starts_with(&root) {
@@ -294,5 +317,51 @@ extension_id = "obbaikcmcdooakogedoiiflflbbhpgdh"
         );
         assert!(flat.contains("meeting import"), "{flat}");
         assert!(every_ext.iter().all(Result::is_ok), "{every_ext:?}");
+    }
+
+    #[test]
+    fn check_recording_folder_accepts_an_own_folder_without_the_file() {
+        let dir = temp("config-check-folder");
+        let _ = fs::remove_dir_all(&dir);
+        let rec = dir.join("rec");
+        for sub in ["m", "Archive/m", "a/b", "Archive/a/b"] {
+            fs::create_dir_all(rec.join(sub)).unwrap();
+        }
+        fs::create_dir_all(dir.join("elsewhere")).unwrap();
+        symlink(dir.join("elsewhere"), rec.join("linked")).unwrap();
+        fs::write(rec.join("file"), "x").unwrap();
+
+        let check = |p: &str| check_recording_folder(&rec, &rec.join(p));
+        let canon = |p: &str| {
+            fs::canonicalize(rec.join(p))
+                .unwrap()
+                .join("recording.webm")
+        };
+        let want = (canon("m"), canon("Archive/m"));
+        let accepted = (check("m/recording.webm"), check("Archive/m/recording.webm"));
+        let m4a = check("m/recording.m4a");
+        let refused = [
+            check("recording.webm"),
+            check("Archive/recording.webm"),
+            check("a/b/recording.webm"),
+            check("Archive/a/b/recording.webm"),
+            check("m/other.webm"),
+            check("m/recording.txt"),
+            check("linked/recording.webm"),
+            check("gone/recording.webm"),
+            check("file/recording.webm"),
+            check_recording_folder(&rec, &dir.join("elsewhere/recording.webm")),
+            check_recording_folder(&rec, Path::new("rec/m/recording.webm")),
+        ];
+        let flat = check("recording.webm").unwrap_err();
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(accepted.0, Ok(want.0));
+        assert_eq!(accepted.1, Ok(want.1));
+        assert!(m4a.is_ok(), "{m4a:?}");
+        for r in refused {
+            assert!(r.is_err(), "{r:?}");
+        }
+        assert!(flat.contains("is not in its own folder"), "{flat}");
     }
 }
