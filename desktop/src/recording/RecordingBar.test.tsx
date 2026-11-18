@@ -268,8 +268,10 @@ describe('RecordingBar', () => {
 
       recorderStatus.mockResolvedValue(statusReply());
       await user.click(dismiss());
+      // No timer advance: only the read Dismiss starts can clear it, not the next poll.
+      await act(async () => {});
 
-      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       expect(api.recorderDismissStartError).toHaveBeenCalledOnce();
       expect(recorderStatus).toHaveBeenCalledTimes(polls + 1);
     });

@@ -7,7 +7,10 @@ import styles from './Settings.module.css';
 import { UpdatesSection } from './UpdatesSection';
 import { useSettingsInfo } from './useSettingsInfo';
 
-/** FR-20, plus quick-record FR-10's Recording section first. Each section loads and fails on its own, so one failing leaves the others usable. */
+/**
+ * FR-20, plus quick-record FR-10's Recording section first. Each section loads and fails on its own, so one failing
+ * leaves the others usable.
+ */
 export function Settings() {
   const { view, reload } = useSettingsInfo();
   const store = view.kind === 'info' ? view.info.store : null;
