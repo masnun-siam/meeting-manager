@@ -192,49 +192,11 @@ impl Parts {
         )?;
         parts.tap_channels = format.channels;
 
-        let sub_device = dictionary(&[(kAudioSubDeviceUIDKey, object(input_uid.clone()))]);
-        let tap = dictionary(&[
-            (kAudioSubTapUIDKey, object(tap_uuid.UUIDString())),
-            (
-                kAudioSubTapDriftCompensationKey,
-                object(NSNumber::new_bool(true)),
-            ),
-        ]);
         let aggregate_uid = format!(
             "com.masnunsiam.meeting-manager.capture.{}",
             NSUUID::new().UUIDString()
         );
-        let description = dictionary(&[
-            (
-                kAudioAggregateDeviceNameKey,
-                object(NSString::from_str("Meeting capture")),
-            ),
-            (
-                kAudioAggregateDeviceUIDKey,
-                object(NSString::from_str(&aggregate_uid)),
-            ),
-            (
-                kAudioAggregateDeviceIsPrivateKey,
-                object(NSNumber::new_bool(true)),
-            ),
-            (
-                kAudioAggregateDeviceIsStackedKey,
-                object(NSNumber::new_bool(false)),
-            ),
-            (
-                kAudioAggregateDeviceTapAutoStartKey,
-                object(NSNumber::new_bool(true)),
-            ),
-            (kAudioAggregateDeviceMainSubDeviceKey, object(input_uid)),
-            (
-                kAudioAggregateDeviceSubDeviceListKey,
-                object(NSArray::from_retained_slice(&[sub_device])),
-            ),
-            (
-                kAudioAggregateDeviceTapListKey,
-                object(NSArray::from_retained_slice(&[tap])),
-            ),
-        ]);
+        let description = aggregate_description(input_uid, tap_uuid.UUIDString(), &aggregate_uid);
         // SAFETY: NSDictionary is toll-free bridged to CFDictionary; the cast only changes the
         // static type, and the dictionary outlives the call.
         let code = unsafe {
@@ -285,6 +247,56 @@ impl Drop for Parts {
             }
         }
     }
+}
+
+/// The private aggregate device: the default input as main sub-device (the clock), joined by
+/// the tap with drift compensation.
+fn aggregate_description(
+    input_uid: Retained<NSString>,
+    tap_uid: Retained<NSString>,
+    aggregate_uid: &str,
+) -> Retained<NSDictionary<NSString, AnyObject>> {
+    let sub_device = dictionary(&[(kAudioSubDeviceUIDKey, object(input_uid.clone()))]);
+    let tap = dictionary(&[
+        (kAudioSubTapUIDKey, object(tap_uid)),
+        (
+            kAudioSubTapDriftCompensationKey,
+            object(NSNumber::new_bool(true)),
+        ),
+    ]);
+    dictionary(&[
+        (
+            kAudioAggregateDeviceNameKey,
+            object(NSString::from_str("Meeting capture")),
+        ),
+        (
+            kAudioAggregateDeviceUIDKey,
+            object(NSString::from_str(aggregate_uid)),
+        ),
+        (
+            kAudioAggregateDeviceIsPrivateKey,
+            object(NSNumber::new_bool(true)),
+        ),
+        (
+            kAudioAggregateDeviceIsStackedKey,
+            object(NSNumber::new_bool(false)),
+        ),
+        // With auto start the aggregate runs no IO cycles until some process plays audio, so a
+        // mic-only recording would get no frames (#257).
+        (
+            kAudioAggregateDeviceTapAutoStartKey,
+            object(NSNumber::new_bool(false)),
+        ),
+        (kAudioAggregateDeviceMainSubDeviceKey, object(input_uid)),
+        (
+            kAudioAggregateDeviceSubDeviceListKey,
+            object(NSArray::from_retained_slice(&[sub_device])),
+        ),
+        (
+            kAudioAggregateDeviceTapListKey,
+            object(NSArray::from_retained_slice(&[tap])),
+        ),
+    ])
 }
 
 fn object<T: Message>(value: Retained<T>) -> Retained<AnyObject> {
@@ -510,8 +522,31 @@ mod tests {
         assert_eq!(f.context.out.capacity(), out);
     }
 
+    fn value(d: &NSDictionary<NSString, AnyObject>, key: &std::ffi::CStr) -> Retained<AnyObject> {
+        d.objectForKey(&NSString::from_str(key.to_str().unwrap()))
+            .expect("key present")
+    }
+
+    #[test]
+    fn the_aggregate_runs_without_waiting_for_system_audio_and_is_clocked_by_the_mic() {
+        let d = aggregate_description(
+            NSString::from_str("mic-uid"),
+            NSString::from_str("tap-uid"),
+            "aggregate-uid",
+        );
+        let auto_start = value(&d, kAudioAggregateDeviceTapAutoStartKey)
+            .downcast::<NSNumber>()
+            .expect("number");
+        assert!(!auto_start.boolValue());
+        let main = value(&d, kAudioAggregateDeviceMainSubDeviceKey)
+            .downcast::<NSString>()
+            .expect("string");
+        assert_eq!(main.to_string(), "mic-uid");
+    }
+
     /// Needs a microphone and both permissions for the test binary's host app:
-    /// `cargo test -p meeting-desktop capture -- --ignored`.
+    /// `cargo test -p meeting-desktop capture -- --ignored`. Run it with nothing playing, the case
+    /// #257 broke, and again while audio plays.
     #[test]
     #[ignore]
     fn the_real_graph_delivers_48_khz_mono() {
