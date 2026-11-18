@@ -84,7 +84,7 @@ npm ci
 FEATURE_DESKTOP_APP=1 npm run tauri build
 ```
 
-Move `Meeting.app` from `target/release/bundle/macos/` (at the repository root) to `/Applications`. The app is ad-hoc signed, so open it the first time with right-click › **Open**, then grant the permissions it asks for. Because the signature changes with every build, macOS may ask for Microphone, System Audio Recording and Calendar permission again after a rebuild.
+Move `Meeting.app` from `target/release/bundle/macos/` (at the repository root) to `/Applications`. The app is ad-hoc signed, so open it the first time with right-click › **Open**, then grant the permissions it asks for. Because the signature changes with every local build, macOS may ask for Microphone, System Audio Recording and Calendar permission again after a rebuild. Releases from GitHub are signed with one fixed certificate, so the permissions carry over when the app updates itself.
 
 Built without the flag, the app only shows "Built without FEATURE_DESKTOP_APP".
 
