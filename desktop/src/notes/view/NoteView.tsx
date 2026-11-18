@@ -37,7 +37,8 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const back = useRef<HTMLButtonElement>(null);
-  // Set by the player: its `seek` reaches the transcript times while ready (FR-6); #211 calls `pause` first.
+  // Set by the player: its `seek` reaches the transcript times while ready (FR-6);
+  // `pause` runs before the Archive and Delete recording requests (D14).
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
 
   useEffect(() => {
@@ -112,6 +113,8 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
             latest={() => autosave.latest() ?? note}
             flushAll={autosave.flushAll}
             reload={reload}
+            apply={apply}
+            pause={() => player?.pause()}
             markRerun={markRerun}
             onBack={onBack}
             say={setMessage}

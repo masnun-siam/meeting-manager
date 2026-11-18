@@ -4,6 +4,7 @@ import {
   formatClock,
   hasEdits,
   problemText,
+  RECORDING_DELETED_REASON,
   recordingOpenProblem,
   shownName,
   stampSeconds,
@@ -79,6 +80,12 @@ describe('recordingOpenProblem (FR-7, FR-8)', () => {
   it('words other codes as problemText does', () => {
     expect(recordingOpenProblem('tool_missing', 'x')).toBe(TOOL_MISSING);
     expect(recordingOpenProblem('missing_file', 'Recording missing')).toBe('Recording missing');
+  });
+});
+
+describe('RECORDING_DELETED_REASON (FR-9)', () => {
+  it('is the PRD text for Rerun once the recording is deleted', () => {
+    expect(RECORDING_DELETED_REASON).toBe('The recording was deleted.');
   });
 });
 

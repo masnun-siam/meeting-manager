@@ -7,6 +7,8 @@ export const MY_NOTES_LIMIT = 1_048_576;
 export const RECORDING_MISSING = 'Recording missing';
 export const NOT_WHILE_PROCESSING = 'Not available while the note is processing';
 export const RECORDING_DELETED = 'Recording deleted';
+/** Rerun summary's disabled reason once the recording was deleted (FR-9). */
+export const RECORDING_DELETED_REASON = 'The recording was deleted.';
 export const LOADING_RECORDING = 'Loading recording…';
 export const UNPLAYABLE = "This recording can't be played in Meeting.";
 
