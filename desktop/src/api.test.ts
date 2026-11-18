@@ -5,8 +5,8 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (command: string, args?: unknown) => invoke(command, args),
 }));
 
-import * as api from './api';
 import type { NoteRerunError } from './api';
+import * as api from './api';
 
 type Case = [name: string, run: () => Promise<unknown>, command: string, args: Record<string, unknown> | undefined];
 
@@ -59,12 +59,7 @@ const cases: Case[] = [
   ],
   ['noteRerun', () => api.noteRerun({ id: 7, replace_edits: true }), 'note_rerun', { id: 7, replace_edits: true }],
   ['noteOpen', () => api.noteOpen({ id: 7, what: 'folder' }), 'note_open', { id: 7, what: 'folder' }],
-  [
-    'noteOpen recording',
-    () => api.noteOpen({ id: 7, what: 'recording' }),
-    'note_open',
-    { id: 7, what: 'recording' },
-  ],
+  ['noteOpen recording', () => api.noteOpen({ id: 7, what: 'recording' }), 'note_open', { id: 7, what: 'recording' }],
   ['noteCopy', () => api.noteCopy({ id: 7, format: 'rich' }), 'note_copy', { id: 7, format: 'rich' }],
   ['speakerSuggestions', () => api.speakerSuggestions({ id: 7 }), 'speaker_suggestions', { id: 7 }],
   ['noteDeleteRecording', () => api.noteDeleteRecording({ id: 7 }), 'note_delete_recording', { id: 7 }],
