@@ -49,7 +49,11 @@ function Audio({
   onHandle,
 }: Omit<Props, 'note'> & { id: number; knownLength: number | null }) {
   const audio = useRef<HTMLAudioElement>(null);
+  const group = useRef<HTMLFieldSetElement>(null);
+  const openButton = useRef<HTMLButtonElement>(null);
   const gone = useRef(false);
+  // Whether a control had focus when an error took the controls away: Open recording takes it.
+  const hadFocus = useRef(false);
   const [phase, setPhase] = useState<Phase>('loading');
   const [duration, setDuration] = useState(0);
   const [time, setTime] = useState(0);
@@ -95,8 +99,14 @@ function Audio({
     setPhase((now) => (now === 'loading' ? 'ready' : now));
   };
 
+  useEffect(() => {
+    if (phase === 'unplayable' && hadFocus.current) openButton.current?.focus();
+  }, [phase]);
+
   const failed = async () => {
-    if (gone.current) return;
+    // One check per failure: a repeated `error` event changes nothing.
+    if (gone.current || phase === 'checking' || phase === 'unplayable') return;
+    hadFocus.current = group.current?.contains(document.activeElement) ?? false;
     setPhase('checking');
     setPlaying(false);
     // A recording moved away mid-play errors too: the reload then gives `media: null`, and this
@@ -152,7 +162,7 @@ function Audio({
 
   const status = phase === 'loading' ? LOADING_RECORDING : phase === 'unplayable' ? UNPLAYABLE : null;
   return (
-    <fieldset aria-label="Recording player" className={styles.player}>
+    <fieldset ref={group} aria-label="Recording player" className={styles.player}>
       {/* No `controls` (the app's own) and no `crossorigin`: the recording:// handler sends no CORS headers. */}
       {/* biome-ignore lint/a11y/useMediaCaption: the note's own recording, sound only; its Transcript tab is the text alternative (WCAG 1.2.1). */}
       <audio
@@ -171,7 +181,7 @@ function Audio({
         {status}
       </span>
       {phase === 'unplayable' ? (
-        <button type="button" onClick={() => void open()}>
+        <button ref={openButton} type="button" onClick={() => void open()}>
           Open recording
         </button>
       ) : (

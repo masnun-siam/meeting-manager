@@ -271,6 +271,31 @@ describe('Player', () => {
       expect(say).toHaveBeenLastCalledWith(null);
     });
 
+    it('moves focus to Open recording when the error took the focused control away', async () => {
+      const user = userEvent.setup();
+      setup();
+      load();
+      await user.click(screen.getByRole('button', { name: 'Play' }));
+
+      fireEvent.error(element());
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Open recording' })).toHaveFocus());
+    });
+
+    it('checks once for repeated errors and ignores one after the player is gone', async () => {
+      const { reload, unmount } = setup();
+      const audio = element();
+
+      fireEvent.error(audio);
+      fireEvent.error(audio);
+      await screen.findByText(UNPLAYABLE);
+      fireEvent.error(audio);
+      unmount();
+      fireEvent.error(audio);
+
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
     it('shows why a failed Open recording failed in the note status line', async () => {
       const user = userEvent.setup();
       noteOpen.mockResolvedValue({ ok: false, code: 'open_failed', message: 'no app for .mkv' });

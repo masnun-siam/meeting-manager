@@ -46,8 +46,13 @@
   font-size: var(--text-sm);
 }
 
+/* Empty, it takes no room but stays in the accessibility tree, so its first text is announced. */
 .status:empty {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 /* No recording to play: one quiet line where the player would be. */
