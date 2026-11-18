@@ -81,6 +81,9 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
             notes::note_update,
             notes::note_rerun,
             notes::note_open,
+            notes::note_copy,
+            notes::speaker_suggestions,
+            notes::note_delete_recording,
             admin::rescan,
             admin::rescan_status,
             admin::health,
@@ -227,7 +230,7 @@ mod tests {
     use super::*;
 
     /// Every command of the PRD's API table.
-    const COMMANDS: [&str; 26] = [
+    const COMMANDS: [&str; 29] = [
         "recorder_status",
         "recorder_start",
         "recorder_pause",
@@ -244,6 +247,9 @@ mod tests {
         "note_update",
         "note_rerun",
         "note_open",
+        "note_copy",
+        "speaker_suggestions",
+        "note_delete_recording",
         "rescan",
         "rescan_status",
         "health",

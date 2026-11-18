@@ -71,6 +71,7 @@ export type NotesListRow = {
   stage: string | null;
   error: string | null;
   recording_missing: boolean;
+  recording_deleted: boolean;
 };
 export type Speaker = { label: string; name: string | null; evidence: string; name_edited: boolean };
 export type EventLink = {
@@ -81,6 +82,8 @@ export type EventLink = {
   end: string;
   calendar: string | null;
 };
+/** What the player needs to know about a note's recording. */
+export type NoteMedia = { kind: 'audio' | 'video'; playable_hint: boolean };
 export type Note = {
   id: number;
   recording_path: string;
@@ -104,6 +107,10 @@ export type Note = {
   updated_at: string;
   body_html: string;
   recording_missing: boolean;
+  attendees: string[];
+  recording_deleted: boolean;
+  /** Null when the recording is missing or deleted. */
+  media: NoteMedia | null;
 };
 export type NoteUpdate = {
   id: number;
@@ -120,11 +127,20 @@ export type NoteRerunError =
   | 'already_processing'
   | 'tool_missing'
   | 'recording_missing'
+  | 'recording_deleted'
   | 'store_unavailable';
 type NoteFileError = 'already_processing' | 'invalid_path' | 'unknown_note' | 'store_unavailable';
 export type NoteArchiveError = NoteFileError | 'archive_failed';
 export type NoteTrashError = NoteFileError | 'trash_failed';
 export type NoteOpenError = 'missing_file' | 'open_failed' | 'store_unavailable';
+export type NoteCopyError = 'unknown_note' | 'store_unavailable' | 'clipboard_failed';
+export type SpeakerSuggestionsError = 'unknown_note' | 'store_unavailable';
+export type NoteDeleteRecordingError =
+  | 'unknown_note'
+  | 'already_processing'
+  | 'recording_missing'
+  | 'delete_failed'
+  | 'store_unavailable';
 
 export type RescanError = 'not_configured';
 export type RescanStatus = { running: boolean; done: number; total: number };
@@ -196,8 +212,16 @@ export const noteUpdate = (req: NoteUpdate) =>
   call<{ note: Note; vault: 'ok' | 'failed'; vault_error: string | null }, NoteUpdateError>('note_update', req);
 export const noteRerun = (req: { id: number; replace_edits: boolean }) =>
   call<object, NoteRerunError>('note_rerun', req);
-export const noteOpen = (req: { id: number; what: 'obsidian' | 'folder' }) =>
+export const noteOpen = (req: { id: number; what: 'obsidian' | 'folder' | 'recording' }) =>
   call<object, NoteOpenError>('note_open', req);
+export const noteCopy = (req: { id: number; format: 'markdown' | 'rich' }) =>
+  call<object, NoteCopyError>('note_copy', req);
+export const speakerSuggestions = (req: { id: number }) =>
+  call<{ attendees: string[]; earlier: string[] }, SpeakerSuggestionsError>('speaker_suggestions', req);
+export const noteDeleteRecording = (req: { id: number }) =>
+  call<{ note: Note }, NoteDeleteRecordingError>('note_delete_recording', req);
+/** The URL the player loads a note's recording from (served by the `recording://` scheme); not a command. */
+export const recordingUrl = (id: number) => `recording://localhost/${id}`;
 
 export const rescan = () => call<{ started: true }, RescanError>('rescan');
 export const rescanStatus = () => call<RescanStatus>('rescan_status');

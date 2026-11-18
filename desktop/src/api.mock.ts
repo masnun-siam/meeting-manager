@@ -44,6 +44,9 @@ const note: Note = {
   updated_at: '2026-11-12T04:30:00Z',
   body_html: '',
   recording_missing: false,
+  attendees: [],
+  recording_deleted: false,
+  media: { kind: 'audio', playable_hint: true },
 };
 
 export function mockApi(overrides: Partial<Api> = {}): Api {
@@ -72,6 +75,11 @@ export function mockApi(overrides: Partial<Api> = {}): Api {
     noteUpdate: vi.fn(async () => ({ ok: true as const, note, vault: 'ok' as const, vault_error: null })),
     noteRerun: vi.fn(async () => ({ ok: true as const })),
     noteOpen: vi.fn(async () => ({ ok: true as const })),
+    noteCopy: vi.fn(async () => ({ ok: true as const })),
+    speakerSuggestions: vi.fn(async () => ({ ok: true as const, attendees: [], earlier: [] })),
+    noteDeleteRecording: vi.fn(async () => ({ ok: true as const, note })),
+    // A plain function, not `vi.fn`: `vi.resetAllMocks()` would wipe a mock's implementation.
+    recordingUrl: (id: number) => `recording://localhost/${id}`,
     rescan: vi.fn(async () => ({ ok: true as const, started: true as const })),
     rescanStatus: vi.fn(async () => ({ ok: true as const, running: false, done: 0, total: 0 })),
     health: vi.fn(async () => ({ ok: true as const, checks: [] })),

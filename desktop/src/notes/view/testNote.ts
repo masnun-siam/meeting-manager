@@ -28,6 +28,9 @@ export function testNote(extra: Partial<Note> = {}): Note {
     updated_at: '2026-11-12T04:30:00Z',
     body_html: '<h2>Action items</h2>\n<ul>\n<li>Rahim (inferred) sends the deck</li>\n</ul>\n',
     recording_missing: false,
+    attendees: [],
+    recording_deleted: false,
+    media: { kind: 'audio', playable_hint: true },
     ...extra,
   };
 }
