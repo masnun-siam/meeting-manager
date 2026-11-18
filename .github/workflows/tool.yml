@@ -8,6 +8,7 @@ on:
       - Cargo.lock
       - "crates/**"
       - "desktop/src-tauri/**"
+      - "desktop/alfred/**"
       - .github/workflows/tool.yml
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - Cargo.lock
       - "crates/**"
       - "desktop/src-tauri/**"
+      - "desktop/alfred/**"
       - .github/workflows/tool.yml
 
 jobs:

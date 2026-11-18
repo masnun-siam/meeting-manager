@@ -31,6 +31,14 @@ jobs:
             echo "::error::Set all three versions to $want before tagging v$want."
             exit 1
           fi
+      # Before any build: a bad workflow file publishes nothing. D6: the tag stamps the version.
+      - name: Pack the Alfred workflow
+        run: |
+          plutil -lint desktop/alfred/info.plist
+          work="$RUNNER_TEMP/alfred"
+          cp -R desktop/alfred "$work"
+          plutil -replace version -string "${GITHUB_REF_NAME#v}" "$work/info.plist"
+          (cd "$work" && zip -X -q -r "$RUNNER_TEMP/Meeting.alfredworkflow" .)
       # Without the certificate the app would be ad-hoc signed and every update would
       # ask for the macOS permissions again (#239).
       - name: Check the signing secrets are set
@@ -142,4 +150,5 @@ jobs:
         run: |
           bundle=target/release/bundle/macos
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" \
-            "$bundle/Meeting.app.tar.gz" "$bundle/Meeting.app.tar.gz.sig" "$bundle/latest.json"
+            "$bundle/Meeting.app.tar.gz" "$bundle/Meeting.app.tar.gz.sig" "$bundle/latest.json" \
+            "$RUNNER_TEMP/Meeting.alfredworkflow"
