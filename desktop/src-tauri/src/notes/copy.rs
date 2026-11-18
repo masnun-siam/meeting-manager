@@ -350,6 +350,7 @@ mod tests {
             open: |_| Ok(()),
             spawn: |_, _, _, _| Ok(()),
             pasteboard,
+            trash: |_| panic!("copying never trashes"),
         }
     }
 
