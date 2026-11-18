@@ -1277,10 +1277,10 @@ mod tests {
         assert_eq!(code(&trash(&f.env, &failing, id)), "trash_failed");
         assert!(recording.parent().unwrap().is_dir());
         assert!(f.store().get(id).unwrap().is_some());
-        let _lock = Lock::acquire(&Lock::path_for(&recording)).unwrap();
+        let lock = Lock::acquire(&Lock::path_for(&recording)).unwrap();
         assert_eq!(code(&trash(&f.env, &admin(), id)), "already_processing");
         assert_eq!(code(&archive(&f.env, id)), "already_processing");
-        drop(_lock);
+        drop(lock);
         assert_eq!(trash(&f.env, &admin(), id), json!({"ok": true}));
         assert!(!recording.parent().unwrap().exists());
         assert!(f.store().get(id).unwrap().is_none());
