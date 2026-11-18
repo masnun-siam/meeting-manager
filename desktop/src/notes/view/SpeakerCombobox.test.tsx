@@ -84,6 +84,11 @@ describe('SpeakerCombobox', () => {
     expect(field).toHaveAttribute('aria-controls', listbox.id);
     expect(within(listbox).getByRole('group', { name: 'Attendees' })).toBeInTheDocument();
     expect(within(listbox).getByRole('group', { name: 'Used before' })).toBeInTheDocument();
+    // An explicit role: Chromium does not expose options under a <fieldset>'s implicit group.
+    for (const group of within(listbox).getAllByRole('group')) {
+      expect(group).toHaveAttribute('role', 'group');
+      expect(group.tagName).toBe('DIV');
+    }
     expect(groupNames()).toEqual([
       { title: 'Attendees', names: ['Rahim', 'Nadia'] },
       { title: 'Used before', names: ['Rahnat', 'Ayesha'] },

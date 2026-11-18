@@ -511,14 +511,6 @@
   box-shadow: var(--shadow-pop);
 }
 
-/* A group is a <fieldset> (its implicit role is "group"); drop the browser's frame. */
-.suggestionGroup {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
 .suggestionGroup + .suggestionGroup {
   margin-top: var(--space-1);
   padding-top: var(--space-1);

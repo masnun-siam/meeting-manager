@@ -133,7 +133,8 @@ export function SpeakerCombobox({
           {groups.map((group) => {
             const headingId = `${base}-${group.id}`;
             return (
-              <fieldset key={group.id} aria-labelledby={headingId} className={styles.suggestionGroup}>
+              // biome-ignore lint/a11y/useSemanticElements: a <fieldset>'s implicit group does not own role="option" children in Chromium's accessibility tree (they read as plain text); only an explicit role="group" exposes them (#206).
+              <div key={group.id} role="group" aria-labelledby={headingId} className={styles.suggestionGroup}>
                 <div role="presentation" id={headingId} className={styles.suggestionTitle}>
                   {group.title}
                 </div>
@@ -164,7 +165,7 @@ export function SpeakerCombobox({
                     </div>
                   );
                 })}
-              </fieldset>
+              </div>
             );
           })}
         </div>
