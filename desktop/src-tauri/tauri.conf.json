@@ -11,6 +11,7 @@
   },
   "app": {
     "withGlobalTauri": false,
+    "macOSPrivateApi": true,
     "windows": [],
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; media-src recording:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",

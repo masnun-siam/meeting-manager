@@ -149,6 +149,15 @@ pub struct Status {
     pub language: Language,
     pub folder: Option<String>,
     pub notice: Option<Notice>,
+    /// Why the last start from outside the window failed (FR-5); always `None` until #240.
+    pub start_error: Option<StartError>,
+}
+
+/// A start that failed with no window to show it in (FR-5), until the user dismisses it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct StartError {
+    pub code: &'static str,
+    pub message: String,
 }
 
 /// What the watcher thread of a session waits for.
@@ -201,7 +210,7 @@ struct Inner {
     next_id: AtomicU64,
     state: Mutex<State>,
     notice: Mutex<Option<Notice>>,
-    on_change: Mutex<Option<OnChange>>,
+    on_change: Mutex<Vec<OnChange>>,
     /// Held while recovery or a retry converts a folder, so two never work on the same one.
     converting: Mutex<()>,
 }
@@ -253,20 +262,22 @@ impl Recorder {
                 next_id: AtomicU64::new(1),
                 state: Mutex::new(State::Idle),
                 notice: Mutex::new(None),
-                on_change: Mutex::new(None),
+                on_change: Mutex::new(Vec::new()),
                 converting: Mutex::new(()),
             }),
         }
     }
 
-    /// `f` runs after every change of state or notice, on whichever thread made it.
+    /// Adds a listener: `f` runs after every change of state or notice, on whichever thread
+    /// made it, after the listeners added before it.
     pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
-        *lock(&self.inner.on_change) = Some(Arc::new(f));
+        lock(&self.inner.on_change).push(Arc::new(f));
     }
 
     fn changed(&self) {
-        let f = lock(&self.inner.on_change).clone();
-        if let Some(f) = f {
+        // Called outside the lock: a listener may read `status()` or add a listener.
+        let listeners = lock(&self.inner.on_change).clone();
+        for f in listeners {
             f();
         }
     }
@@ -299,6 +310,7 @@ impl Recorder {
             language: language.unwrap_or_else(|| self.saved_language()),
             folder: folder.map(|f| f.display().to_string()),
             notice: lock(&self.inner.notice).clone(),
+            start_error: None,
         }
     }
 
@@ -811,6 +823,12 @@ pub async fn recorder_status<R: Runtime>(app: AppHandle<R>) -> Value {
     .await
 }
 
+/// Stub until #240 (FR-5): answers the contract's shape; there is no start error to clear yet.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn recorder_dismiss_start_error<R: Runtime>(app: AppHandle<R>) -> Value {
+    blocking(app, |_| reply::ok(json!({}))).await
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn recorder_start<R: Runtime>(
     app: AppHandle<R>,
@@ -1096,7 +1114,14 @@ pub(crate) mod tests {
         let rig = rig("status", ok_capture());
         assert_eq!(
             serde_json::to_value(rig.recorder.status()).unwrap(),
-            json!({"state": "idle", "elapsed_s": 0, "language": "bn", "folder": null, "notice": null})
+            json!({
+                "state": "idle",
+                "elapsed_s": 0,
+                "language": "bn",
+                "folder": null,
+                "notice": null,
+                "start_error": null
+            })
         );
     }
 
@@ -1549,6 +1574,26 @@ pub(crate) mod tests {
         // Saving, then idle with the notice.
         rig.stop(Reason::User);
         assert_eq!(count.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn every_listener_hears_every_change() {
+        let rig = rig("listeners", ok_capture());
+        let counts = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+        for count in &counts {
+            let seen = count.clone();
+            let recorder = rig.recorder.clone();
+            rig.recorder.on_change(move || {
+                // A listener may read the status: `changed` holds no lock while calling it.
+                let _ = recorder.status();
+                seen.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        rig.start().unwrap();
+        assert_eq!(counts.each_ref().map(|c| c.load(Ordering::SeqCst)), [1, 1]);
+        // Saving, then idle with the notice.
+        rig.stop(Reason::User);
+        assert_eq!(counts.each_ref().map(|c| c.load(Ordering::SeqCst)), [3, 3]);
     }
 
     static ASKED: AtomicUsize = AtomicUsize::new(0);

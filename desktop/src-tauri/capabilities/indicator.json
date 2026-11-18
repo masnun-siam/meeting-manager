@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "indicator",
+  "description": "Only so the indicator's drag region can move its own window (D19); nothing else.",
+  "windows": ["indicator"],
+  "permissions": ["core:window:allow-start-dragging"]
+}

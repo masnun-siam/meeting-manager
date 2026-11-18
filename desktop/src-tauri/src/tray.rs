@@ -283,6 +283,7 @@ mod tests {
             language: Language::Bn,
             folder: None,
             notice,
+            start_error: None,
         }
     }
 
