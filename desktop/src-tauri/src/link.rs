@@ -4,6 +4,7 @@
 //! outcome or ignore reason.
 
 use std::mem;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -194,6 +195,9 @@ struct LinkLaunch {
     /// `None` before `on_launch`.
     launched: Mutex<Option<Instant>>,
     queued: Mutex<Vec<Action>>,
+    /// The `link` worker, started by the first action: one thread runs every link in the order
+    /// macOS delivered them.
+    worker: Mutex<Option<Sender<Action>>>,
 }
 
 impl Default for LinkLaunch {
@@ -202,6 +206,7 @@ impl Default for LinkLaunch {
             decision: Mutex::new(Decision::Waiting),
             launched: Mutex::new(None),
             queued: Mutex::new(Vec::new()),
+            worker: Mutex::new(None),
         }
     }
 }
@@ -307,29 +312,51 @@ pub fn on_opened<R: Runtime>(app: &AppHandle<R>, urls: Vec<Url>) {
     }
 }
 
-/// Runs `action` off the main thread: Start may block on a permission prompt.
+/// Queues `action` for the `link` worker, off the main thread: Start may block on a
+/// permission prompt, and later links wait for it, so they run in order.
 fn handle<R: Runtime>(app: &AppHandle<R>, action: Action) {
+    let launch = launch_state(app);
+    let mut worker = launch.worker.lock().unwrap_or_else(PoisonError::into_inner);
+    if worker.is_none() {
+        *worker = start_worker(app);
+    }
+    let sent = worker.as_ref().is_some_and(|tx| tx.send(action).is_ok());
+    if !sent {
+        // Started again by the next link.
+        *worker = None;
+        tracing::warn!("link: {} not run", action.kind());
+    }
+}
+
+fn start_worker<R: Runtime>(app: &AppHandle<R>) -> Option<Sender<Action>> {
     let Some(state) = app.try_state::<App>() else {
-        tracing::warn!("link: {} not run: the app has not started", action.kind());
-        return;
+        tracing::warn!("link: the app has not started");
+        return None;
     };
     let recorder = state.recorder.clone();
     let app = app.clone();
+    let (tx, rx) = mpsc::channel::<Action>();
     let spawned = thread::Builder::new().name("link".into()).spawn(move || {
-        let outcome = dispatch(&recorder, action);
-        tracing::info!("{}", handled_line(action, outcome));
-        if shows_window(outcome) {
-            let shown = app.clone();
-            if app
-                .run_on_main_thread(move || crate::focus_main(&shown))
-                .is_err()
-            {
-                tracing::warn!("link: the main window could not be shown");
+        for action in rx {
+            let outcome = dispatch(&recorder, action);
+            tracing::info!("{}", handled_line(action, outcome));
+            if shows_window(outcome) {
+                let shown = app.clone();
+                if app
+                    .run_on_main_thread(move || crate::focus_main(&shown))
+                    .is_err()
+                {
+                    tracing::warn!("link: the main window could not be shown");
+                }
             }
         }
     });
-    if spawned.is_err() {
-        tracing::warn!("link: {} not run: no thread", action.kind());
+    match spawned {
+        Ok(_) => Some(tx),
+        Err(_) => {
+            tracing::warn!("link: the link thread could not start");
+            None
+        }
     }
 }
 
