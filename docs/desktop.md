@@ -24,6 +24,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | `recorder/` | `Recorder` ([features/desktop-recorder.md](features/desktop-recorder.md)): WAV writer, folder, conversion, hand-off, notices; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry`; hooks `on_launch` (crash recovery), `on_sleep` (will-sleep observer), `on_exit_requested` (`Recorder::quit`; `false` keeps the app running) |
 | `calendar/` | `Calendar` (EventKit, [features/desktop-calendar.md](features/desktop-calendar.md)); `calendar_status`, `calendar_events`, `calendar_event`, `calendars`, `set_hidden_calendars`; hook `on_launch`; `Calendar::event_for_context` for `context.json` |
 | `notes/mod.rs` | `Notes { open, spawn }` (fn pointers; real: `native::open_with_system`, `spawn::process_detached`); `notes_list`, `note_get`, `note_update`, `note_rerun`, `note_open`, each a thin wrapper over a `pub fn` taking `&Env` |
+| `notes/media.rs` | The `recording://` scheme (`register`, called in `configure` for `Mode::On`; `respond` reads `App` at request time); `serve(&Env, method, path, range) -> Served` holds the logic |
 | `notes/markdown.rs` | `render_html` (summary markdown to safe HTML) and `shown_transcript` (speaker labels to current names) |
 | `admin/mod.rs` | `Admin { progress, trash, doctor, doctor_timeout }`; `rescan`, `rescan_status`, `health`, `note_archive`, `note_trash`, `settings_info`; hook `on_launch` (first backfill) |
 | `admin/backfill.rs` | Folder scan (`candidates`), `read_folder` (folder files to a `RunResult`), `run` (merge, then remove gone rows, then `backfill_done`), `open_or_rebuild` (move a broken store aside) |
@@ -93,6 +94,20 @@ Each command opens the store through `Env::store()`; an open or query failure is
 | `note_update` | Applies `title`, `body_md`, `my_notes`, `speaker` in that order through `Store::edit`, stopping at the first refusal (`UnknownSpeaker` is `not_editable`). A `done` row's vault note is then always rewritten (`vault::rewrite_from_row`, path saved), so the UI's Retry resends only `id`; a failure is `vault: "failed"` with the root cause as `vault_error`, a file system error as `cannot write the vault note: <io error>` (the note's file name holds the title, so it is left out). Other statuses take only "My notes", store only (D39) |
 | `note_rerun` | Refuses in order: `unknown_note`, `recording_missing`, `already_processing` (lock held), `tool_missing` (`meeting_path` unset, failing `spawn::check_tool`, or a failed spawn). Then `clear_edits` when `replace_edits`, then spawns `meeting process <recording> [--language]` detached |
 | `note_open` | `folder`: the recording's parent. `obsidian`: the stored `vault_note_path` if it is a file, else `vault::find_existing` in the vault folder (the found path is saved). No target is `missing_file`; a failed `open` is `open_failed` |
+
+### `recording://` scheme (`notes/media.rs`)
+
+The player reads a note's recording from `recording://localhost/<note id>` (D9). The URL carries only a decimal id: each request opens the store, reads the row, then the config, and serves the file only if `config::check_recording` accepts the row's path (`recording.<ext>` in its own folder under the recordings directory or `Archive/`). An archived note therefore plays from its new place. The work runs on `spawn_blocking`.
+
+| Request | Answer |
+|---|---|
+| `GET`, no `Range` | `200` with the whole file if it is at most 1 MiB, else `206` of the first 1 MiB |
+| `GET`, `Range: bytes=a-b` or `bytes=a-` | `206`, `Content-Range: bytes <a>-<end>/<size>`; the end is clamped to the file and capped so the body is at most 1 MiB (D15: Tauri's responder takes a whole body; WebKit asks for the rest) |
+| Start at or past the end, `bytes=-n`, several ranges, anything else | `416` with `Content-Range: bytes */<size>` |
+| Unknown id, bad path, deleted mark (`recording_deleted_at`), missing or unreadable file, failed own-folder check, no store or config | `404`, empty body |
+| Any other method (`HEAD` included) | `405` with `Allow: GET` |
+
+Every answer has `Accept-Ranges: bytes`; a file answer has `Content-Type` by extension and `Content-Length`. Failures log the id and a kind (store error kind, `config`, io error kind), never a path. The player must not set `crossorigin`: the scheme sends no CORS headers.
 
 `render_html` runs `pulldown-cmark` (feature `html`, `Options::empty()`) with raw HTML turned into text (D25) and drops the tag of any link or image whose destination is not `http://`, `https://` or `mailto:` (case-insensitive) or an email autolink, keeping its text.
 
@@ -167,7 +182,7 @@ Conventions are the extension's: colocated `*.test.ts(x)`, CSS modules, Biome. N
 
 ## Security
 
-- **CSP** (`tauri.conf.json`): `default-src 'self'`, IPC only in `connect-src`, no remote origin, no `unsafe-inline`, no `unsafe-eval`. `devCsp` adds only the dev server's websocket.
+- **CSP** (`tauri.conf.json`): `default-src 'self'`, IPC only in `connect-src`, `media-src recording:` (the scheme above, which serves only a store row's own recording by id and answers `404` otherwise), no remote origin, no `unsafe-inline`, no `unsafe-eval`. `devCsp` adds only the dev server's websocket.
 - **Capability** (`capabilities/default.json`): window `main`, no permission. The app's own commands need none; no plugin is exposed to the webview, so no shell, file-system or HTTP access from the UI. The updater plugin is Rust side only (D47): no capability lists it.
 - `withGlobalTauri` is off, no asset protocol, no window in the config (windows are created in code).
 - `Info.plist` holds the Microphone, Audio Capture and Calendar usage strings. `Entitlements.plist` (`bundle.macOS.entitlements`) grants `device.audio-input` and `personal-information.calendars`: the bundle is signed with the hardened runtime, which otherwise refuses both without a prompt.
