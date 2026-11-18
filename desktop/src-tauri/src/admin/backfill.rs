@@ -1,6 +1,7 @@
 //! Backfill: reads the meeting folders on disk into the notes store (FR-14). Read-only on the
 //! user's folders; the one file it may move is a broken store, set aside before a rebuild.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
@@ -217,7 +218,8 @@ fn split_failure(error: &str) -> (Option<String>, String) {
     (None, error.into())
 }
 
-/// Reads every candidate folder into `store`, then removes the rows whose recording is gone.
+/// Reads every candidate folder into `store`, then removes the rows whose recording is gone,
+/// except a deleted-recording row whose folder is still there (FR-10).
 /// A folder being processed (lock held) is left to the pipeline. A store write error skips
 /// that folder and leaves `backfill_done` unset; the run reports the first one.
 pub fn run(
@@ -254,8 +256,11 @@ pub fn run(
     if !readable {
         tracing::warn!("recordings folder unreadable: no rows removed");
     }
+    // A note whose recording the app deleted stays while its folder does (FR-10).
+    let deleted: HashSet<PathBuf> = store.deleted_paths()?.into_iter().collect();
     for path in store.paths()?.into_iter().filter(|_| readable) {
-        if !path.is_file() {
+        let kept = deleted.contains(&path) && path.parent().is_some_and(Path::is_dir);
+        if !path.is_file() && !kept {
             store.removed(&path)?;
             removed += 1;
         }
