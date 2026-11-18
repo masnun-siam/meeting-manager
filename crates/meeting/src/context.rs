@@ -203,6 +203,38 @@ pub fn check(raw: &Value) -> Result<Context, &'static str> {
     Ok(c)
 }
 
+/// The meeting's attendee names for the notes store: the calendar attendees who did not decline,
+/// else the roster (`self` included); trimmed, blanks skipped, cut to `MAX_NAME`, duplicates
+/// (ignoring case) dropped keeping the first spelling, at most `MAX_ATTENDEES`, in file order.
+pub fn attendee_names(ctx: &Context) -> Vec<String> {
+    let invited: Vec<&str> = ctx
+        .calendar_event
+        .iter()
+        .flat_map(|e| &e.attendees)
+        .filter(|a| a.response != Response::Declined)
+        .map(|a| a.name.trim())
+        .filter(|n| !n.is_empty())
+        .collect();
+    let picked = if invited.is_empty() {
+        ctx.participants.iter().map(|p| p.name.trim()).collect()
+    } else {
+        invited
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut names = Vec::new();
+    for name in picked.into_iter().filter(|n| !n.is_empty()) {
+        let mut name = name.to_string();
+        cut_to(&mut name, MAX_NAME);
+        if seen.insert(name.to_lowercase()) {
+            names.push(name);
+            if names.len() == MAX_ATTENDEES {
+                break;
+            }
+        }
+    }
+    names
+}
+
 /// The checked event and whether a cut rule trimmed it; `Err` is a fixed rule name.
 fn check_event(raw: Value) -> Result<(CalendarEvent, bool), &'static str> {
     let mut e: CalendarEvent = serde_json::from_value(raw).map_err(|_| "calendar_event type")?;
@@ -723,5 +755,96 @@ mod tests {
         assert_eq!(load(&path), None);
         fs::write(&path, base().to_string()).unwrap();
         assert_eq!(load(&path), check(&base()).ok());
+    }
+
+    fn roster(names: &[&str]) -> Vec<Participant> {
+        names
+            .iter()
+            .map(|n| Participant {
+                name: n.to_string(),
+                is_self: false,
+            })
+            .collect()
+    }
+
+    fn attendees(list: &[(&str, &str)]) -> Value {
+        list.iter()
+            .map(|(name, response)| json!({"name": name, "response": response}))
+            .collect()
+    }
+
+    #[test]
+    fn attendee_names_leave_out_declined_calendar_attendees() {
+        let mut v = with_event(
+            "attendees",
+            attendees(&[
+                ("Rahim", "accepted"),
+                ("Karim", "declined"),
+                ("Nadia", "needs_action"),
+                ("Tania", "tentative"),
+            ]),
+        );
+        v["participants"] = json!([{"name": "Roster", "self": true}]);
+        assert_eq!(
+            attendee_names(&check(&v).unwrap()),
+            ["Rahim", "Nadia", "Tania"]
+        );
+    }
+
+    #[test]
+    fn attendee_names_fall_back_to_the_roster_self_included() {
+        let mut c = check(&base()).unwrap();
+        c.participants = roster(&["Me", "Rahim", "Nadia"]);
+        c.participants[0].is_self = true;
+        assert_eq!(attendee_names(&c), ["Me", "Rahim", "Nadia"]);
+        for list in [
+            json!([]),
+            attendees(&[("Karim", "declined"), ("Nadia", "declined")]),
+            attendees(&[("  ", "accepted")]),
+        ] {
+            let mut v = with_event("attendees", list);
+            v["participants"] =
+                json!([{"name": "Me", "self": true}, {"name": "Rahim", "self": false}]);
+            assert_eq!(attendee_names(&check(&v).unwrap()), ["Me", "Rahim"]);
+        }
+    }
+
+    #[test]
+    fn attendee_names_dedupe_ignoring_case_keeping_the_first_spelling() {
+        let mut c = check(&base()).unwrap();
+        c.participants = roster(&["Rahim", "Nadia", "rahim", " RAHIM ", "Élan", "élan"]);
+        assert_eq!(attendee_names(&c), ["Rahim", "Nadia", "Élan"]);
+    }
+
+    #[test]
+    fn attendee_names_are_cut_capped_and_skip_blanks() {
+        let mut c = check(&base()).unwrap();
+        let mut names: Vec<String> = (0..250).map(|i| format!("Person {i}")).collect();
+        names.insert(1, "person 0".into());
+        names.insert(3, "   ".into());
+        names.insert(5, String::new());
+        c.participants = roster(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        let got = attendee_names(&c);
+        assert_eq!(got.len(), MAX_ATTENDEES);
+        assert_eq!(got[0], "Person 0");
+        assert_eq!(got[1], "Person 1");
+        assert_eq!(got[199], "Person 199");
+        c.participants = roster(&[&"x".repeat(150)]);
+        assert_eq!(attendee_names(&c), ["x".repeat(MAX_NAME)]);
+    }
+
+    #[test]
+    fn attendee_names_of_a_context_with_neither_are_empty() {
+        assert!(attendee_names(&check(&desktop()).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn a_context_that_fails_a_rule_never_gives_names() {
+        assert_eq!(rejected(with("version", json!(2))), "version");
+        let dir = crate::test_support::temp("context-attendees");
+        let path = dir.join("context.json");
+        fs::write(&path, "{garbled").unwrap();
+        let names = load(&path).map(|c| attendee_names(&c)).unwrap_or_default();
+        assert!(names.is_empty());
     }
 }

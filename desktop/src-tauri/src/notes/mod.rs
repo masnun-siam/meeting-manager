@@ -1,6 +1,7 @@
 //! Notes: the list, one note, edits, reruns and opening a note outside the app. Every command
 //! reads the store through `Env`; none takes a path or a command line from the UI.
 
+mod copy;
 mod markdown;
 pub(crate) mod media;
 
@@ -21,6 +22,7 @@ use crate::App;
 use crate::env::Env;
 use crate::reply;
 
+use copy::CopyFormat;
 use markdown::{render_html, shown_transcript};
 
 /// What a command answers: the `ok` reply, or the error reply it stopped at.
@@ -32,6 +34,8 @@ pub struct Notes {
     pub open: fn(&Path) -> io::Result<()>,
     /// Starts `<exe> process <recording>` detached.
     pub spawn: fn(&Path, &Path, Option<Language>, Option<&str>) -> io::Result<()>,
+    /// Replaces the general pasteboard's content with plain text and, when given, HTML.
+    pub pasteboard: fn(&str, Option<&str>) -> Result<(), String>,
 }
 
 impl Notes {
@@ -39,6 +43,7 @@ impl Notes {
         Notes {
             open: native::open_with_system,
             spawn: spawn::process_detached,
+            pasteboard: copy::write_pasteboard,
         }
     }
 }
@@ -119,14 +124,14 @@ pub fn note_open(app: State<'_, App>, id: i64, what: OpenWhat) -> Value {
     answer(open(&app.env, &app.notes, id, what))
 }
 
-// Stubs for the note view upgrades (PRD note-view-upgrades): registered so the UI contract and
-// the command list stay in step; #197 (`note_copy`), #202 (`speaker_suggestions`) and #209
-// (`note_delete_recording`) each replace one with the real command.
-
 #[tauri::command(rename_all = "snake_case")]
-pub fn note_copy() -> Value {
-    not_implemented("note_copy")
+pub fn note_copy(app: State<'_, App>, id: i64, format: CopyFormat) -> Value {
+    answer(copy::copy(&app.env, &app.notes, id, format))
 }
+
+// Stubs for the note view upgrades (PRD note-view-upgrades): registered so the UI contract and
+// the command list stay in step; #202 (`speaker_suggestions`) and #209
+// (`note_delete_recording`) each replace one with the real command.
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn speaker_suggestions() -> Value {
@@ -315,12 +320,7 @@ fn list_json(row: &ListRow, stages: &HashMap<PathBuf, Stage>) -> Value {
         Status::Failed => (row.failed_stage.clone(), row.error.clone()),
         Status::Done | Status::NoSpeech => (None, None),
     };
-    let folder_name = row
-        .recording_path
-        .parent()
-        .and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let folder_name = folder_name(&row.recording_path);
     json!({
         "id": row.id,
         "title": row.title,
@@ -334,6 +334,15 @@ fn list_json(row: &ListRow, stages: &HashMap<PathBuf, Stage>) -> Value {
         "error": error,
         "recording_missing": !row.recording_path.is_file(),
     })
+}
+
+/// The meeting folder's name: what the UI shows for a note without a title.
+fn folder_name(recording: &Path) -> String {
+    recording
+        .parent()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// The row as the note view needs it: its fields, the transcript with current names, the
@@ -416,7 +425,6 @@ mod tests {
     #[test]
     fn the_note_view_stubs_answer_not_implemented() {
         for (reply, command) in [
-            (note_copy(), "note_copy"),
             (speaker_suggestions(), "speaker_suggestions"),
             (note_delete_recording(), "note_delete_recording"),
         ] {
@@ -606,6 +614,7 @@ mod tests {
         Notes {
             open: record_open,
             spawn: record_spawn,
+            pasteboard: |_, _| panic!("the notes tests never copy"),
         }
     }
 
@@ -1166,6 +1175,10 @@ mod tests {
         assert_eq!(
             notes.spawn as usize,
             spawn::process_detached as *const () as usize
+        );
+        assert_eq!(
+            notes.pasteboard as usize,
+            copy::write_pasteboard as *const () as usize
         );
     }
 
