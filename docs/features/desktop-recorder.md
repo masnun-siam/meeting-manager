@@ -142,3 +142,7 @@ Built in `tray::setup` on the main thread (skipped with a warning otherwise, so 
 - First line, disabled, only when there is something to say: the recorder's start error (the FR-2 permission texts word for word, `not_configured`, `capture_failed`), else an `error` or `setup` notice. The window's Dismiss clears it here too. "A recording is already running" is never shown: not idle is not a start error.
 - Start recording: `Recorder::start_ad_hoc(None)` on a thread. Open Meeting: shows and focuses the `main` window. Quit: `app.exit(0)`, so the quit logic above decides.
 - Every recorder change re-renders through `on_change`; a timer thread refreshes only the title while recording.
+
+## Floating indicator
+
+With "Show floating indicator while recording" on (`indicator_enabled`, on by default, read at each start), a recording from any source shows a small pill over every app and Space that stays through pause and saving and then shows the outcome; a `saving` without a recording (retry, recovery, the updater) never shows it. The Rust side (window, show/hide rule, position, settings) is in [desktop.md](../desktop.md#floating-indicator-indicator); the page inside it is `desktop/indicator.html`.

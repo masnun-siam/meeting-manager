@@ -405,7 +405,9 @@ mod tests {
     #[test]
     fn on_opens_the_main_window_with_the_state_and_every_command() {
         let app = started(Mode::On);
-        assert_eq!(labels(&app), ["main"]);
+        let mut windows = labels(&app);
+        windows.sort();
+        assert_eq!(windows, ["indicator", "main"]);
         // Tauri serves `index.html` as the root of the app's origin.
         let url = app.get_webview_window("main").unwrap().url().unwrap();
         assert!(matches!(url.path(), "" | "/" | "/index.html"), "{url}");
@@ -581,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn the_quick_record_stubs_answer_the_contract_through_ipc() {
+    fn the_quick_record_commands_answer_the_contract_through_ipc() {
         let app = started(Mode::On);
         assert_eq!(
             invoke(&app, "main", "recorder_status").unwrap()["start_error"],
@@ -617,7 +619,48 @@ mod tests {
                 .deserialize()
                 .unwrap();
             assert_eq!(reply, serde_json::json!({"ok": true, "enabled": enabled}));
+            assert_eq!(
+                invoke(&app, "main", "indicator_settings").unwrap(),
+                serde_json::json!({"ok": true, "enabled": enabled})
+            );
         }
+    }
+
+    #[test]
+    fn the_indicator_window_loads_its_own_page() {
+        let app = started(Mode::On);
+        let url = app.get_webview_window("indicator").unwrap().url().unwrap();
+        assert_eq!(url.path(), "/indicator.html", "{url}");
+    }
+
+    #[test]
+    fn recording_works_when_the_indicator_window_cannot_be_created() {
+        let app = started(Mode::On);
+        // The label is taken, so building the window fails: logged, and nothing else changes.
+        indicator::on_launch(app.handle());
+        assert_eq!(
+            invoke(&app, "main", "recorder_status").unwrap()["state"],
+            "idle"
+        );
+        assert_eq!(
+            invoke(&app, "main", "indicator_dismiss").unwrap(),
+            serde_json::json!({"ok": true})
+        );
+    }
+
+    #[test]
+    fn indicator_dismiss_hides_an_outcome_when_the_recorder_is_idle() {
+        let app = started(Mode::On);
+        let outcome = indicator::Seen {
+            phase: indicator::Phase::Idle,
+            shown: true,
+        };
+        app.state::<indicator::Indicator>().set_seen(outcome);
+        assert_eq!(
+            invoke(&app, "indicator", "indicator_dismiss").unwrap(),
+            serde_json::json!({"ok": true})
+        );
+        assert!(!app.state::<indicator::Indicator>().seen().shown);
     }
 
     #[test]
