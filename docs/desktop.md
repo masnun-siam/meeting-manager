@@ -34,10 +34,10 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | `updater/tool.rs` | `swap(bundled, target)`: replaces `meeting_path` with the bundled `meeting` when the bytes differ (FR-27; below) |
 | `tray.rs` | Hook `setup`: the menu-bar item ([features/desktop-recorder.md](features/desktop-recorder.md#menu-bar-item-trayrs)); needs the main thread, so the mock-runtime tests run without it |
 | `link.rs` | `meeting-manager://` links (quick-record FR-1 to FR-4, FR-12): hook `on_launch` (shows the main window through `focus_main`; #235 makes a link launch quiet) and `on_opened(app, urls)` for macOS's opened-URLs run event (does nothing until #235). Never logs link text |
-| `indicator/` | The floating indicator (quick-record FR-6 to FR-11): hook `on_launch` (nothing yet) and stubs `indicator_settings`, `set_indicator_enabled`, `indicator_dismiss`, `window_open_main` that answer the contract's shape and touch no window or store until #236 |
+| `indicator/` | The floating indicator (quick-record FR-6 to FR-10; below): `Indicator` state; `indicator_settings`, `set_indicator_enabled`, `indicator_dismiss`, `window_open_main`; hook `on_launch` (builds the hidden `indicator` window, makes it a panel, subscribes to `Recorder::on_change`). `decide` (show/hide), `place.rs` (position), `window.rs` (builder and AppKit) |
 | `capture/` | Audio capture: the boundary in `mod.rs` and the Core Audio implementation (below) |
 
-- **Startup order** (`launch`, flag on): manage `App`, `updater::swap_tool` (before anything can spawn a job), open the window (hidden), then `tray::setup`, `link::on_launch` (shows the window), `indicator::on_launch`, `recorder::on_launch`, `admin::on_launch`, `calendar::on_launch`, `recorder::on_sleep`, `updater::on_launch`. Hooks take `&AppHandle<R>` for any runtime so tests run them on Tauri's mock runtime.
+- **Startup order** (`launch`, flag on): manage `App`, `updater::swap_tool` (before anything can spawn a job), open the window (hidden), then `tray::setup`, `link::on_launch` (shows the window), `indicator::on_launch` (the hidden `indicator` window; if it cannot be created the error is logged once and the app runs without it), `recorder::on_launch`, `admin::on_launch`, `calendar::on_launch`, `recorder::on_sleep`, `updater::on_launch`. Hooks take `&AppHandle<R>` for any runtime so tests run them on Tauri's mock runtime.
 - **Links:** `run()` passes `RunEvent::Opened { urls }` (macOS, flag on) to `link::on_opened`; the bundle's `Info.plist` declares the `meeting-manager` scheme.
 - **Single instance:** `tauri-plugin-single-instance` is added in `run()`, before everything else, and only there: on macOS a second instance in one process exits it, which would end the test process. A second launch focuses the `main` window.
 - **Updater:** `tauri-plugin-updater` is added in `run()` right after single instance, flag on only. Its endpoint (the `latest.json` of this repo's latest GitHub Release) and public key are `plugins.updater` in `tauri.conf.json`; release builds come from `release.yml` ([development.md](development.md#releasing)).
@@ -191,11 +191,36 @@ Rust side only (D47): the plugin is reached through `UpdaterExt` in `Updater::ne
 
 Conventions are the extension's: colocated `*.test.ts(x)`, CSS modules, Biome. No inline `style` attributes: the content security policy forbids them.
 
+## Floating indicator (`indicator/`)
+
+A second webview window, label `indicator`, loading `indicator.html` from the same build (the page is #237's). Created hidden at launch (flag on) with Tauri's builder: borderless, transparent (D17), no system shadow, not resizable, always on top, on all workspaces, skipped in the taskbar, not focusable, `accept_first_mouse`. Then, on the main thread, `window.rs` turns its `NSWindow` into a non-activating panel: `object_setClass` to `MeetingIndicatorPanel` (an `NSPanel` subclass with no ivars, never key or main, defined with `objc2::define_class!`), style mask `NonactivatingPanel`, collection behaviour `CanJoinAllSpaces | FullScreenAuxiliary | Stationary | IgnoresCycle`, level `NSStatusWindowLevel`, `hidesOnDeactivate` off. It is shown with `orderFrontRegardless` (never `show`/`set_focus`, which make it key) and hidden with `hide`.
+
+**When it shows** (`decide`, a pure function over `Recorder::status`, run from `Recorder::on_change` under the `Indicator`'s lock; the window change is queued to the main thread in order):
+
+| Recorder change | Pill |
+|---|---|
+| into `recording`/`paused` from anything else | shown when `indicator_enabled` is on now (read only here), else hidden for that session; replaces an outcome |
+| `recording` ↔ `paused`, then `saving` | unchanged (the setting is not read again) |
+| `saving` from `idle` (retry, recovery, the updater) | hidden |
+| back to `idle` with a notice | stays, wider, for the page to show the outcome, until `indicator_dismiss` or a new start |
+| `idle` with no notice | hidden |
+
+**Size and place.** 220 × 40 points while live or saving, 360 × 40 while an outcome shows, sharing a centre. On each show from hidden, `place` uses the remembered top-left when the pill there intersects one of `NSScreen::screens()` (converted to Tauri's top-left, y-down logical space), else centres it 12 points below the menu bar of the first screen (its `visibleFrame` top). Each `WindowEvent::Moved` while shown is remembered at once (as the live-size top-left) and written to `indicator_position` as JSON `{x, y}` by the `indicator-position` thread once moves rest for 500 ms; a failed write is logged by kind.
+
+**Settings.** `indicator_enabled`: `"false"` is off; absent, unreadable or any other value is on. `indicator_position`: unreadable JSON is no position.
+
+| Command | Does |
+|---|---|
+| `indicator_settings` | `{enabled}`; a store error is `store_unavailable` with `enabled: true` |
+| `set_indicator_enabled{enabled}` | saves `"true"`/`"false"`, `{enabled}`, or `store_unavailable`; a pill on screen stays |
+| `indicator_dismiss` | hides the pill when the recorder is idle; a no-op while recording, paused or saving; `{}` |
+| `window_open_main` | `focus_main` on the main thread; `{}` |
+
 ## Security
 
 - **CSP** (`tauri.conf.json`): `default-src 'self'`, IPC only in `connect-src`, `media-src recording:` (the scheme above, which serves only a store row's own recording by id and answers `404` otherwise), no remote origin, no `unsafe-inline`, no `unsafe-eval`. `devCsp` adds only the dev server's websocket.
 - **Capabilities:** `capabilities/default.json` lists windows `main` and `indicator`, no permission; `capabilities/indicator.json` (quick-record D19) lists only `indicator` and grants only `core:window:allow-start-dragging`, for the pill's drag region. No other capability file. The app's own commands need none; no plugin is exposed to the webview, so no shell, file-system or HTTP access from the UI. The updater plugin is Rust side only (D47): no capability lists it.
-- `app.macOSPrivateApi` is on, with the `tauri` crate's `macos-private-api` feature (quick-record D17), for the indicator's transparent window; `tauri-build` refuses a build where the two disagree.
+- `app.macOSPrivateApi` is on, with the `tauri` crate's `macos-private-api` feature (quick-record D17), for the indicator's transparent window; `tauri-build` refuses a build where the two disagree. The `indicator` window loads only the bundled `indicator.html`, under the same CSP.
 - `withGlobalTauri` is off, no asset protocol, no window in the config (windows are created in code).
 - `Info.plist` holds the Microphone, Audio Capture and Calendar usage strings, and `CFBundleURLTypes` with exactly one scheme, `meeting-manager` (quick-record D14, D15). `Entitlements.plist` (`bundle.macOS.entitlements`) grants `device.audio-input` and `personal-information.calendars`: the bundle is signed with the hardened runtime, which otherwise refuses both without a prompt.
 - Tests in `lib.rs` read these files and fail if they loosen.
