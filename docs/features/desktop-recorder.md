@@ -49,7 +49,9 @@ Checked in this order; any refusal leaves no folder and the state `idle`:
 | `capture.check`, then `capture.request` | `permission_mic`, `permission_audio` (message names the System Settings pane) |
 | Folder, WAV or `capture.start` fails | `permission_*` when the error downcasts to `capture::Denied` (D36), else `capture_failed`; the folder is removed |
 
-On success the language is saved to the store setting `language` (a store failure is logged, never fails Start) and the notice is cleared. `recorder_status.language` when idle is that setting, `bn` when unset or unreadable.
+On success the language is saved to the store setting `language` (a store failure is logged, never fails Start) and the notice and start error are cleared. `recorder_status.language` when idle is that setting, `bn` when unset or unreadable.
+
+**Start error (quick-record FR-5).** `Recorder::start_ad_hoc(language)` is the Start from outside the window (the menu bar, #235's links): no event, in `language`, else the last used. When it is refused with any code but `already_recording` (not idle is never a start error), the refusal is kept as `start_error: {code, message}` and announced through `on_change`; the log carries only `recorder: start refused (<code>)`. The window's `recorder_start` never sets it (its reply already shows the refusal). Any successful Start clears it, as does `dismiss_start_error` (`recorder_dismiss_start_error`), which announces only when there was one. Memory only, never stored.
 
 ## Recording
 
@@ -91,8 +93,8 @@ All run on a blocking thread (permission prompts, joins and ffmpeg block). Repli
 
 | Command | Reply | Errors |
 |---|---|---|
-| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null}` (`start_error` is always `null` until #240) | none |
-| `recorder_dismiss_start_error` | `{}` (stub until #240, which clears the start error) | none |
+| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null}` (`start_error`: see Start error) | none |
+| `recorder_dismiss_start_error` | `{}`; clears the start error (already clear is fine) | none |
 | `recorder_start {language, event_occurrence_id\|null}` | `{folder}` | see Start |
 | `recorder_pause` / `recorder_resume` | `{state}` | `not_recording` |
 | `recorder_stop` | `{state: "saving"}` at once | `not_recording` |
@@ -137,6 +139,6 @@ Built in `tray::setup` on the main thread (skipped with a warning otherwise, so 
 | paused | `tray-paused.png` (template) | frozen `H:MM:SS` | disabled | "Resume" | enabled |
 | saving | idle icon | none | disabled | disabled | disabled |
 
-- First line, disabled, only when there is something to say: the last Start error from the menu (the FR-2 permission texts word for word, `not_configured`, `capture_failed`…), else an `error` or `setup` notice. A Start error clears once a recording runs.
-- Start recording: ad hoc, in the last language, on a thread. Open Meeting: shows and focuses the `main` window. Quit: `app.exit(0)`, so the quit logic above decides.
+- First line, disabled, only when there is something to say: the recorder's start error (the FR-2 permission texts word for word, `not_configured`, `capture_failed`), else an `error` or `setup` notice. The window's Dismiss clears it here too. "A recording is already running" is never shown: not idle is not a start error.
+- Start recording: `Recorder::start_ad_hoc(None)` on a thread. Open Meeting: shows and focuses the `main` window. Quit: `app.exit(0)`, so the quit logic above decides.
 - Every recorder change re-renders through `on_change`; a timer thread refreshes only the title while recording.
