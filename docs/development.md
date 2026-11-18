@@ -51,7 +51,7 @@ Desktop, from `desktop/` (see [desktop.md](desktop.md)):
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | `biome check .` (CI runs `biome ci .`) |
 | `npm test` | `vitest run` (jsdom, setup in `src/test/setup.ts`) |
-| `FEATURE_DESKTOP_APP=1 npm run tauri build` | Builds `target/release/bundle/macos/Meeting.app` (ad-hoc signed) |
+| `FEATURE_DESKTOP_APP=1 npm run tauri build` | Builds `target/release/bundle/macos/Meeting.app` (ad-hoc signed locally, certificate-signed in releases) |
 
 ## Running it end to end
 
@@ -83,5 +83,16 @@ The app and the `meeting` tool share one version `X.Y.Z` (PRD D46), released by 
 3. `release.yml` publishes the GitHub Release `vX.Y.Z` with `Meeting.app.tar.gz` (the app, with `meeting` in `Contents/Resources/`), `Meeting.app.tar.gz.sig` and `latest.json`, the file the app's updater reads. A tag that differs from any of the three versions fails before building and publishes nothing.
 
 - **Secrets:** `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (Actions secrets, from `npx tauri signer generate`). Only the release build sees them; the public key is `plugins.updater.pubkey` in `tauri.conf.json`. Replacing the key pair means every installed app must be reinstalled by hand.
+- **Code signing (#239):** releases are signed with one long-lived self-signed certificate, so the designated requirement (`identifier "com.masnunsiam.meeting-manager" and certificate leaf = H"…"`) is the same in every release and macOS keeps the Microphone, System Audio Recording and Calendars grants across updates. Local builds stay ad-hoc (`signingIdentity: "-"`) and are asked again after each rebuild. Secrets: `APPLE_CERTIFICATE` (the base64 `.p12`), `APPLE_CERTIFICATE_PASSWORD` and `APPLE_SIGNING_IDENTITY` (the certificate's common name); the release fails before building when one is missing, and after building when the app's requirement is not tied to the certificate. Create the certificate once and keep the `.p12` offline, never in the repository:
+
+  ```bash
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 3650 -subj "/CN=Meeting Release Signing" -addext "extendedKeyUsage=critical,codeSigning" -addext "keyUsage=critical,digitalSignature" -addext "basicConstraints=critical,CA:false"
+  ```
+
+  ```bash
+  openssl pkcs12 -export -legacy -inkey key.pem -in cert.pem -out cert.p12
+  ```
+
+  `-legacy` keeps the `.p12` importable into Keychain Access for a local test. Then `base64 -i cert.p12` is `APPLE_CERTIFICATE`. The certificate needs no trust setting: `codesign` signs with an untrusted identity, but the Tauri CLI's own `APPLE_CERTIFICATE` import refuses one ("failed to resolve signing identity"). So `release.yml` imports it into a keychain of the job's own and gives Tauri only `APPLE_SIGNING_IDENTITY`. **Rotating it (or letting it expire) resets the permissions once for every user**, like the first update from an ad-hoc release.
 - **Toolchain:** `release.yml` pins Rust 1.99.1. On Rust 1.100 or later, `tauri-build` 2.6 copies the bundled `meeting` into the wrong directory and the build fails with "Is a directory". Unpin it once `tauri-build` is upgraded.
 - **Release-only settings** (`createUpdaterArtifacts`, bundling `target/release/meeting`) live in `desktop/src-tauri/tauri.release.conf.json` (D50), so a local `npm run tauri build` needs no key and no prebuilt `meeting`. To try a release build locally, build the tool first (`FEATURE_DESKTOP_APP=1 cargo build --release -p meeting`) and pass a throwaway key from `npx tauri signer generate -w <scratch path>`.
