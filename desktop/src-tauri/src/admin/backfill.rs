@@ -136,7 +136,11 @@ pub fn read_folder(recording: &Path, jobs: &[Job]) -> RunResult {
             .map(pipeline::event_link),
         source: pipeline::source_of(recording, ctx.as_ref()),
         recorded_at,
-        attendees: None,
+        attendees: Some(
+            ctx.as_ref()
+                .map(context::attendee_names)
+                .unwrap_or_default(),
+        ),
     };
     if let Some(summary) = summary {
         result.status = Status::Done;
@@ -261,6 +265,33 @@ pub fn run(
         Some(e) => Err(e),
         None => store.set_setting(BACKFILL_DONE, "1"),
     }
+}
+
+/// FR-3's one-time fill: every row with no attendees yet gets them from its folder's
+/// `context.json` (`[]` when there is none usable), then `attendees_filled` is set. A row whose
+/// write fails stays null and the pass goes on; only a store that cannot list its rows stops
+/// it, with the setting unset.
+pub fn fill_attendees(store: &Store) -> anyhow::Result<()> {
+    let rows = store.without_attendees()?;
+    let (mut filled, mut failed) = (0, 0);
+    for (id, recording) in &rows {
+        let names = context::load(&recording.with_file_name("context.json"))
+            .as_ref()
+            .map(context::attendee_names)
+            .unwrap_or_default();
+        match store.fill_attendees(*id, &names) {
+            Ok(()) => filled += 1,
+            Err(e) => {
+                tracing::warn!(
+                    kind = store::error_kind(&e),
+                    "attendee fill: a row not stored"
+                );
+                failed += 1;
+            }
+        }
+    }
+    tracing::info!(filled, failed, "attendee fill finished");
+    store.set_setting(store::ATTENDEES_FILLED, "true")
 }
 
 /// The store at `path`; a corrupt or newer file (`OpenError`) is first moved aside, with its
