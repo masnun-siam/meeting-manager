@@ -91,13 +91,14 @@ All run on a blocking thread (permission prompts, joins and ffmpeg block). Repli
 
 | Command | Reply | Errors |
 |---|---|---|
-| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null}` | none |
+| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null}` (`start_error` is always `null` until #240) | none |
+| `recorder_dismiss_start_error` | `{}` (stub until #240, which clears the start error) | none |
 | `recorder_start {language, event_occurrence_id\|null}` | `{folder}` | see Start |
 | `recorder_pause` / `recorder_resume` | `{state}` | `not_recording` |
 | `recorder_stop` | `{state: "saving"}` at once | `not_recording` |
 | `recorder_retry {folder}` | `{state: "saving"}` at once | `not_found`, `already_recording` |
 
-`on_change(f)` runs `f` after every state or notice change (the menu-bar item uses it). `begin_saving()` holds `saving` while a retry converts.
+`on_change(f)` adds a listener: every listener runs, in the order added, after every state or notice change, called outside the lock so it may read `status()` (the menu-bar item uses it; the indicator will too). `begin_saving()` holds `saving` while a retry converts.
 
 ## Sleep and quit
 

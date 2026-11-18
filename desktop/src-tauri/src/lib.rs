@@ -7,6 +7,8 @@ pub mod admin;
 pub mod calendar;
 pub mod capture;
 pub mod env;
+pub mod indicator;
+pub mod link;
 pub mod notes;
 pub mod recorder;
 pub mod reply;
@@ -71,6 +73,7 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
             recorder::recorder_resume,
             recorder::recorder_stop,
             recorder::recorder_retry,
+            recorder::recorder_dismiss_start_error,
             calendar::calendar_status,
             calendar::calendar_events,
             calendar::calendar_event,
@@ -94,12 +97,17 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
             updater::update_check,
             updater::update_install,
             updater::set_auto_update,
+            indicator::indicator_settings,
+            indicator::set_indicator_enabled,
+            indicator::indicator_dismiss,
+            indicator::window_open_main,
         ]),
     }
 }
 
 /// What startup does: the state first, so no command can run without it, then the tool swap
 /// (FR-27), so every job the app starts uses the bundled tool, then the window, then the hooks.
+/// Built on, the main window starts hidden: the link hook decides whether it shows (FR-4).
 fn launch<R: Runtime>(app: &AppHandle<R>, mode: Mode) -> anyhow::Result<()> {
     launch_in(app, mode, env::Env::new, updater::Updater::new)
 }
@@ -133,9 +141,12 @@ fn launch_in<R: Runtime>(
     .title("Meeting")
     .inner_size(1120.0, 760.0)
     .min_inner_size(720.0, 520.0)
+    .visible(mode == Mode::Off)
     .build()?;
     if mode == Mode::On {
         tray::setup(app);
+        link::on_launch(app);
+        indicator::on_launch(app);
         recorder::on_launch(app);
         admin::on_launch(app);
         calendar::on_launch(app);
@@ -203,6 +214,9 @@ pub fn run() {
             }
             // The Dock icon brings a hidden window back.
             RunEvent::Reopen { .. } if mode == Mode::On => focus_main(app),
+            // A `meeting-manager://` link, at launch or while running (FR-1).
+            #[cfg(target_os = "macos")]
+            RunEvent::Opened { urls } if mode == Mode::On => link::on_opened(app, urls),
             _ => {}
         }),
         Err(e) => {
@@ -230,13 +244,14 @@ mod tests {
     use super::*;
 
     /// Every command of the PRD's API table.
-    const COMMANDS: [&str; 29] = [
+    const COMMANDS: [&str; 34] = [
         "recorder_status",
         "recorder_start",
         "recorder_pause",
         "recorder_resume",
         "recorder_stop",
         "recorder_retry",
+        "recorder_dismiss_start_error",
         "calendar_status",
         "calendar_events",
         "calendar_event",
@@ -260,6 +275,10 @@ mod tests {
         "update_check",
         "update_install",
         "set_auto_update",
+        "indicator_settings",
+        "set_indicator_enabled",
+        "indicator_dismiss",
+        "window_open_main",
     ];
 
     /// A started app on the mock runtime, its `Env` in a temp home removed on drop: invoking a
@@ -562,6 +581,46 @@ mod tests {
     }
 
     #[test]
+    fn the_quick_record_stubs_answer_the_contract_through_ipc() {
+        let app = started(Mode::On);
+        assert_eq!(
+            invoke(&app, "main", "recorder_status").unwrap()["start_error"],
+            Value::Null
+        );
+        for (command, reply) in [
+            (
+                "recorder_dismiss_start_error",
+                serde_json::json!({"ok": true}),
+            ),
+            (
+                "indicator_settings",
+                serde_json::json!({"ok": true, "enabled": true}),
+            ),
+            ("indicator_dismiss", serde_json::json!({"ok": true})),
+            ("window_open_main", serde_json::json!({"ok": true})),
+        ] {
+            assert_eq!(invoke(&app, "main", command).unwrap(), reply, "{command}");
+        }
+        let webview = app.get_webview_window("main").unwrap();
+        for enabled in [false, true] {
+            let request = InvokeRequest {
+                cmd: "set_indicator_enabled".into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: InvokeBody::Json(serde_json::json!({"enabled": enabled})),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            };
+            let reply: Value = get_ipc_response(&webview, request)
+                .unwrap()
+                .deserialize()
+                .unwrap();
+            assert_eq!(reply, serde_json::json!({"ok": true, "enabled": enabled}));
+        }
+    }
+
+    #[test]
     fn only_the_relaunch_skips_the_recorders_quit_rules() {
         assert!(asks_recorder(Mode::On, None));
         assert!(asks_recorder(Mode::On, Some(0)));
@@ -593,6 +652,9 @@ mod tests {
         assert_eq!(config["build"]["devUrl"], "http://localhost:1420");
         assert_eq!(config["app"]["windows"], serde_json::json!([]));
         assert_eq!(config["app"]["withGlobalTauri"], false);
+        // The indicator's transparent window (D17); `tauri-build` checks the cargo feature
+        // matches.
+        assert_eq!(config["app"]["macOSPrivateApi"], true);
         assert!(config["app"]["security"].get("assetProtocol").is_none());
         assert_eq!(config["bundle"]["targets"], serde_json::json!(["app"]));
         let macos = &config["bundle"]["macOS"];
@@ -680,19 +742,59 @@ mod tests {
     }
 
     #[test]
-    fn the_capability_grants_the_main_window_nothing_extra() {
-        let names: Vec<_> =
+    fn the_capabilities_grant_the_windows_nothing_extra() {
+        let mut names: Vec<_> =
             fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities"))
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name().into_string().unwrap())
                 .collect();
-        assert_eq!(names, ["default.json"]);
-        let capability = json_file("capabilities/default.json");
-        assert_eq!(capability["windows"], serde_json::json!(["main"]));
-        assert!(capability.get("webviews").is_none());
-        for permission in capability["permissions"].as_array().unwrap() {
-            assert_eq!(permission, "core:default");
-        }
+        names.sort();
+        assert_eq!(names, ["default.json", "indicator.json"]);
+        let default = json_file("capabilities/default.json");
+        assert_eq!(default["windows"], serde_json::json!(["main", "indicator"]));
+        assert!(default.get("webviews").is_none());
+        assert_eq!(default["permissions"], serde_json::json!([]));
+        // D19: only the pill's drag region.
+        let indicator = json_file("capabilities/indicator.json");
+        assert_eq!(indicator["windows"], serde_json::json!(["indicator"]));
+        assert!(indicator.get("webviews").is_none());
+        assert_eq!(
+            indicator["permissions"],
+            serde_json::json!(["core:window:allow-start-dragging"])
+        );
+    }
+
+    /// The `<string>` values of the array after `<key>CFBundleURLSchemes</key>`.
+    fn url_schemes(plist: &str) -> Vec<&str> {
+        let mut keys = plist.split("<key>CFBundleURLSchemes</key>").skip(1);
+        let after = keys.next().expect("CFBundleURLSchemes is missing");
+        assert!(
+            keys.next().is_none(),
+            "CFBundleURLSchemes is declared twice"
+        );
+        let (array, _) = after.split_once("</array>").expect("an array of schemes");
+        array
+            .split("<string>")
+            .skip(1)
+            .map(|value| value.split_once("</string>").unwrap().0.trim())
+            .collect()
+    }
+
+    #[test]
+    fn the_url_scheme_is_only_meeting_manager() {
+        assert_eq!(
+            url_schemes(&manifest_file("Info.plist")),
+            ["meeting-manager"]
+        );
+    }
+
+    #[test]
+    fn the_url_scheme_check_catches_an_extra_scheme() {
+        let two =
+            "<key>CFBundleURLSchemes</key><array><string>a</string>\n<string>b</string></array>";
+        assert_eq!(url_schemes(two), ["a", "b"]);
+        let twice = format!("{two}{two}");
+        assert!(std::panic::catch_unwind(|| url_schemes(&twice)).is_err());
     }
 
     #[test]
