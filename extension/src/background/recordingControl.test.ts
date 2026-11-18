@@ -385,6 +385,7 @@ describe('running recording', () => {
   });
 
   it('pauses and resumes', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
     vi.setSystemTime(T0 + 60_000);
     await handlePopupCommand({ type: 'pause' });
     expect(status().state).toEqual({ phase: 'paused', startedAt: T0, recordedMs: 60_000 });
@@ -442,6 +443,36 @@ describe('running recording', () => {
     expect(sent()).toEqual(['offscreen_start']);
 
     await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: false });
+    expect(sent()).toEqual(['offscreen_start', 'offscreen_stop']);
+  });
+
+  it('holds a pause until offscreen_started arrives', async () => {
+    await handlePopupCommand({ type: 'pause' });
+    expect(status().state.phase).toBe('paused');
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: 'II' });
+    expect(sent()).toEqual(['offscreen_start']);
+
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    expect(sent()).toEqual(['offscreen_start', 'offscreen_pause']);
+    expect(status().state.phase).toBe('paused');
+    expect(status().micIncluded).toBe(true);
+  });
+
+  it('drops a pending pause when resumed before offscreen_started', async () => {
+    await handlePopupCommand({ type: 'pause' });
+    await handlePopupCommand({ type: 'resume' });
+    expect(status().state.phase).toBe('recording');
+
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    expect(sent()).toEqual(['offscreen_start']);
+  });
+
+  it('sends only the stop for a pause then stop before offscreen_started', async () => {
+    await handlePopupCommand({ type: 'pause' });
+    await handlePopupCommand({ type: 'stop' });
+    expect(status().state.phase).toBe('saving');
+
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
     expect(sent()).toEqual(['offscreen_start', 'offscreen_stop']);
   });
 
