@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::config::{Config, check_recording};
+use crate::config::{Config, check_recording, check_recording_folder};
 use crate::jobs::JobStore;
 use crate::lock::{self, Lock};
 use crate::meta::Meta;
@@ -44,23 +44,40 @@ fn store_removed(store: Option<&Store>, recording: &Path) {
     }
 }
 
+/// What Archive and Trash need still on disk: the recording file, or only its folder for a
+/// recording the app deleted (FR-10).
+#[derive(Clone, Copy)]
+enum Need {
+    File,
+    Folder,
+}
+
 /// The checks Archive and Trash share: the canonical path of a valid
-/// `<name>/recording.<ext>`. `Ok(None)` means the recording is already gone, so its jobs and
-/// its row were cleared and nothing is left to move; `failed` is the code when that fails.
+/// `<name>/recording.<ext>`. `Ok(None)` means what `need` asks for is already gone, so its jobs
+/// and its row were cleared and nothing is left to move; `failed` is the code when that fails.
 fn locate(
     config: &Config,
     jobs: &JobStore,
     store: Option<&Store>,
     recording: &Path,
     failed: &'static str,
+    need: Need,
 ) -> Result<Option<PathBuf>, Refusal> {
-    if !recording.is_file() {
+    let present = match need {
+        Need::File => recording.is_file(),
+        Need::Folder => recording.parent().is_some_and(Path::is_dir),
+    };
+    if !present {
         jobs.remove_for(recording)
             .map_err(|e| refusal(failed, format!("{e:#}")))?;
         store_removed(store, recording);
         return Ok(None);
     }
-    check_recording(&config.recordings_dir, recording)
+    let checked = match need {
+        Need::File => check_recording(&config.recordings_dir, recording),
+        Need::Folder => check_recording_folder(&config.recordings_dir, recording),
+    };
+    checked
         .map(Some)
         .map_err(|reason| refusal("invalid_path", reason))
 }
@@ -75,10 +92,31 @@ pub fn archive(
     store: Option<&Store>,
     recording: &Path,
 ) -> Result<Option<PathBuf>, Refusal> {
-    let Some(canonical) = locate(config, jobs, store, recording, "archive_failed")? else {
+    archive_by(config, jobs, store, recording, Need::File)
+}
+
+/// `archive` for a recording the app deleted (FR-10): the same rules and steps, applied to its
+/// folder without requiring the file. `None` when the folder itself is gone.
+pub fn archive_folder(
+    config: &Config,
+    jobs: &JobStore,
+    store: Option<&Store>,
+    recording: &Path,
+) -> Result<Option<PathBuf>, Refusal> {
+    archive_by(config, jobs, store, recording, Need::Folder)
+}
+
+fn archive_by(
+    config: &Config,
+    jobs: &JobStore,
+    store: Option<&Store>,
+    recording: &Path,
+    need: Need,
+) -> Result<Option<PathBuf>, Refusal> {
+    let Some(canonical) = locate(config, jobs, store, recording, "archive_failed", need)? else {
         return Ok(None);
     };
-    // `check_recording` guarantees a parent folder with a parent of its own.
+    // Both checks guarantee a parent folder with a parent of its own.
     let folder = canonical.parent().expect("recording is inside a folder");
     let root = folder
         .parent()
@@ -163,7 +201,30 @@ pub fn trash(
     trash: fn(&Path) -> io::Result<()>,
     recording: &Path,
 ) -> Result<(), Refusal> {
-    let Some(canonical) = locate(config, jobs, store, recording, "trash_failed")? else {
+    trash_by(config, jobs, store, trash, recording, Need::File)
+}
+
+/// `trash` for a recording the app deleted (FR-10): its folder goes to the Trash without
+/// requiring the file. Succeeds, clearing row and jobs, when the folder itself is gone.
+pub fn trash_folder(
+    config: &Config,
+    jobs: &JobStore,
+    store: Option<&Store>,
+    trash: fn(&Path) -> io::Result<()>,
+    recording: &Path,
+) -> Result<(), Refusal> {
+    trash_by(config, jobs, store, trash, recording, Need::Folder)
+}
+
+fn trash_by(
+    config: &Config,
+    jobs: &JobStore,
+    store: Option<&Store>,
+    trash: fn(&Path) -> io::Result<()>,
+    recording: &Path,
+    need: Need,
+) -> Result<(), Refusal> {
+    let Some(canonical) = locate(config, jobs, store, recording, "trash_failed", need)? else {
         return Ok(());
     };
     if lock::is_held(&Lock::path_for(&canonical)) {
@@ -757,5 +818,217 @@ mod tests {
         assert!(landed);
         assert_eq!(calls, [expected]);
         assert!(left.is_empty());
+    }
+
+    /// A seeded row for `rec/<name>/recording.webm` (plus a job), marked deleted, with the file
+    /// removed: what the app leaves after deleting a recording (FR-9).
+    fn deleted(
+        dir: &Path,
+        jobs: &JobStore,
+        store: &Store,
+        name: &str,
+        job_id: &str,
+    ) -> (i64, PathBuf) {
+        let recording = foldered(dir, jobs, name, job_id);
+        let id = seed(store, &recording);
+        store.set_recording_deleted(id, true).unwrap();
+        fs::remove_file(&recording).unwrap();
+        (id, recording)
+    }
+
+    #[test]
+    fn archive_folder_moves_a_folder_whose_recording_was_deleted() {
+        let (dir, config, jobs) = setup("folder-archive");
+        let store = open_store(&dir);
+        let (id, old) = deleted(&dir, &jobs, &store, "m", "a");
+        foldered(&dir, &jobs, "other", "c");
+        meta(&old).save(&Meta::path_for(&old)).unwrap();
+        fs::write(old.with_file_name("transcript.md"), "t").unwrap();
+        fs::create_dir_all(dir.join("vault")).unwrap();
+        let note = vault::write_note(
+            &dir.join("vault"),
+            "Meetings",
+            &vault::Note {
+                recorded_at: "2026-10-19T14:30",
+                title: "T",
+                language: Language::En,
+                speakers: &[],
+                recording: &old,
+                transcript: &old.with_file_name("transcript.md"),
+                body: "body\n",
+                meeting_title: None,
+                attendees: &[],
+                calendar: None,
+            },
+        )
+        .unwrap();
+        // `Archive/m` is taken, so the folder lands in `Archive/m-2`.
+        fs::create_dir_all(dir.join("rec/Archive/m")).unwrap();
+        let result = archive_folder(&config, &jobs, Some(&store), &old);
+        let target = fs::canonicalize(dir.join("rec/Archive/m-2")).unwrap();
+        let new = target.join("recording.webm");
+        let moved = Meta::load(&target.join("meta.json")).unwrap().unwrap();
+        let text = fs::read_to_string(&note).unwrap();
+        let row = store.get(id).unwrap().unwrap();
+        let state = (
+            dir.join("rec/m").exists(),
+            target.join("transcript.md").is_file(),
+            job_ids(&jobs),
+        );
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(result, Ok(Some(new.clone())));
+        assert_eq!(moved.recording, new);
+        assert!(text.contains(&format!("recording: {:?}\n", new.to_string_lossy())));
+        assert!(text.contains(&format!(
+            "transcript: {:?}\n",
+            target.join("transcript.md").to_string_lossy()
+        )));
+        assert_eq!(row.recording_path, new);
+        assert!(row.recording_deleted_at.is_some());
+        assert_eq!(state, (false, true, vec!["c".to_string()]));
+    }
+
+    #[test]
+    fn archive_folder_and_trash_folder_keep_the_own_folder_rule() {
+        let (dir, config, jobs) = setup("folder-refuse");
+        let store = open_store(&dir);
+        let (_, archived) = deleted(&dir, &jobs, &store, "Archive/done", "arch");
+        let (_, locked) = deleted(&dir, &jobs, &store, "m", "lock");
+        let _lock = Lock::acquire(&Lock::path_for(&locked)).unwrap();
+        fs::create_dir_all(dir.join("out")).unwrap();
+        let invalid = [
+            dir.join("out/recording.webm"),
+            dir.join("rec/recording.webm"),
+            dir.join("rec/Archive/recording.webm"),
+            dir.join("rec/m/other.webm"),
+        ];
+        let before = store.paths().unwrap();
+        trashed();
+        let archive_codes: Vec<_> = invalid
+            .iter()
+            .chain([&archived, &locked])
+            .map(|r| archive_folder(&config, &jobs, Some(&store), r).unwrap_err())
+            .collect();
+        let trash_codes: Vec<_> = invalid
+            .iter()
+            .chain([&locked])
+            .map(|r| {
+                trash_folder(&config, &jobs, Some(&store), record_trash, r)
+                    .unwrap_err()
+                    .code
+            })
+            .collect();
+        let calls = trashed();
+        let after = store.paths().unwrap();
+        let kept = job_ids(&jobs).len();
+        let stayed = (
+            dir.join("rec/Archive/done").is_dir(),
+            dir.join("rec/m").is_dir(),
+            dir.join("out").is_dir(),
+        );
+        fs::remove_dir_all(&dir).unwrap();
+        let codes: Vec<_> = archive_codes.iter().map(|r| r.code).collect();
+        assert_eq!(
+            codes,
+            [
+                "invalid_path",
+                "invalid_path",
+                "invalid_path",
+                "invalid_path",
+                "invalid_path",
+                "already_processing"
+            ]
+        );
+        assert!(archive_codes[4].message.contains("already archived"));
+        assert_eq!(
+            trash_codes,
+            [
+                "invalid_path",
+                "invalid_path",
+                "invalid_path",
+                "invalid_path",
+                "already_processing"
+            ]
+        );
+        assert!(calls.is_empty());
+        assert_eq!(after, before);
+        assert_eq!(kept, 2);
+        assert_eq!(stayed, (true, true, true));
+    }
+
+    #[test]
+    fn trash_folder_trashes_a_folder_whose_recording_was_deleted() {
+        let (dir, config, jobs) = setup("folder-trash");
+        let store = open_store(&dir);
+        let (failing, kept) = deleted(&dir, &jobs, &store, "f", "f");
+        let (_, recording) = deleted(&dir, &jobs, &store, "m", "a");
+        let (_, archived) = deleted(&dir, &jobs, &store, "Archive/done", "b");
+        fs::create_dir_all(dir.join("vault")).unwrap();
+        fs::write(dir.join("vault/note.md"), "keep").unwrap();
+        let refused = trash_folder(&config, &jobs, Some(&store), fail_trash, &kept).unwrap_err();
+        trashed();
+        let results = [&recording, &archived]
+            .map(|r| trash_folder(&config, &jobs, Some(&store), record_trash, r));
+        let calls = trashed();
+        let expected = [&recording, &archived].map(|r| r.parent().unwrap().to_path_buf());
+        let rows = store.paths().unwrap();
+        let left = job_ids(&jobs);
+        let note = fs::read_to_string(dir.join("vault/note.md")).unwrap();
+        let failing_row = store.get(failing).unwrap().is_some();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(refused.code, "trash_failed");
+        assert!(failing_row);
+        assert_eq!(results, [Ok(()), Ok(())]);
+        assert_eq!(calls, expected);
+        assert_eq!(rows, [kept]);
+        assert_eq!(left, ["f"]);
+        assert_eq!(note, "keep");
+    }
+
+    #[test]
+    fn a_gone_folder_clears_the_row_and_its_jobs() {
+        let (dir, config, jobs) = setup("folder-gone");
+        let store = open_store(&dir);
+        let (_, archived) = deleted(&dir, &jobs, &store, "a", "a");
+        let (_, trashable) = deleted(&dir, &jobs, &store, "t", "b");
+        fs::remove_dir_all(archived.parent().unwrap()).unwrap();
+        fs::remove_dir_all(trashable.parent().unwrap()).unwrap();
+        trashed();
+        let results = (
+            archive_folder(&config, &jobs, Some(&store), &archived),
+            trash_folder(&config, &jobs, Some(&store), record_trash, &trashable),
+        );
+        let calls = trashed();
+        let rows = store.paths().unwrap();
+        let left = job_ids(&jobs);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(results, (Ok(None), Ok(())));
+        assert!(calls.is_empty());
+        assert!(rows.is_empty());
+        assert!(left.is_empty());
+    }
+
+    #[test]
+    fn archive_folder_repoints_the_row_even_when_meta_fails_after_the_move() {
+        let (dir, config, jobs) = setup("folder-archive-fail");
+        let store = open_store(&dir);
+        let (id, recording) = deleted(&dir, &jobs, &store, "m", "a");
+        fs::create_dir(Meta::path_for(&recording)).unwrap();
+        let refused = archive_folder(&config, &jobs, Some(&store), &recording).unwrap_err();
+        let archived = fs::canonicalize(dir.join("rec/Archive/m"))
+            .unwrap()
+            .join("recording.webm");
+        let row = store.get(id).unwrap().unwrap();
+        let kept = jobs.read("a").unwrap().is_some();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(refused.code, "archive_failed");
+        assert!(
+            refused.message.starts_with("meta.json: "),
+            "{}",
+            refused.message
+        );
+        assert_eq!(row.recording_path, archived);
+        assert!(row.recording_deleted_at.is_some());
+        assert!(kept);
     }
 }

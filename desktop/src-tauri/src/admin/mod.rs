@@ -313,14 +313,24 @@ pub fn settings(env: &Env) -> Value {
 }
 
 pub fn archive(env: &Env, id: i64) -> Value {
-    answer(by_note(env, id, |config, store, recording| {
-        folders::archive(config, &env.jobs, Some(store), recording).map(drop)
+    answer(by_note(env, id, |config, store, recording, deleted| {
+        let archive = if deleted {
+            folders::archive_folder
+        } else {
+            folders::archive
+        };
+        archive(config, &env.jobs, Some(store), recording).map(drop)
     }))
 }
 
 pub fn trash(env: &Env, admin: &Admin, id: i64) -> Value {
-    answer(by_note(env, id, |config, store, recording| {
-        folders::trash(config, &env.jobs, Some(store), admin.trash, recording)
+    answer(by_note(env, id, |config, store, recording, deleted| {
+        let trash = if deleted {
+            folders::trash_folder
+        } else {
+            folders::trash
+        };
+        trash(config, &env.jobs, Some(store), admin.trash, recording)
     }))
 }
 
@@ -329,11 +339,13 @@ fn answer(reply: Result<Value, Value>) -> Value {
 }
 
 /// Looks up the note's recording and applies the library's by-path action (the same rules as
-/// the native host). A refusal passes through unchanged (D41).
+/// the native host). The action is told when the app deleted the recording, so it acts on the
+/// folder (FR-10); a file put back takes the normal path. A refusal passes through unchanged
+/// (D41).
 fn by_note(
     env: &Env,
     id: i64,
-    action: impl FnOnce(&Config, &Store, &PathBuf) -> Result<(), Refusal>,
+    action: impl FnOnce(&Config, &Store, &PathBuf, bool) -> Result<(), Refusal>,
 ) -> Result<Value, Value> {
     let store = env.store().map_err(|e| {
         tracing::warn!(kind = store::error_kind(&e), "notes database failed");
@@ -346,7 +358,8 @@ fn by_note(
     let config = env
         .config()
         .map_err(|message| reply::err("not_configured", message))?;
-    action(&config, &store, &row.recording_path)
+    let deleted = row.recording_deleted_at.is_some() && !row.recording_path.is_file();
+    action(&config, &store, &row.recording_path, deleted)
         .map_err(|refusal| reply::err(refusal.code, refusal.message))?;
     Ok(reply::ok(json!({})))
 }
@@ -1222,6 +1235,116 @@ mod tests {
         assert_eq!(archive(&f.env, archived), json!({"ok": true}));
         assert_eq!(trash(&f.env, &admin(), trashed), json!({"ok": true}));
         assert!(f.rows().is_empty());
+    }
+
+    /// A stored meeting whose recording the app deleted: mark set, file gone, folder kept.
+    fn deleted(f: &Fixture, folder: &str) -> (i64, PathBuf) {
+        let (id, recording) = stored(f, folder);
+        f.store().set_recording_deleted(id, true).unwrap();
+        fs::remove_file(&recording).unwrap();
+        (id, recording)
+    }
+
+    #[test]
+    fn a_deleted_recording_row_is_archived_by_its_folder() {
+        let f = Fixture::new("deleted-archive");
+        let (id, recording) = deleted(&f, "m");
+        assert_eq!(archive(&f.env, id), json!({"ok": true}));
+        let folder = f.recordings().join("Archive/m");
+        assert!(folder.join("summary.md").is_file());
+        assert!(!recording.parent().unwrap().exists());
+        let row = f.store().get(id).unwrap().unwrap();
+        assert_eq!(row.recording_path, folder.join("recording.webm"));
+        assert!(row.recording_deleted_at.is_some());
+        assert_eq!(
+            Meta::load(&folder.join("meta.json"))
+                .unwrap()
+                .unwrap()
+                .recording,
+            folder.join("recording.webm")
+        );
+        assert_eq!(code(&archive(&f.env, id)), "invalid_path");
+    }
+
+    #[test]
+    fn a_deleted_recording_row_is_trashed_by_its_folder() {
+        let f = Fixture::new("deleted-trash");
+        let (id, recording) = deleted(&f, "m");
+        let failing = Admin {
+            trash: fail_trash,
+            ..admin()
+        };
+        assert_eq!(code(&trash(&f.env, &failing, id)), "trash_failed");
+        assert!(recording.parent().unwrap().is_dir());
+        assert!(f.store().get(id).unwrap().is_some());
+        let lock = Lock::acquire(&Lock::path_for(&recording)).unwrap();
+        assert_eq!(code(&trash(&f.env, &admin(), id)), "already_processing");
+        assert_eq!(code(&archive(&f.env, id)), "already_processing");
+        drop(lock);
+        assert_eq!(trash(&f.env, &admin(), id), json!({"ok": true}));
+        assert!(!recording.parent().unwrap().exists());
+        assert!(f.store().get(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_deleted_recording_row_whose_folder_is_gone_is_removed() {
+        let f = Fixture::new("deleted-gone");
+        let (archived, first) = deleted(&f, "a");
+        let (trashed, second) = deleted(&f, "t");
+        fs::remove_dir_all(first.parent().unwrap()).unwrap();
+        fs::remove_dir_all(second.parent().unwrap()).unwrap();
+        assert_eq!(archive(&f.env, archived), json!({"ok": true}));
+        assert_eq!(trash(&f.env, &admin(), trashed), json!({"ok": true}));
+        assert!(f.rows().is_empty());
+    }
+
+    #[test]
+    fn a_deleted_recording_row_with_the_file_back_takes_the_normal_path() {
+        let f = Fixture::new("deleted-back");
+        let (id, recording) = stored(&f, "m");
+        f.store().set_recording_deleted(id, true).unwrap();
+        // The file is still (or again) there: `folders::archive` moves it with the folder.
+        assert_eq!(archive(&f.env, id), json!({"ok": true}));
+        let moved = f.recordings().join("Archive/m/recording.webm");
+        assert!(moved.is_file());
+        assert!(!recording.exists());
+        // So does Trash: the folder goes with the file in it.
+        assert_eq!(trash(&f.env, &admin(), id), json!({"ok": true}));
+        assert!(!moved.exists());
+    }
+
+    #[test]
+    fn rescan_keeps_a_deleted_recording_row_while_its_folder_exists() {
+        let f = Fixture::new("deleted-rescan");
+        let (id, recording) = deleted(&f, "m");
+        let (_, missing) = stored(&f, "x");
+        fs::remove_file(&missing).unwrap();
+        f.store().edit(id, Edit::Title("Mine".into())).unwrap();
+        f.store().edit(id, Edit::MyNotes("notes".into())).unwrap();
+        f.backfill().unwrap();
+        assert_eq!(f.rows(), [recording]);
+        let row = f.store().get(id).unwrap().unwrap();
+        assert_eq!(row.title.as_deref(), Some("Mine"));
+        assert_eq!(row.my_notes, "notes");
+        assert!(row.recording_deleted_at.is_some());
+
+        assert_eq!(archive(&f.env, id), json!({"ok": true}));
+        f.backfill().unwrap();
+        let folder = f.recordings().join("Archive/m");
+        assert_eq!(f.rows(), [folder.join("recording.webm")]);
+
+        fs::remove_dir_all(folder).unwrap();
+        f.backfill().unwrap();
+        assert!(f.rows().is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_recordings_folder_keeps_deleted_recording_rows() {
+        let f = Fixture::new("deleted-unmounted");
+        deleted(&f, "m");
+        fs::rename(f.recordings(), f.env.home.join("Elsewhere")).unwrap();
+        f.backfill().unwrap();
+        assert_eq!(f.rows().len(), 1);
     }
 
     #[test]
