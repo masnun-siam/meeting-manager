@@ -56,3 +56,13 @@ export function formatClock(seconds: number): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${Math.floor(total / 3600)}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
 }
+
+const STAMP = /^\[(\d{2}):(\d{2}):(\d{2})\]$/;
+
+/** A transcript line's `[hh:mm:ss]` in seconds (FR-6): `[00:12:30]` is 750. Anything else is null. */
+export function stampSeconds(stamp: string): number | null {
+  const parts = STAMP.exec(stamp);
+  if (!parts) return null;
+  const [, h, m, s] = parts;
+  return Number(h) * 3600 + Number(m) * 60 + Number(s);
+}

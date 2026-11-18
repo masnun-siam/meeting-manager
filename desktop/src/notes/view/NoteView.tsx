@@ -37,8 +37,8 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const back = useRef<HTMLButtonElement>(null);
-  // Set by the player; #210 hands `seek` to the transcript and #211 calls `pause` first.
-  const [, setPlayer] = useState<PlayerHandle | null>(null);
+  // Set by the player: its `seek` reaches the transcript times while ready (FR-6); #211 calls `pause` first.
+  const [player, setPlayer] = useState<PlayerHandle | null>(null);
 
   useEffect(() => {
     if (state.kind === 'ready') heading.current?.focus();
@@ -120,6 +120,7 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
             note={note}
             autosave={autosave}
             player={<Player note={note} say={setMessage} reload={reload} onHandle={setPlayer} />}
+            onSeek={player?.ready ? player.seek : undefined}
           />
         </>
       ) : null}
@@ -189,8 +190,21 @@ function Status({ note }: { note: Note }) {
   );
 }
 
-/** Summary and speaker names are editable only for a `done` note; "My notes" always. */
-function Editors({ note, autosave, player }: { note: Note; autosave: Autosave; player: ReactNode }) {
+/**
+ * Summary and speaker names are editable only for a `done` note; "My notes" always. `onSeek` is the
+ * player's seek once it is ready (D14), so transcript times are buttons only then.
+ */
+function Editors({
+  note,
+  autosave,
+  player,
+  onSeek,
+}: {
+  note: Note;
+  autosave: Autosave;
+  player: ReactNode;
+  onSeek?: (seconds: number) => void;
+}) {
   const editable = note.status === 'done';
   return (
     <Tabs
@@ -200,6 +214,7 @@ function Editors({ note, autosave, player }: { note: Note; autosave: Autosave; p
       hasMyNotes={autosave.value('my_notes').length > 0}
       aside={note.speakers.length > 0 ? <SpeakersPanel note={note} autosave={autosave} editable={editable} /> : null}
       player={player}
+      onSeek={onSeek}
     />
   );
 }

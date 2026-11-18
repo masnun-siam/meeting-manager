@@ -760,6 +760,68 @@ describe('NoteView layout (FR-11)', () => {
     expect(screen.getByRole('group', { name: 'Recording player' })).toBeInTheDocument();
   });
 
+  it('jumps the player to a transcript time, keeping it playing or paused (FR-6, D7)', async () => {
+    const { user } = setup(testNote({ transcript: '[00:05:00] Ayesha: Hello.\n[00:12:30] Rahim: Hi.' }));
+    await ready();
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    const audio = document.querySelector('audio') as HTMLAudioElement;
+    expect(screen.queryByRole('button', { name: /^Jump to/ })).not.toBeInTheDocument();
+    media.duration = 3600;
+    fireEvent.loadedMetadata(audio);
+    const player = within(screen.getByRole('group', { name: 'Recording player' }));
+
+    await user.click(player.getByRole('button', { name: 'Play' }));
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const pause = vi.mocked(HTMLMediaElement.prototype.pause);
+    play.mockClear();
+    pause.mockClear();
+    await user.click(button('Jump to 00:12:30'));
+    expect(media.time).toBe(750);
+    expect(media.paused).toBe(false);
+    expect(play).not.toHaveBeenCalled();
+    expect(pause).not.toHaveBeenCalled();
+
+    await user.click(player.getByRole('button', { name: 'Pause' }));
+    play.mockClear();
+    await user.click(button('Jump to 00:05:00'));
+    expect(media.time).toBe(300);
+    expect(media.paused).toBe(true);
+    expect(play).not.toHaveBeenCalled();
+    expect(player.getByText('0:05:00')).toBeInTheDocument();
+
+    await user.click(player.getByRole('button', { name: 'Play' }));
+    expect(media.time).toBe(300);
+    expect(media.paused).toBe(false);
+  });
+
+  it.each([
+    ['deleted', { media: null, recording_deleted: true }],
+    ['missing', { media: null, recording_missing: true }],
+  ])('shows plain transcript times for a recording %s', async (_, fields) => {
+    const { user } = setup(testNote(fields));
+    await ready();
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+
+    expect(screen.getByRole('tabpanel', { name: 'Transcript' })).toHaveTextContent(
+      '[00:00:01] Ayesha (inferred): Hello.',
+    );
+    expect(screen.queryByRole('button', { name: /^Jump to/ })).not.toBeInTheDocument();
+  });
+
+  it('takes the transcript times away once the recording proves unplayable', async () => {
+    const { user } = setup();
+    await ready();
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    const audio = document.querySelector('audio') as HTMLAudioElement;
+    media.duration = 3600;
+    fireEvent.loadedMetadata(audio);
+    expect(screen.getAllByRole('button', { name: /^Jump to/ })).toHaveLength(2);
+
+    fireEvent.error(audio);
+    expect(await screen.findByText("This recording can't be played in Meeting.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Jump to/ })).not.toBeInTheDocument();
+  });
+
   it('shows Recording deleted in the bar for a note whose recording was deleted', async () => {
     setup(testNote({ media: null, recording_deleted: true }));
     await ready();
