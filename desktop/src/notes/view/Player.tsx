@@ -12,7 +12,7 @@ import {
 } from './format';
 import styles from './Player.module.css';
 
-/** What the note page may do with the player: #210 seeks it once `ready`, #211 pauses it first. */
+/** What the note page may do with the player: transcript times seek it once `ready`, #211 pauses it first. */
 export type PlayerHandle = { ready: boolean; seek: (seconds: number) => void; pause: () => void };
 
 export const SPEEDS = [1, 1.25, 1.5, 2];
@@ -82,7 +82,10 @@ function Audio({
       seek: (seconds) => {
         const element = audio.current;
         if (!element || !ready) return;
-        element.currentTime = Math.min(Math.max(0, seconds), length(element, knownLength));
+        const at = Math.min(Math.max(0, seconds), length(element, knownLength));
+        element.currentTime = at;
+        // Shown at once, paused too: a paused element's `timeupdate` may come late or not at all.
+        setTime(at);
       },
       pause: () => audio.current?.pause(),
     });

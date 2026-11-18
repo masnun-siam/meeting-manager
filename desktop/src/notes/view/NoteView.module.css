@@ -402,6 +402,28 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A time that moves the player (FR-6): looks like the plain time, underlined on hover; the theme's
+   focus ring stays. Undoes the theme's button box. */
+.stampButton {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.stampButton:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+
+.stampButton:active:not(:disabled) {
+  transform: none;
+}
+
 .who {
   display: block;
   color: var(--accent-text);
