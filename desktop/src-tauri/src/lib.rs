@@ -64,7 +64,7 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
     let builder = builder.setup(move |app| Ok(launch(app.handle(), mode)?));
     match mode {
         Mode::Off => builder,
-        Mode::On => builder.invoke_handler(tauri::generate_handler![
+        Mode::On => notes::media::register(builder).invoke_handler(tauri::generate_handler![
             recorder::recorder_status,
             recorder::recorder_start,
             recorder::recorder_pause,
@@ -401,6 +401,91 @@ mod tests {
         assert_eq!(unknown, "Command no_such_command not found");
     }
 
+    fn recording_request(
+        method: &str,
+        path: &str,
+        range: Option<&str>,
+    ) -> tauri::http::Request<Vec<u8>> {
+        let mut request = tauri::http::Request::builder()
+            .method(method)
+            .uri(format!("recording://localhost{path}"));
+        if let Some(range) = range {
+            request = request.header("Range", range);
+        }
+        request.body(Vec::new()).unwrap()
+    }
+
+    #[test]
+    fn the_recording_scheme_answers_from_the_started_state() {
+        let app = started(Mode::On);
+        let recordings = app.home.join("Recordings");
+        let folder = recordings.join("m");
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("recording.m4a");
+        fs::write(&path, b"0123456789").unwrap();
+        meeting::config::Config {
+            recordings_dir: recordings,
+            vault_dir: app.home.join("Vault"),
+            vault_folder: "Meetings".into(),
+            ffmpeg_path: "/opt/homebrew/bin/ffmpeg".into(),
+            claude_path: "/usr/local/bin/claude".into(),
+            extension_id: "abcdefghijklmnopabcdefghijklmnop".into(),
+            meeting_path: None,
+        }
+        .save_to(&app.state::<App>().env.config_path())
+        .unwrap();
+        let result = meeting::store::RunResult {
+            status: meeting::store::Status::Done,
+            failed_stage: None,
+            error: None,
+            title: Some("Standup".into()),
+            body_md: Some("## Summary\n".into()),
+            speakers: vec![],
+            language: None,
+            duration_s: Some(1),
+            transcript: Some("[00:00:01] Speaker 1: Hi.\n".into()),
+            event: None,
+            source: meeting::store::Source::Browser,
+            recorded_at: "2026-10-19T14:30".into(),
+            attendees: None,
+        };
+        let id = app
+            .state::<App>()
+            .env
+            .store()
+            .unwrap()
+            .merge_run(&path, &result)
+            .unwrap()
+            .id;
+
+        let response = notes::media::respond(
+            app.handle(),
+            &recording_request("GET", &format!("/{id}"), Some("bytes=2-4")),
+        );
+        assert_eq!(response.status(), 206);
+        assert_eq!(response.headers()["content-range"], "bytes 2-4/10");
+        assert_eq!(response.headers()["content-type"], "audio/mp4");
+        assert_eq!(response.headers()["accept-ranges"], "bytes");
+        assert_eq!(response.body(), b"234");
+
+        let unknown = notes::media::respond(app.handle(), &recording_request("GET", "/999", None));
+        assert_eq!(unknown.status(), 404);
+        assert!(unknown.body().is_empty());
+        let head = notes::media::respond(
+            app.handle(),
+            &recording_request("HEAD", &format!("/{id}"), None),
+        );
+        assert_eq!(head.status(), 405);
+        assert_eq!(head.headers()["allow"], "GET");
+    }
+
+    #[test]
+    fn the_recording_scheme_is_404_without_the_state() {
+        let app = started(Mode::Off);
+        let response = notes::media::respond(app.handle(), &recording_request("GET", "/1", None));
+        assert_eq!(response.status(), 404);
+    }
+
     #[test]
     fn retry_refuses_a_folder_that_is_not_a_leftover() {
         let app = started(Mode::On);
@@ -580,6 +665,7 @@ mod tests {
             [
                 "default-src 'self'",
                 "connect-src ipc: http://ipc.localhost",
+                "media-src recording:",
                 "object-src 'none'",
                 "base-uri 'none'",
                 "frame-ancestors 'none'",
