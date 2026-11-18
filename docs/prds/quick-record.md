@@ -1,6 +1,6 @@
 # PRD — Quick record and floating indicator
 
-**Status:** In review · **Date:** 2026-11-18 · **Slug:** `quick-record` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager
+**Status:** Approved · **Date:** 2026-11-18 · **Slug:** `quick-record` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager
 
 This document is the source of truth for this change, from request to delivery: the tasks and every issue are derived from it, and a decision that is not written here has not been made. Once `Approved` it is locked; a later change is a new PRD or task. It adds to [desktop-app.md](desktop-app.md) (Approved) without changing any of its requirements, except where "Changes to existing behaviour" says so.
 
@@ -230,7 +230,7 @@ None formally defined. Informally: in-person meetings are started from Raycast w
 
 ## Epics
 
-- **E1 Quick record and floating indicator** — covers FR-1 to FR-12. Issue: —
+- **E1 Quick record and floating indicator** — covers FR-1 to FR-12. Issue: #233
 
 ## Decisions
 
@@ -261,4 +261,4 @@ None.
 
 - [desktop-app.md](desktop-app.md) FR-1 to FR-4 (recording, permissions, indicator, stop), D7, D12, D15; menu-bar item.
 - [docs/features/desktop-recorder.md](../features/desktop-recorder.md), [docs/desktop.md](../desktop.md).
-- Business docs: none yet (`docs/business/` does not exist).
+- Business doc: [docs/business/desktop/quick-record.md](../business/desktop/quick-record.md) R-1 to R-4.
