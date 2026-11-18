@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Note } from '../../api';
 import * as api from '../../api';
 import { ARCHIVED, CONFIRM_MS } from './Actions';
-import { MY_NOTES_LIMIT, RECORDING_MISSING, TOO_LARGE, TOOL_MISSING } from './format';
+import { MY_NOTES_LIMIT, RECORDING_DELETED_REASON, RECORDING_MISSING, TOO_LARGE, TOOL_MISSING } from './format';
 import { media, stubMedia } from './mediaStub';
 import { NoteView, UNSAVED } from './NoteView';
 import { Tabs } from './TranscriptTab';
@@ -657,6 +657,59 @@ describe('NoteView actions', () => {
     await choose(user, 'Confirm trash');
     expect(api.noteTrash).toHaveBeenCalledExactlyOnceWith({ id: 7 });
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+  });
+
+  it('deletes the recording: pauses the playing player first and shows the returned note without a refetch', async () => {
+    const deleted = testNote({ media: null, recording_deleted: true, my_notes: 'Call Nadia' });
+    vi.mocked(api.noteDeleteRecording).mockResolvedValue({ ok: true, note: deleted });
+    const { user } = setup(testNote({ my_notes: 'Call Nadia' }));
+    await ready();
+    fireEvent.loadedMetadata(document.querySelector('audio') as HTMLAudioElement);
+    await user.click(button('Play'));
+    expect(media.paused).toBe(false);
+    let pausedAtSend: boolean | null = null;
+    vi.mocked(api.noteDeleteRecording).mockImplementation(async () => {
+      pausedAtSend = media.paused;
+      return { ok: true, note: deleted };
+    });
+
+    await choose(user, 'Delete recording');
+    await choose(user, 'Confirm delete');
+    expect(await screen.findByText('Recording deleted')).toBeInTheDocument();
+    expect(pausedAtSend).toBe(true);
+    expect(api.noteDeleteRecording).toHaveBeenCalledExactlyOnceWith({ id: 7 });
+    expect(noteGet).toHaveBeenCalledOnce();
+    expect(document.querySelector('audio')).toBeNull();
+    expect(await menuItem(user, 'Rerun summary')).toHaveAccessibleDescription(RECORDING_DELETED_REASON);
+    expect(screen.queryByRole('menuitem', { name: 'Delete recording' })).not.toBeInTheDocument();
+    expect(item('Archive')).not.toHaveAttribute('aria-disabled');
+    expect(item('Trash')).not.toHaveAttribute('aria-disabled');
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('tab', { name: /^My notes/ })).toBeInTheDocument();
+  });
+
+  it('pauses the playing player before the archive request', async () => {
+    const { user } = setup();
+    await ready();
+    fireEvent.loadedMetadata(document.querySelector('audio') as HTMLAudioElement);
+    await user.click(button('Play'));
+    let pausedAtSend: boolean | null = null;
+    vi.mocked(api.noteArchive).mockImplementation(async () => {
+      pausedAtSend = media.paused;
+      return { ok: true };
+    });
+
+    await choose(user, 'Archive');
+    expect(await screen.findByText(ARCHIVED)).toBeInTheDocument();
+    expect(pausedAtSend).toBe(true);
+  });
+
+  it('archives a note with no player without breaking', async () => {
+    const { user } = setup(testNote({ media: null, recording_missing: true }));
+    await ready();
+
+    await choose(user, 'Archive');
+    expect(await screen.findByText(ARCHIVED)).toBeInTheDocument();
   });
 
   it('shows a trash error and stays', async () => {

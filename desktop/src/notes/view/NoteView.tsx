@@ -38,7 +38,7 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
   const heading = useRef<HTMLHeadingElement>(null);
   const back = useRef<HTMLButtonElement>(null);
   // Set by the player; #210 hands `seek` to the transcript and #211 calls `pause` first.
-  const [, setPlayer] = useState<PlayerHandle | null>(null);
+  const [player, setPlayer] = useState<PlayerHandle | null>(null);
 
   useEffect(() => {
     if (state.kind === 'ready') heading.current?.focus();
@@ -112,6 +112,8 @@ function OneNote({ id, onBack }: { id: number; onBack: () => void }) {
             latest={() => autosave.latest() ?? note}
             flushAll={autosave.flushAll}
             reload={reload}
+            apply={apply}
+            pause={() => player?.pause()}
             markRerun={markRerun}
             onBack={onBack}
             say={setMessage}

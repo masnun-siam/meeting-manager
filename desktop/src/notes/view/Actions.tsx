@@ -1,9 +1,16 @@
 import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from 'react';
-import { type Note, noteArchive, noteCopy, noteOpen, noteRerun, noteTrash } from '../../api';
-import { ArchiveIcon, CheckIcon, CopyIcon, FolderIcon, SparkIcon, TrashIcon, VaultIcon } from '../../icons';
+import { type Note, noteArchive, noteCopy, noteDeleteRecording, noteOpen, noteRerun, noteTrash } from '../../api';
+import { ArchiveIcon, CheckIcon, CopyIcon, FolderIcon, PlayIcon, SparkIcon, TrashIcon, VaultIcon } from '../../icons';
 import { attempt } from '../../recording/attempt';
 import styles from './Actions.module.css';
-import { hasEdits, NOT_WHILE_PROCESSING, problemText, RECORDING_MISSING } from './format';
+import {
+  hasEdits,
+  NOT_WHILE_PROCESSING,
+  problemText,
+  RECORDING_DELETED_REASON,
+  RECORDING_MISSING,
+  recordingOpenProblem,
+} from './format';
 import { RerunDialog } from './RerunDialog';
 
 export const CONFIRM_MS = 3000;
@@ -21,6 +28,10 @@ type Props = {
   latest: () => Note;
   flushAll: () => Promise<void>;
   reload: () => Promise<{ ok: boolean; code?: string | null }>;
+  /** Shows a note another command replied with, without a refetch. */
+  apply: (note: Note) => void;
+  /** Pauses the player, if there is one, before a request that moves the recording. */
+  pause: () => void;
   markRerun: () => void;
   onBack: () => void;
   say: (message: string | null) => void;
@@ -41,10 +52,14 @@ type MenuItem = {
   run: () => void;
 };
 
-/** Copy markdown, Copy formatted and Open in Obsidian, then a More menu with Open folder, Rerun summary, Archive and Trash (FR-13). */
+/**
+ * Copy markdown, Copy formatted and Open in Obsidian, then a More menu with Open folder, Open video,
+ * Rerun summary, Archive, Delete recording and Trash (FR-13).
+ */
 export function Actions(props: Props) {
   const { note, say } = props;
   const [armed, setArmed] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   // A new object on every success, so a second copy within 2 s restarts the timer.
@@ -63,6 +78,12 @@ export function Actions(props: Props) {
   }, [armed]);
 
   useEffect(() => {
+    if (!deleteArmed) return;
+    const timer = setTimeout(() => setDeleteArmed(false), CONFIRM_MS);
+    return () => clearTimeout(timer);
+  }, [deleteArmed]);
+
+  useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(null), COPIED_MS);
     return () => clearTimeout(timer);
@@ -70,11 +91,14 @@ export function Actions(props: Props) {
 
   const processing = note.status === 'processing';
   const missing = note.recording_missing;
+  const deleted = note.recording_deleted;
 
-  const open = async (what: 'obsidian' | 'folder') => {
+  const open = async (what: 'obsidian' | 'folder' | 'recording') => {
     say(null);
     const result = await attempt(() => noteOpen({ id: note.id, what }));
-    if (!result.ok) say(problemText(result.code, result.text));
+    if (result.ok) return;
+    // D14: the Rust side replies with the OS reason only; the UI names what failed to open.
+    say(what === 'recording' ? recordingOpenProblem(result.code, result.text) : problemText(result.code, result.text));
   };
 
   /** Flushes pending saves first: the Rust side copies the stored note (D14: even if a save failed). */
@@ -127,6 +151,8 @@ export function Actions(props: Props) {
     say(null);
     setBusy(true);
     await props.flushAll();
+    // The player stops before the folder moves (D14).
+    props.pause();
     const result = await attempt(() => noteArchive({ id: note.id }));
     setBusy(false);
     if (!result.ok) {
@@ -154,7 +180,30 @@ export function Actions(props: Props) {
     else say(problemText(result.code, result.text));
   };
 
+  /** Moves only the recording file to the macOS Trash and keeps the note (FR-9, D4). */
+  const deleteRecording = async () => {
+    if (!deleteArmed) {
+      say(null);
+      setDeleteArmed(true);
+      return;
+    }
+    setDeleteArmed(false);
+    setBusy(true);
+    await props.flushAll();
+    props.pause();
+    const result = await attempt(() => noteDeleteRecording({ id: note.id }));
+    setBusy(false);
+    if (result.ok) {
+      props.apply(result.reply.note);
+      return;
+    }
+    say(problemText(result.code, result.text));
+    // A gone note: the reload shows the note view's error for it, as any other gone note.
+    if (result.code === 'unknown_note') void props.reload();
+  };
+
   const missingReason = missing ? RECORDING_MISSING : null;
+  const rerunReason = deleted ? RECORDING_DELETED_REASON : missingReason;
   const processingReason = processing ? NOT_WHILE_PROCESSING : null;
   const items: MenuItem[] = [
     {
@@ -165,12 +214,24 @@ export function Actions(props: Props) {
       reason: missingReason,
       run: () => void open('folder'),
     },
+    ...(note.media?.kind === 'video'
+      ? [
+          {
+            id: 'video',
+            label: 'Open video',
+            icon: <PlayIcon size={14} />,
+            disabled: false,
+            reason: null,
+            run: () => void open('recording'),
+          },
+        ]
+      : []),
     {
       id: 'rerun',
       label: 'Rerun summary',
       icon: <SparkIcon size={14} />,
-      disabled: missing,
-      reason: missingReason,
+      disabled: missing || deleted,
+      reason: rerunReason,
       run: () => void askRerun(),
     },
     {
@@ -181,6 +242,21 @@ export function Actions(props: Props) {
       reason: processingReason,
       run: () => void archive(),
     },
+    ...(note.media
+      ? [
+          {
+            id: 'delete',
+            label: deleteArmed ? 'Confirm delete' : 'Delete recording',
+            icon: <TrashIcon size={14} />,
+            disabled: processing || busy,
+            reason: processingReason,
+            danger: true,
+            armed: deleteArmed,
+            keepOpen: !deleteArmed,
+            run: () => void deleteRecording(),
+          },
+        ]
+      : []),
     {
       id: 'trash',
       label: armed ? 'Confirm trash' : 'Trash',
@@ -220,7 +296,8 @@ export function Actions(props: Props) {
           <VaultIcon size={14} />
           Open in Obsidian
         </button>
-        <MoreMenu trigger={more} items={items} />
+        {/* Closing the menu cancels Delete recording's confirm; Trash keeps its 3 s. */}
+        <MoreMenu trigger={more} items={items} onClose={() => setDeleteArmed(false)} />
       </div>
       {/* Always mounted, so the change to "Copied" is announced without moving focus. */}
       <div role="status" className={styles.visuallyHidden}>
@@ -243,13 +320,23 @@ export function Actions(props: Props) {
  * The WAI-ARIA menu button pattern: Enter, Space or the arrows open it, the arrows (wrapping),
  * Home and End move, Escape closes it and returns focus to More, Tab or a click outside closes it.
  */
-function MoreMenu({ trigger, items }: { trigger: RefObject<HTMLButtonElement | null>; items: MenuItem[] }) {
+function MoreMenu({
+  trigger,
+  items,
+  onClose,
+}: {
+  trigger: RefObject<HTMLButtonElement | null>;
+  items: MenuItem[];
+  onClose: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const base = useId();
   const wrapper = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const closed = useRef(onClose);
+  closed.current = onClose;
 
   useEffect(() => {
     if (open) refs.current[active]?.focus();
@@ -257,14 +344,18 @@ function MoreMenu({ trigger, items }: { trigger: RefObject<HTMLButtonElement | n
 
   useEffect(() => {
     if (!open) return;
+    const hide = () => {
+      setOpen(false);
+      closed.current();
+    };
     // A click outside, or focus leaving the items (Tab, or Shift+Tab onto More), closes it.
     // Not `focusout`: WebKit blurs to nothing on a click on a button, which would close the
     // menu before the click lands.
     const onClick = (e: Event) => {
-      if (!wrapper.current?.contains(e.target as Node)) setOpen(false);
+      if (!wrapper.current?.contains(e.target as Node)) hide();
     };
     const onFocus = (e: Event) => {
-      if (!menu.current?.contains(e.target as Node)) setOpen(false);
+      if (!menu.current?.contains(e.target as Node)) hide();
     };
     document.addEventListener('mousedown', onClick);
     document.addEventListener('focusin', onFocus);
@@ -281,6 +372,7 @@ function MoreMenu({ trigger, items }: { trigger: RefObject<HTMLButtonElement | n
 
   const close = () => {
     setOpen(false);
+    closed.current();
     trigger.current?.focus();
   };
 
