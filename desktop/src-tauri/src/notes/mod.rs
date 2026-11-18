@@ -171,7 +171,8 @@ pub fn get(env: &Env, id: i64) -> Reply {
             .set_recording_deleted(id, false)
             .map_err(store_failed)?;
         tracing::info!(id, "recording back, deleted mark cleared");
-        row = find(&store, id)?;
+        // Clearing the mark changes no other column (`updated_at` included, D14): no re-read.
+        row.recording_deleted_at = None;
     }
     Ok(reply::ok(json!({ "note": note_json(&row) })))
 }
