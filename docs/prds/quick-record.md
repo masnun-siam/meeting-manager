@@ -1,6 +1,6 @@
 # PRD — Quick record and floating indicator
 
-**Status:** In review · **Date:** 2026-11-18 · **Slug:** `quick-record` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager
+**Status:** Approved · **Date:** 2026-11-18 · **Slug:** `quick-record` · **Owner:** Siam · **Priority:** medium · **Repo:** masnun-siam/meeting-manager
 
 This document is the source of truth for this change, from request to delivery: the tasks and every issue are derived from it, and a decision that is not written here has not been made. Once `Approved` it is locked; a later change is a new PRD or task. It adds to [desktop-app.md](desktop-app.md) (Approved) without changing any of its requirements, except where "Changes to existing behaviour" says so.
 
@@ -150,7 +150,7 @@ The start error (FR-5) lives in the recorder's memory only, never stored. No cha
 
 "—" is nothing, no message. Anything else is ignored per FR-12.
 
-**Tauri commands.** Same reply shape as every command (`{ok: true, ...}` / `{ok: false, code, message}`). The contract grows from 29 to 33 commands; `api.ts` and the contract test follow.
+**Tauri commands.** Same reply shape as every command (`{ok: true, ...}` / `{ok: false, code, message}`). The contract grows from 29 to 34 commands (the five new ones below); `api.ts` and the contract test follow.
 
 | Command | Request | Response | Error codes |
 |---|---|---|---|
@@ -182,7 +182,7 @@ Every other command is unchanged. The pill page uses `recorder_status`, `recorde
 ### Realtime and other components
 
 - The pill is driven by the existing recorder `on_change` (Rust side) and its own 1 s poll; no new event to the webviews.
-- The capability file that today lists only the `main` window also lists `indicator`; both may invoke the app's own commands and no plugin.
+- The capability file that today lists only the `main` window also lists `indicator`; both may invoke the app's own commands and no plugin. A second capability, for `indicator` only, grants `core:window:allow-start-dragging` and nothing else, so its drag region works (D19).
 - No change to the `meeting` tool, the store schema, the Chrome extension or native messaging.
 
 ### Non-functional
@@ -201,7 +201,7 @@ Recordings are confidential (desktop-app Data).
 | A link that stops or toggles a recording the user wants | Stop always saves, never discards; the pill shows the outcome |
 | A link used to read or reach notes or files | Links carry only a route and a language; anything else is ignored (FR-12); no path, id or note is accepted |
 | Link text or meeting content in logs | Logs carry action, outcome kind and ignore reason only |
-| The indicator page invoking other commands | It is the app's own bundled page under the same CSP (no remote origin, no inline script); the capability grants app commands only, no plugin |
+| The indicator page invoking other commands | It is the app's own bundled page under the same CSP (no remote origin, no inline script); the capability grants app commands only, no plugin; its one extra permission is the indicator's own window drag (D19) |
 
 ### Testing
 
@@ -213,7 +213,7 @@ Recordings are confidential (desktop-app Data).
 | FR-6, FR-8 | Rust tests of the pure show/hide decision over status transitions (start from each source, retry, recovery, updater hold, setting off) |
 | FR-7, FR-8 | Vitest component tests of the pill page with `mockApi`: names, pause/resume, stop, saving, each notice kind, the 4 s timer with fake timers |
 | FR-10 | Rust tests of the setting (absent, values, store failure); component test of the Settings section's revert |
-| Contract | The existing `api.ts` contract test at 33 commands; the security tests also check `Info.plist` declares only the `meeting-manager` scheme and the capability lists only `main` and `indicator` with no permission |
+| Contract | The existing `api.ts` contract test at 34 commands; the security tests also check `Info.plist` declares only the `meeting-manager` scheme and the capability lists only `main` and `indicator` with no permission, and the indicator capability lists only `indicator` with only `core:window:allow-start-dragging` (D19) |
 | FR-1, FR-4, FR-9, FR-11 | Manual, bundled build: cold and warm `open` of each link; no focus stolen while typing in another app; full-screen Zoom on another Space; drag, relaunch, unplug a display; VoiceOver names; Raycast Quicklink with hotkey |
 
 ## Rollout and cost
@@ -230,7 +230,7 @@ None formally defined. Informally: in-person meetings are started from Raycast w
 
 ## Epics
 
-- **E1 Quick record and floating indicator** — covers FR-1 to FR-12. Issue: —
+- **E1 Quick record and floating indicator** — covers FR-1 to FR-12. Issue: #233
 
 ## Decisions
 
@@ -252,6 +252,8 @@ None formally defined. Informally: in-person meetings are started from Raycast w
 - 2026-11-18 **D16 A refused link start opens and focuses the main window with the error** — Decided by: Siam, "Open the main window".
 - 2026-11-18 **D17 The pill is a transparent window through `tauri`'s `macos-private-api` feature** — a real rounded pill; the app is never App-Store distributed. Decided by: Siam, "Enable macos-private-api".
 - 2026-11-18 **D18 A launch caused by a link does not show the main window** — keeps quick start from stealing focus. Decided by: Siam, "No window, just record".
+- 2026-11-18 **Erratum (refining #233):** the command count read "29 to 33"; the API table adds five commands, so it is 34. No decision changed. Confirmed by: Siam, "34, fix PRD typo (Recommended)".
+- 2026-11-18 **D19 The indicator window may start a window drag: an indicator-only capability grants `core:window:allow-start-dragging`, nothing else** — found while refining #233: Tauri 2's `data-tauri-drag-region` invokes `plugin:window|start_dragging`, which a capability with no permission refuses, so FR-9's drag could not work as written. The main window keeps no permission. Decided by: Siam, "Allow start-dragging (Recommended)".
 
 ## Open questions
 
@@ -261,4 +263,4 @@ None.
 
 - [desktop-app.md](desktop-app.md) FR-1 to FR-4 (recording, permissions, indicator, stop), D7, D12, D15; menu-bar item.
 - [docs/features/desktop-recorder.md](../features/desktop-recorder.md), [docs/desktop.md](../desktop.md).
-- Business docs: none yet (`docs/business/` does not exist).
+- Business doc: [docs/business/desktop/quick-record.md](../business/desktop/quick-record.md) R-1 to R-4.
