@@ -149,7 +149,8 @@ pub struct Status {
     pub language: Language,
     pub folder: Option<String>,
     pub notice: Option<Notice>,
-    /// Why the last start from outside the window failed (FR-5); always `None` until #240.
+    /// Why the last start from a link or the menu bar failed (FR-5), until a Start succeeds or
+    /// it is dismissed.
     pub start_error: Option<StartError>,
 }
 
@@ -210,6 +211,8 @@ struct Inner {
     next_id: AtomicU64,
     state: Mutex<State>,
     notice: Mutex<Option<Notice>>,
+    /// Memory only, never stored (FR-5).
+    start_error: Mutex<Option<StartError>>,
     on_change: Mutex<Vec<OnChange>>,
     /// Held while recovery or a retry converts a folder, so two never work on the same one.
     converting: Mutex<()>,
@@ -262,6 +265,7 @@ impl Recorder {
                 next_id: AtomicU64::new(1),
                 state: Mutex::new(State::Idle),
                 notice: Mutex::new(None),
+                start_error: Mutex::new(None),
                 on_change: Mutex::new(Vec::new()),
                 converting: Mutex::new(()),
             }),
@@ -310,7 +314,7 @@ impl Recorder {
             language: language.unwrap_or_else(|| self.saved_language()),
             folder: folder.map(|f| f.display().to_string()),
             notice: lock(&self.inner.notice).clone(),
-            start_error: None,
+            start_error: lock(&self.inner.start_error).clone(),
         }
     }
 
@@ -383,6 +387,7 @@ impl Recorder {
         let (id, folder) = (session.id, session.folder.clone());
         // Cleared before the session is visible, so a fast automatic stop's notice survives.
         *lock(&self.inner.notice) = None;
+        *lock(&self.inner.start_error) = None;
         *state = State::Active(Box::new(session));
         // Spawned with the lock held, so a stop queued before it ran finds the session active.
         let weak = Arc::downgrade(&self.inner);
@@ -405,6 +410,40 @@ impl Recorder {
         self.save_language(language);
         self.changed();
         Ok(folder)
+    }
+
+    /// An ad hoc Start from outside the window (the menu bar, a link), in `language`, else the
+    /// last used. A refusal other than `already_recording` becomes the start error (FR-5).
+    pub fn start_ad_hoc(&self, language: Option<Language>) -> Result<PathBuf, Refused> {
+        let language = language.unwrap_or_else(|| self.status().language);
+        let started = self.start(language, || Ok(None));
+        if let Err(r) = &started
+            && r.code != "already_recording"
+        {
+            tracing::info!("recorder: start refused ({})", r.code);
+            {
+                // Under the state lock, as `start` clears it: a Start from the window that
+                // succeeded in the meantime wins, and the stale refusal is dropped.
+                let state = self.state();
+                if matches!(*state, State::Active(_)) {
+                    return started;
+                }
+                *lock(&self.inner.start_error) = Some(StartError {
+                    code: r.code,
+                    message: r.message.clone(),
+                });
+            }
+            self.changed();
+        }
+        started
+    }
+
+    /// Clears the start error; nothing changes when there is none.
+    pub fn dismiss_start_error(&self) {
+        let dismissed = lock(&self.inner.start_error).take();
+        if dismissed.is_some() {
+            self.changed();
+        }
     }
 
     /// The checks in the order the contract gives, then the folder, the WAV, `context.json` and
@@ -823,10 +862,14 @@ pub async fn recorder_status<R: Runtime>(app: AppHandle<R>) -> Value {
     .await
 }
 
-/// Stub until #240 (FR-5): answers the contract's shape; there is no start error to clear yet.
+/// Clears the start error (FR-5); already clear is fine.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn recorder_dismiss_start_error<R: Runtime>(app: AppHandle<R>) -> Value {
-    blocking(app, |_| reply::ok(json!({}))).await
+    blocking(app, |app| {
+        app.recorder.dismiss_start_error();
+        reply::ok(json!({}))
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1594,6 +1637,146 @@ pub(crate) mod tests {
         // Saving, then idle with the notice.
         rig.stop(Reason::User);
         assert_eq!(counts.each_ref().map(|c| c.load(Ordering::SeqCst)), [3, 3]);
+    }
+
+    fn start_error(rig: &Rig) -> Option<StartError> {
+        rig.recorder.status().start_error
+    }
+
+    /// Counts the recorder's announcements.
+    fn counter(rig: &Rig) -> Arc<AtomicUsize> {
+        let count = Arc::new(AtomicUsize::new(0));
+        let seen = count.clone();
+        rig.recorder.on_change(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        count
+    }
+
+    #[test]
+    fn a_refused_ad_hoc_start_becomes_the_start_error() {
+        let cases: [(&str, Capture); 4] = [
+            (
+                "permission_mic",
+                capture(mic_denied, mic_denied, fake_start),
+            ),
+            (
+                "permission_audio",
+                capture(granted, granted, start_audio_denied),
+            ),
+            ("capture_failed", capture(granted, granted, start_broken)),
+            ("not_configured", ok_capture()),
+        ];
+        for (code, capture) in cases {
+            let rig = rig(&format!("start-error-{code}"), capture);
+            if code == "not_configured" {
+                write_config(&rig.env(), rig.home.join("no-ffmpeg"));
+            }
+            let count = counter(&rig);
+            let refused = rig.recorder.start_ad_hoc(None).unwrap_err();
+            assert_eq!(refused.code, code);
+            assert_eq!(
+                start_error(&rig),
+                Some(StartError {
+                    code,
+                    message: refused.message
+                }),
+                "{code}"
+            );
+            assert_eq!(count.load(Ordering::SeqCst), 1, "{code}");
+        }
+        let rig = rig(
+            "start-error-text",
+            capture(mic_denied, mic_denied, fake_start),
+        );
+        rig.recorder.start_ad_hoc(None).unwrap_err();
+        assert_eq!(
+            start_error(&rig).unwrap().message,
+            "Allow Meeting in System Settings › Privacy & Security › Microphone"
+        );
+    }
+
+    #[test]
+    fn already_recording_is_not_a_start_error() {
+        let rig = rig("start-error-busy", ok_capture());
+        rig.start().unwrap();
+        let count = counter(&rig);
+        let refused = rig.recorder.start_ad_hoc(None).unwrap_err();
+        assert_eq!(refused.code, "already_recording");
+        assert_eq!(start_error(&rig), None);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        rig.stop(Reason::User);
+    }
+
+    #[test]
+    fn a_refused_window_start_is_not_a_start_error() {
+        let rig = rig(
+            "start-error-window",
+            capture(mic_denied, mic_denied, fake_start),
+        );
+        let count = counter(&rig);
+        assert_eq!(rig.start().unwrap_err().code, "permission_mic");
+        assert_eq!(start_error(&rig), None);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn any_successful_start_clears_the_start_error() {
+        GRANTED.set(false);
+        let rig = rig(
+            "start-error-cleared",
+            capture(mic_as_set, mic_as_set, fake_start),
+        );
+        let count = counter(&rig);
+        for ad_hoc in [false, true] {
+            rig.recorder.start_ad_hoc(None).unwrap_err();
+            assert!(start_error(&rig).is_some());
+            GRANTED.set(true);
+            let before = count.load(Ordering::SeqCst);
+            if ad_hoc {
+                rig.recorder.start_ad_hoc(None).unwrap();
+            } else {
+                rig.start().unwrap();
+            }
+            assert_eq!(start_error(&rig), None);
+            // One announcement for the start, which also clears it.
+            assert_eq!(count.load(Ordering::SeqCst), before + 1);
+            rig.stop(Reason::User);
+            GRANTED.set(false);
+        }
+        GRANTED.set(true);
+    }
+
+    #[test]
+    fn dismiss_clears_the_start_error_once() {
+        let rig = rig(
+            "start-error-dismiss",
+            capture(mic_denied, mic_denied, fake_start),
+        );
+        let count = counter(&rig);
+        rig.recorder.dismiss_start_error();
+        assert_eq!(count.load(Ordering::SeqCst), 0, "nothing to dismiss");
+        rig.recorder.start_ad_hoc(None).unwrap_err();
+        rig.recorder.dismiss_start_error();
+        assert_eq!(start_error(&rig), None);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        rig.recorder.dismiss_start_error();
+        assert_eq!(count.load(Ordering::SeqCst), 2, "already clear");
+    }
+
+    #[test]
+    fn an_ad_hoc_start_uses_the_last_language_unless_given_one() {
+        let rig = rig("start-ad-hoc-language", ok_capture());
+        rig.recorder.start_ad_hoc(None).unwrap();
+        assert_eq!(rig.recorder.status().language, Language::Bn);
+        rig.stop(Reason::User);
+        rig.recorder.start_ad_hoc(Some(Language::En)).unwrap();
+        assert_eq!(rig.recorder.status().language, Language::En);
+        rig.stop(Reason::User);
+        assert_eq!(rig.recorder.status().language, Language::En);
+        rig.recorder.start_ad_hoc(None).unwrap();
+        assert_eq!(rig.recorder.status().language, Language::En);
+        rig.stop(Reason::User);
     }
 
     static ASKED: AtomicUsize = AtomicUsize::new(0);
