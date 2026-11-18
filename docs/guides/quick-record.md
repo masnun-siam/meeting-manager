@@ -1,6 +1,6 @@
 # Quick record
 
-Start, pause, resume and stop the desktop app's recorder from anywhere with a link: a Raycast hotkey, a Shortcuts action, or `open` in Terminal. Needs the desktop app installed in `/Applications` and opened once, so macOS knows its `meeting-manager:` links.
+Start, pause, resume and stop the desktop app's recorder from anywhere with a link: a Raycast hotkey, an Alfred workflow, a Shortcuts action, or `open` in Terminal. Needs the desktop app installed in `/Applications` and opened once, so macOS knows its `meeting-manager:` links.
 
 ## The links
 
@@ -32,3 +32,25 @@ open "meeting-manager://record/toggle?language=en"
 4. Repeat for any other link you want on a key, such as `meeting-manager://record/pause`.
 
 Raycast opens the link directly, so no prompt appears. Opening a `meeting-manager:` link from a browser instead shows macOS's "Open Meeting?" prompt the first time; allow it.
+
+## Alfred workflow
+
+Needs Alfred 5 with the Powerpack, and Meeting v0.3.0 or later installed in `/Applications` and opened once; otherwise macOS says no application is set to open the link.
+
+1. Download `Meeting.alfredworkflow` from the [latest release](https://github.com/masnun-siam/meeting-manager/releases/latest), double-click it and press **Import** on Alfred's "Meeting" sheet.
+2. Type `rec` in Alfred to see the seven actions below; typing more filters them, for example `rec stop`. Each opens the matching link from [The links](#the-links).
+
+   | Item | Opens |
+   |---|---|
+   | Toggle recording | `meeting-manager://record/toggle` |
+   | Start recording | `meeting-manager://record/start` (last used language) |
+   | Start recording in English | `meeting-manager://record/start?language=en` |
+   | Start recording in Bangla | `meeting-manager://record/start?language=bn` |
+   | Pause recording | `meeting-manager://record/pause` |
+   | Resume recording | `meeting-manager://record/resume` |
+   | Stop recording | `meeting-manager://record/stop` |
+
+3. To put toggle on a key, open Alfred **Preferences › Workflows › Meeting**, double-click the **Hotkey** object, record a key and press **Save**. The hotkey is unassigned after import. Pressing it starts a recording; pressing it again stops and saves.
+4. To change the keyword, double-click the **List Filter** object in the same workflow, edit **Keyword** and press **Save**. If another workflow also uses `rec`, Alfred shows both until you change one.
+
+Importing the file from a newer release updates the same workflow instead of adding a copy. Like any link, an item or hotkey that does not apply right now does nothing, and the workflow shows no confirmation of its own.
