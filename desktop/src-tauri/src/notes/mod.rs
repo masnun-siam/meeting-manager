@@ -5,7 +5,7 @@ mod copy;
 mod markdown;
 pub(crate) mod media;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -125,18 +125,17 @@ pub fn note_open(app: State<'_, App>, id: i64, what: OpenWhat) -> Value {
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub fn speaker_suggestions(app: State<'_, App>, id: i64) -> Value {
+    answer(suggestions(&app.env, id))
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn note_copy(app: State<'_, App>, id: i64, format: CopyFormat) -> Value {
     answer(copy::copy(&app.env, &app.notes, id, format))
 }
 
-// Stubs for the note view upgrades (PRD note-view-upgrades): registered so the UI contract and
-// the command list stay in step; #202 (`speaker_suggestions`) and #209
-// (`note_delete_recording`) each replace one with the real command.
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn speaker_suggestions() -> Value {
-    not_implemented("speaker_suggestions")
-}
+// Stub for the note view upgrades (PRD note-view-upgrades): registered so the UI contract and
+// the command list stay in step; #209 replaces it with the real `note_delete_recording`.
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn note_delete_recording() -> Value {
@@ -167,10 +166,37 @@ pub fn list(env: &Env, query: Option<&str>) -> Reply {
     Ok(reply::ok(json!({ "notes": notes })))
 }
 
+/// One note. Opening a note whose recording was deleted but is back on disk clears the mark
+/// (FR-10); nothing else does.
 pub fn get(env: &Env, id: i64) -> Reply {
     let store = open_store(env)?;
-    let row = find(&store, id)?;
+    let mut row = find(&store, id)?;
+    if row.recording_deleted_at.is_some() && row.recording_path.is_file() {
+        store
+            .set_recording_deleted(id, false)
+            .map_err(store_failed)?;
+        tracing::info!(id, "recording back, deleted mark cleared");
+        // Clearing the mark changes no other column (`updated_at` included, D14): no re-read.
+        row.recording_deleted_at = None;
+    }
     Ok(reply::ok(json!({ "note": note_json(&row) })))
+}
+
+/// The speaker picker's names (FR-3, FR-4): the note's attendees, and the names typed before
+/// (newest first) without the ones that are attendees, ignoring case.
+pub fn suggestions(env: &Env, id: i64) -> Reply {
+    let store = open_store(env)?;
+    let attendees = find(&store, id)?.attendees.unwrap_or_default();
+    let taken: HashSet<String> = attendees.iter().map(|a| a.to_lowercase()).collect();
+    let earlier: Vec<String> = store
+        .used_before()
+        .map_err(store_failed)?
+        .into_iter()
+        .filter(|name| !taken.contains(&name.to_lowercase()))
+        .collect();
+    Ok(reply::ok(
+        json!({ "attendees": attendees, "earlier": earlier }),
+    ))
 }
 
 /// Applies the edits, then rewrites the vault note of a `done` row. A vault failure is part of
@@ -332,7 +358,8 @@ fn list_json(row: &ListRow, stages: &HashMap<PathBuf, Stage>) -> Value {
         "status": row.status,
         "stage": stage,
         "error": error,
-        "recording_missing": !row.recording_path.is_file(),
+        "recording_missing": !row.recording_deleted && !row.recording_path.is_file(),
+        "recording_deleted": row.recording_deleted,
     })
 }
 
@@ -346,7 +373,8 @@ fn folder_name(recording: &Path) -> String {
 }
 
 /// The row as the note view needs it: its fields, the transcript with current names, the
-/// summary as safe HTML, and whether the recording is still there.
+/// summary as safe HTML, the attendees, and the recording's state and kind. A deleted recording
+/// is never also "missing".
 fn note_json(row: &Row) -> Value {
     // Store paths are read from TEXT columns, so they are UTF-8 and always serialise.
     let mut note = serde_json::to_value(row).expect("a store row serialises");
@@ -356,8 +384,28 @@ fn note_json(row: &Row) -> Value {
             .map(|t| shown_transcript(t, &row.speakers))
     );
     note["body_html"] = json!(row.body_md.as_deref().map(render_html).unwrap_or_default());
-    note["recording_missing"] = json!(!row.recording_path.is_file());
+    let deleted = row.recording_deleted_at.is_some();
+    note["recording_missing"] = json!(!deleted && !row.recording_path.is_file());
+    note["recording_deleted"] = json!(deleted);
+    note["attendees"] = json!(row.attendees.as_deref().unwrap_or_default());
+    note["media"] = json!(media_info(row));
     note
+}
+
+/// What the recording is, for the player (FR-5): `None` when it is deleted or gone. The hint is
+/// false for the containers WKWebView does not play (`mkv`, `ogg`).
+fn media_info(row: &Row) -> Option<Value> {
+    if row.recording_deleted_at.is_some() || !row.recording_path.is_file() {
+        return None;
+    }
+    let ext = row.recording_path.extension()?.to_str()?.to_lowercase();
+    // The kind is the top-level media type `recording://` serves the file with.
+    let (kind, _) = media::content_type(&ext).split_once('/')?;
+    if !matches!(kind, "audio" | "video") {
+        return None;
+    }
+    let playable_hint = !matches!(ext.as_str(), "mkv" | "ogg");
+    Some(json!({ "kind": kind, "playable_hint": playable_hint }))
 }
 
 fn rewrite_vault(env: &Env, store: &Store, row: &Row) -> anyhow::Result<()> {
@@ -423,20 +471,15 @@ mod tests {
     const TOO_LARGE: usize = 1_048_577;
 
     #[test]
-    fn the_note_view_stubs_answer_not_implemented() {
-        for (reply, command) in [
-            (speaker_suggestions(), "speaker_suggestions"),
-            (note_delete_recording(), "note_delete_recording"),
-        ] {
-            assert_eq!(
-                reply,
-                json!({
-                    "ok": false,
-                    "code": "not_implemented",
-                    "message": format!("{command} is not implemented yet"),
-                })
-            );
-        }
+    fn the_note_view_stub_answers_not_implemented() {
+        assert_eq!(
+            note_delete_recording(),
+            json!({
+                "ok": false,
+                "code": "not_implemented",
+                "message": "note_delete_recording is not implemented yet",
+            })
+        );
     }
 
     /// A temp home with a store, a vault and a recordings folder; removed on drop.
@@ -499,9 +542,13 @@ mod tests {
 
         /// A recording file in its own meeting folder.
         fn recording(&self, folder: &str) -> PathBuf {
+            self.recording_as(folder, "webm")
+        }
+
+        fn recording_as(&self, folder: &str, ext: &str) -> PathBuf {
             let dir = self.env.home.join("Recordings").join(folder);
             fs::create_dir_all(&dir).unwrap();
-            let path = dir.join("recording.webm");
+            let path = dir.join(format!("recording.{ext}"));
             fs::write(&path, b"audio").unwrap();
             path
         }
@@ -691,6 +738,7 @@ mod tests {
                 "stage": null,
                 "error": null,
                 "recording_missing": false,
+                "recording_deleted": false,
             })
         );
 
@@ -783,6 +831,7 @@ mod tests {
         let replies = [
             list(&f.env, None),
             get(&f.env, 1),
+            suggestions(&f.env, 1),
             update(&f.env, 1, Update::default()),
             rerun(&f.env, &notes, 1, false),
             open(&f.env, &notes, 1, OpenWhat::Folder),
@@ -1207,5 +1256,147 @@ mod tests {
         let what: OpenWhat = serde_json::from_value(json!("obsidian")).unwrap();
         assert_eq!(what, OpenWhat::Obsidian);
         assert!(serde_json::from_value::<OpenWhat>(json!("shell")).is_err());
+    }
+
+    fn with_attendees(names: &[&str]) -> RunResult {
+        RunResult {
+            attendees: Some(names.iter().map(|n| n.to_string()).collect()),
+            ..done("Standup", "2026-10-19T14:30")
+        }
+    }
+
+    fn deleted_flags(f: &Fixture) -> Vec<(i64, bool, bool)> {
+        list(&f.env, None).unwrap()["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| {
+                (
+                    n["id"].as_i64().unwrap(),
+                    n["recording_deleted"] == true,
+                    n["recording_missing"] == true,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn get_returns_the_attendees_in_order_and_none_as_empty() {
+        let f = Fixture::new("attendees");
+        let (named, _) = f.add("2026-10-19 1430", with_attendees(&["Rahim", "Nadia"]));
+        let (unknown, _) = f.add_done("2026-10-19 1500");
+        let note = get(&f.env, named).unwrap()["note"].clone();
+        assert_eq!(note["attendees"], json!(["Rahim", "Nadia"]));
+        assert_eq!(note["recording_deleted"], false);
+        assert!(note.get("recording_deleted_at").is_none(), "{note}");
+        assert_eq!(
+            get(&f.env, unknown).unwrap()["note"]["attendees"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn media_follows_the_recording_extension() {
+        let f = Fixture::new("media");
+        let cases = [
+            ("webm", "video", true),
+            ("mp4", "video", true),
+            ("mov", "video", true),
+            ("mkv", "video", false),
+            ("m4a", "audio", true),
+            ("mp3", "audio", true),
+            ("wav", "audio", true),
+            ("ogg", "audio", false),
+            ("MP4", "video", true),
+            ("OGG", "audio", false),
+        ];
+        for (i, (ext, kind, hint)) in cases.into_iter().enumerate() {
+            let recording = f.recording_as(&format!("2026-10-19 14{i:02}"), ext);
+            let id = f
+                .store()
+                .merge_run(&recording, &done("M", "2026-10-19T14:30"))
+                .unwrap()
+                .id;
+            let note = get(&f.env, id).unwrap()["note"].clone();
+            assert_eq!(
+                note["media"],
+                json!({"kind": kind, "playable_hint": hint}),
+                "{ext}"
+            );
+            fs::remove_file(&recording).unwrap();
+            let note = get(&f.env, id).unwrap()["note"].clone();
+            assert_eq!(note["media"], Value::Null, "{ext}");
+            assert_eq!(note["recording_missing"], true, "{ext}");
+        }
+    }
+
+    #[test]
+    fn a_deleted_recording_is_deleted_not_missing() {
+        let f = Fixture::new("deleted");
+        let (deleted, recording) = f.add("2026-10-18 0900", done("A", "2026-10-18T09:00"));
+        let (vanished, other) = f.add("2026-10-19 1430", done("B", "2026-10-19T14:30"));
+        f.store().set_recording_deleted(deleted, true).unwrap();
+        fs::remove_file(&recording).unwrap();
+        fs::remove_file(&other).unwrap();
+
+        assert_eq!(
+            deleted_flags(&f),
+            [(vanished, false, true), (deleted, true, false)]
+        );
+        let note = get(&f.env, deleted).unwrap()["note"].clone();
+        assert_eq!(note["recording_deleted"], true);
+        assert_eq!(note["recording_missing"], false);
+        assert_eq!(note["media"], Value::Null);
+        assert!(f.row(deleted).recording_deleted_at.is_some());
+        let note = get(&f.env, vanished).unwrap()["note"].clone();
+        assert_eq!(note["recording_deleted"], false);
+        assert_eq!(note["recording_missing"], true);
+    }
+
+    #[test]
+    fn only_opening_the_note_clears_the_mark_once_the_recording_is_back() {
+        let f = Fixture::new("back");
+        let (id, recording) = f.add_done("2026-10-19 1430");
+        f.store().set_recording_deleted(id, true).unwrap();
+        // The mark on a file still on disk: the list and an edit leave it alone.
+        assert_eq!(deleted_flags(&f), [(id, true, false)]);
+        let reply = update(&f.env, id, my_notes("x".into())).unwrap();
+        assert_eq!(reply["note"]["recording_deleted"], true);
+        assert_eq!(reply["note"]["media"], Value::Null);
+        assert!(f.row(id).recording_deleted_at.is_some());
+
+        let note = get(&f.env, id).unwrap()["note"].clone();
+        assert_eq!(note["recording_deleted"], false);
+        assert_eq!(note["recording_missing"], false);
+        assert_eq!(
+            note["media"],
+            json!({"kind": "video", "playable_hint": true})
+        );
+        assert_eq!(f.row(id).recording_deleted_at, None);
+        assert!(recording.is_file());
+    }
+
+    #[test]
+    fn suggestions_are_the_attendees_and_the_other_names_typed_before() {
+        let f = Fixture::new("suggest");
+        let (id, _) = f.add("2026-10-19 1430", with_attendees(&["Rahim", "Nadia K"]));
+        let (other, _) = f.add_done("2026-10-19 1500");
+        update(&f.env, id, rename("Speaker 1", "Nadia")).unwrap();
+        update(&f.env, id, rename("Speaker 10", "rahim")).unwrap();
+        update(&f.env, other, rename("Speaker 1", "Karim")).unwrap();
+
+        let reply = suggestions(&f.env, id).unwrap();
+        assert_eq!(
+            reply,
+            json!({
+                "ok": true,
+                "attendees": ["Rahim", "Nadia K"],
+                "earlier": ["Karim", "Nadia"],
+            })
+        );
+        let reply = suggestions(&f.env, other).unwrap();
+        assert_eq!(reply["attendees"], json!([]));
+        assert_eq!(reply["earlier"], json!(["Karim", "Nadia", "rahim"]));
+        assert_eq!(code(suggestions(&f.env, other + 1)), "unknown_note");
     }
 }
