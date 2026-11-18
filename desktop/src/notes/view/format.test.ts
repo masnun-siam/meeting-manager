@@ -4,8 +4,10 @@ import {
   formatClock,
   hasEdits,
   problemText,
+  RECORDING_DELETED_REASON,
   recordingOpenProblem,
   shownName,
+  stampSeconds,
   TOO_LARGE,
   TOOL_MISSING,
   tooLarge,
@@ -78,5 +80,27 @@ describe('recordingOpenProblem (FR-7, FR-8)', () => {
   it('words other codes as problemText does', () => {
     expect(recordingOpenProblem('tool_missing', 'x')).toBe(TOOL_MISSING);
     expect(recordingOpenProblem('missing_file', 'Recording missing')).toBe('Recording missing');
+  });
+});
+
+describe('RECORDING_DELETED_REASON (FR-9)', () => {
+  it('is the PRD text for Rerun once the recording is deleted', () => {
+    expect(RECORDING_DELETED_REASON).toBe('The recording was deleted.');
+  });
+});
+
+describe('stampSeconds (FR-6)', () => {
+  it.each([
+    ['[00:00:00]', 0],
+    ['[00:05:00]', 300],
+    ['[00:12:30]', 750],
+    ['[01:02:03]', 3723],
+    ['[10:00:09]', 36_009],
+  ])('reads %s as %d seconds', (stamp, seconds) => {
+    expect(stampSeconds(stamp)).toBe(seconds);
+  });
+
+  it.each(['[1:02:03]', '00:12:30', '[00:12:30] ', '[aa:bb:cc]', ''])('reads %j as no time', (stamp) => {
+    expect(stampSeconds(stamp)).toBeNull();
   });
 });

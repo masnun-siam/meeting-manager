@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Note } from '../../api';
 import * as api from '../../api';
 import { ARCHIVED, CONFIRM_MS } from './Actions';
-import { MY_NOTES_LIMIT, RECORDING_MISSING, TOO_LARGE, TOOL_MISSING } from './format';
+import { MY_NOTES_LIMIT, RECORDING_DELETED_REASON, RECORDING_MISSING, TOO_LARGE, TOOL_MISSING } from './format';
 import { media, stubMedia } from './mediaStub';
 import { NoteView, UNSAVED } from './NoteView';
 import { Tabs } from './TranscriptTab';
@@ -16,6 +16,7 @@ vi.mock('../../api', async () => (await import('../../api.mock')).mockApi());
 const noteGet = vi.mocked(api.noteGet);
 const noteUpdate = vi.mocked(api.noteUpdate);
 const noteRerun = vi.mocked(api.noteRerun);
+const speakerSuggestions = vi.mocked(api.speakerSuggestions);
 
 const got = (note: Note) => ({ ok: true as const, note });
 
@@ -33,6 +34,7 @@ beforeEach(() => {
   vi.mocked(api.noteOpen).mockResolvedValue({ ok: true });
   vi.mocked(api.noteArchive).mockResolvedValue({ ok: true });
   vi.mocked(api.noteTrash).mockResolvedValue({ ok: true });
+  speakerSuggestions.mockResolvedValue({ ok: true, attendees: [], earlier: [] });
   stubMedia();
 });
 
@@ -245,7 +247,7 @@ describe('NoteView display', () => {
 
       expect(screen.queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('textbox', { name: /Name for/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('combobox', { name: /Name for/ })).not.toBeInTheDocument();
       await user.type(await myNotesBox(user), 'x');
       expect(screen.getByRole('textbox', { name: 'My notes' })).toHaveValue('x');
     },
@@ -271,7 +273,7 @@ describe('NoteView editing', () => {
     await ready();
 
     expect(screen.getByRole('textbox', { name: 'Title' })).toHaveValue('Weekly sync');
-    expect(screen.getByRole('textbox', { name: 'Name for Speaker 1' })).toHaveValue('Rahim');
+    expect(screen.getByRole('combobox', { name: 'Name for Speaker 1' })).toHaveValue('Rahim');
     expect(screen.getByRole('heading', { level: 2, name: 'Action items' })).toBeInTheDocument();
 
     await user.click(button('Edit'));
@@ -322,7 +324,7 @@ describe('NoteView editing', () => {
     const { user } = setup();
     await ready();
 
-    const name = screen.getByRole('textbox', { name: 'Name for Speaker 1' });
+    const name = screen.getByRole('combobox', { name: 'Name for Speaker 1' });
     await user.clear(name);
     await user.type(name, 'Rahim Uddin');
     await user.tab();
@@ -404,6 +406,112 @@ describe('NoteView editing', () => {
     await user.tab();
     expect(await screen.findByText('This note is processing')).toBeInTheDocument();
     expect(noteGet).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('NoteView speaker suggestions (FR-4)', () => {
+  const nameField = () => screen.getByRole('combobox', { name: 'Name for Speaker 1' });
+
+  it('fetches once per view and saves a keyboard pick at once', async () => {
+    speakerSuggestions.mockResolvedValue({ ok: true, attendees: ['Rahim', 'Nadia'], earlier: ['Rahnat'] });
+    const { user } = setup();
+    await ready();
+
+    await user.click(nameField());
+    expect(screen.getByRole('group', { name: 'Attendees' })).toBeInTheDocument();
+    await user.click(screen.getByRole('combobox', { name: 'Name for Speaker 0' }));
+    await user.clear(nameField());
+    await user.type(nameField(), 'na');
+    expect(
+      within(screen.getByRole('listbox'))
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual(['Nadia', 'Rahnat']);
+    await user.keyboard('{ArrowDown}{Enter}');
+
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, speaker: { label: 'Speaker 1', name: 'Nadia' } });
+    expect(speakerSuggestions).toHaveBeenCalledExactlyOnceWith({ id: 7 });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('a click pick saves at once, not the half-typed text', async () => {
+    speakerSuggestions.mockResolvedValue({ ok: true, attendees: ['Nadia'], earlier: [] });
+    const { user } = setup();
+    await ready();
+
+    await user.clear(nameField());
+    await user.type(nameField(), 'Na');
+    await user.click(screen.getByRole('option', { name: 'Nadia' }));
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, speaker: { label: 'Speaker 1', name: 'Nadia' } });
+  });
+
+  it('picking the current name sends nothing', async () => {
+    speakerSuggestions.mockResolvedValue({ ok: true, attendees: ['Rahim'], earlier: [] });
+    const { user } = setup();
+    await ready();
+
+    await user.click(nameField());
+    await user.click(screen.getByRole('option', { name: 'Rahim' }));
+    await tick(1000);
+    expect(noteUpdate).not.toHaveBeenCalled();
+    expect(nameField()).toHaveValue('Rahim');
+  });
+
+  it('Escape keeps the typed text, which saves as a typed rename', async () => {
+    speakerSuggestions.mockResolvedValue({ ok: true, attendees: ['Rahim Uddin'], earlier: [] });
+    const { user } = setup();
+    await ready();
+
+    await user.type(nameField(), ' U{Escape}');
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Weekly sync' })).toBeInTheDocument();
+    expect(noteUpdate).not.toHaveBeenCalled();
+    await tick(1000);
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, speaker: { label: 'Speaker 1', name: 'Rahim U' } });
+  });
+
+  it.each([
+    [
+      'a failed call',
+      () => speakerSuggestions.mockResolvedValue({ ok: false, code: 'store_unavailable', message: 'store gone' }),
+    ],
+    ['a rejected call', () => speakerSuggestions.mockRejectedValue(new Error('ipc down'))],
+    ['empty lists', () => speakerSuggestions.mockResolvedValue({ ok: true, attendees: [], earlier: [] })],
+  ])('%s: no list and no message, the field still renames', async (_, arrange) => {
+    arrange();
+    const { user } = setup();
+    await ready();
+
+    await user.clear(nameField());
+    await user.type(nameField(), 'Someone New');
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    for (const alert of screen.queryAllByRole('alert')) expect(alert).toBeEmptyDOMElement();
+    expect(screen.queryByText(/store gone|ipc down|unavailable/i)).not.toBeInTheDocument();
+    await user.tab();
+    expect(noteUpdate).toHaveBeenCalledExactlyOnceWith({ id: 7, speaker: { label: 'Speaker 1', name: 'Someone New' } });
+  });
+
+  it.each(['processing', 'failed', 'no_speech'] as const)('a %s note does not fetch suggestions', async (status) => {
+    setup(testNote({ status, failed_stage: 'transcribe', error: 'e' }));
+    await ready();
+    expect(speakerSuggestions).not.toHaveBeenCalled();
+  });
+
+  it('a done note without speakers does not fetch suggestions', async () => {
+    setup(testNote({ speakers: [] }));
+    await ready();
+    expect(speakerSuggestions).not.toHaveBeenCalled();
+  });
+
+  it('ignores a reply that arrives after leaving the note', async () => {
+    const reply = deferred<Awaited<ReturnType<typeof api.speakerSuggestions>>>();
+    speakerSuggestions.mockReturnValue(reply.promise);
+    const errors = vi.spyOn(console, 'error');
+    const { unmount } = setup();
+    await ready();
+    unmount();
+    await act(async () => reply.resolve({ ok: true, attendees: ['Nadia'], earlier: [] }));
+    expect(errors).not.toHaveBeenCalled();
   });
 });
 
@@ -659,6 +767,73 @@ describe('NoteView actions', () => {
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
   });
 
+  it('deletes the recording: pauses the playing player first and shows the returned note without a refetch', async () => {
+    const deleted = testNote({ media: null, recording_deleted: true, my_notes: 'Call Nadia' });
+    vi.mocked(api.noteDeleteRecording).mockResolvedValue({ ok: true, note: deleted });
+    const { user } = setup(testNote({ my_notes: 'Call Nadia' }));
+    await ready();
+    fireEvent.loadedMetadata(document.querySelector('audio') as HTMLAudioElement);
+    await user.click(button('Play'));
+    expect(media.paused).toBe(false);
+    let pausedAtSend: boolean | null = null;
+    vi.mocked(api.noteDeleteRecording).mockImplementation(async () => {
+      pausedAtSend = media.paused;
+      return { ok: true, note: deleted };
+    });
+
+    await choose(user, 'Delete recording');
+    await choose(user, 'Confirm delete');
+    expect(await screen.findByText('Recording deleted')).toBeInTheDocument();
+    expect(pausedAtSend).toBe(true);
+    expect(api.noteDeleteRecording).toHaveBeenCalledExactlyOnceWith({ id: 7 });
+    expect(noteGet).toHaveBeenCalledOnce();
+    expect(document.querySelector('audio')).toBeNull();
+    expect(await menuItem(user, 'Rerun summary')).toHaveAccessibleDescription(RECORDING_DELETED_REASON);
+    expect(screen.queryByRole('menuitem', { name: 'Delete recording' })).not.toBeInTheDocument();
+    expect(item('Archive')).not.toHaveAttribute('aria-disabled');
+    expect(item('Trash')).not.toHaveAttribute('aria-disabled');
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('tab', { name: 'My notes, has text' })).toBeInTheDocument();
+    expect(await myNotesBox(user)).toHaveValue('Call Nadia');
+  });
+
+  it('shows the gone-note error when the note vanished before Delete recording', async () => {
+    vi.mocked(api.noteDeleteRecording).mockResolvedValue({ ok: false, code: 'unknown_note', message: 'No note 7' });
+    const { user } = setup();
+    await ready();
+    noteGet.mockResolvedValue({ ok: false, code: 'unknown_note', message: 'No note 7' });
+
+    await choose(user, 'Delete recording');
+    await choose(user, 'Confirm delete');
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 2 })).not.toBeInTheDocument());
+    expect(screen.getAllByRole('status')[0]).toHaveTextContent('No note 7');
+    expect(button('Back')).toBeInTheDocument();
+  });
+
+  it('pauses the playing player before the archive request', async () => {
+    const { user } = setup();
+    await ready();
+    fireEvent.loadedMetadata(document.querySelector('audio') as HTMLAudioElement);
+    await user.click(button('Play'));
+    let pausedAtSend: boolean | null = null;
+    vi.mocked(api.noteArchive).mockImplementation(async () => {
+      pausedAtSend = media.paused;
+      return { ok: true };
+    });
+
+    await choose(user, 'Archive');
+    expect(await screen.findByText(ARCHIVED)).toBeInTheDocument();
+    expect(pausedAtSend).toBe(true);
+  });
+
+  it('archives a note with no player without breaking', async () => {
+    const { user } = setup(testNote({ media: null, recording_missing: true }));
+    await ready();
+
+    await choose(user, 'Archive');
+    expect(await screen.findByText(ARCHIVED)).toBeInTheDocument();
+  });
+
   it('shows a trash error and stays', async () => {
     vi.mocked(api.noteTrash).mockResolvedValue({ ok: false, code: 'trash_failed', message: 'Trash is full' });
     const { user, onBack } = setup();
@@ -809,6 +984,68 @@ describe('NoteView layout (FR-11)', () => {
     await ready();
 
     expect(screen.getByRole('group', { name: 'Recording player' })).toBeInTheDocument();
+  });
+
+  it('jumps the player to a transcript time, keeping it playing or paused (FR-6, D7)', async () => {
+    const { user } = setup(testNote({ transcript: '[00:05:00] Ayesha: Hello.\n[00:12:30] Rahim: Hi.' }));
+    await ready();
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    const audio = document.querySelector('audio') as HTMLAudioElement;
+    expect(screen.queryByRole('button', { name: /^Jump to/ })).not.toBeInTheDocument();
+    media.duration = 3600;
+    fireEvent.loadedMetadata(audio);
+    const player = within(screen.getByRole('group', { name: 'Recording player' }));
+
+    await user.click(player.getByRole('button', { name: 'Play' }));
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const pause = vi.mocked(HTMLMediaElement.prototype.pause);
+    play.mockClear();
+    pause.mockClear();
+    await user.click(button('Jump to 00:12:30'));
+    expect(media.time).toBe(750);
+    expect(media.paused).toBe(false);
+    expect(play).not.toHaveBeenCalled();
+    expect(pause).not.toHaveBeenCalled();
+
+    await user.click(player.getByRole('button', { name: 'Pause' }));
+    play.mockClear();
+    await user.click(button('Jump to 00:05:00'));
+    expect(media.time).toBe(300);
+    expect(media.paused).toBe(true);
+    expect(play).not.toHaveBeenCalled();
+    expect(player.getByText('0:05:00')).toBeInTheDocument();
+
+    await user.click(player.getByRole('button', { name: 'Play' }));
+    expect(media.time).toBe(300);
+    expect(media.paused).toBe(false);
+  });
+
+  it.each([
+    ['deleted', { media: null, recording_deleted: true }],
+    ['missing', { media: null, recording_missing: true }],
+  ])('shows plain transcript times for a recording %s', async (_, fields) => {
+    const { user } = setup(testNote(fields));
+    await ready();
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+
+    expect(screen.getByRole('tabpanel', { name: 'Transcript' })).toHaveTextContent(
+      '[00:00:01] Ayesha (inferred): Hello.',
+    );
+    expect(screen.queryByRole('button', { name: /^Jump to/ })).not.toBeInTheDocument();
+  });
+
+  it('takes the transcript times away once the recording proves unplayable', async () => {
+    const { user } = setup();
+    await ready();
+    await user.click(screen.getByRole('tab', { name: 'Transcript' }));
+    const audio = document.querySelector('audio') as HTMLAudioElement;
+    media.duration = 3600;
+    fireEvent.loadedMetadata(audio);
+    expect(screen.getAllByRole('button', { name: /^Jump to/ })).toHaveLength(2);
+
+    fireEvent.error(audio);
+    expect(await screen.findByText("This recording can't be played in Meeting.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Jump to/ })).not.toBeInTheDocument();
   });
 
   it('shows Recording deleted in the bar for a note whose recording was deleted', async () => {

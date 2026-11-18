@@ -7,6 +7,8 @@ export const MY_NOTES_LIMIT = 1_048_576;
 export const RECORDING_MISSING = 'Recording missing';
 export const NOT_WHILE_PROCESSING = 'Not available while the note is processing';
 export const RECORDING_DELETED = 'Recording deleted';
+/** Rerun summary's disabled reason once the recording was deleted (FR-9). */
+export const RECORDING_DELETED_REASON = 'The recording was deleted.';
 export const LOADING_RECORDING = 'Loading recording…';
 export const UNPLAYABLE = "This recording can't be played in Meeting.";
 
@@ -57,4 +59,14 @@ export function formatClock(seconds: number): string {
   const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${Math.floor(total / 3600)}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
+}
+
+const STAMP = /^\[(\d{2}):(\d{2}):(\d{2})\]$/;
+
+/** A transcript line's `[hh:mm:ss]` in seconds (FR-6): `[00:12:30]` is 750. Anything else is null. */
+export function stampSeconds(stamp: string): number | null {
+  const parts = STAMP.exec(stamp);
+  if (!parts) return null;
+  const [, h, m, s] = parts;
+  return Number(h) * 3600 + Number(m) * 60 + Number(s);
 }
