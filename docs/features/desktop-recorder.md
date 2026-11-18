@@ -1,6 +1,6 @@
 # Desktop recorder
 
-Covers: desktop/src-tauri/src/recorder/, desktop/src-tauri/src/tray.rs
+Covers: desktop/src-tauri/src/recorder/, desktop/src-tauri/src/tray.rs, desktop/src-tauri/src/link.rs
 
 The desktop app's recording session: start, pause, resume, stop, the automatic stops (including sleep and quit), the WAV written while recording, the hand-off to `meeting process`, crash recovery, `recorder_retry` and the menu-bar item. Behaviour: [../prds/desktop-app.md](../prds/desktop-app.md) FR-1 to FR-7 (D13, D14, D15, D32, D33, D36). Audio comes from the capture boundary ([../desktop.md](../desktop.md#capture-boundary-capturemodrs)).
 
@@ -49,7 +49,9 @@ Checked in this order; any refusal leaves no folder and the state `idle`:
 | `capture.check`, then `capture.request` | `permission_mic`, `permission_audio` (message names the System Settings pane) |
 | Folder, WAV or `capture.start` fails | `permission_*` when the error downcasts to `capture::Denied` (D36), else `capture_failed`; the folder is removed |
 
-On success the language is saved to the store setting `language` (a store failure is logged, never fails Start) and the notice is cleared. `recorder_status.language` when idle is that setting, `bn` when unset or unreadable.
+On success the language is saved to the store setting `language` (a store failure is logged, never fails Start) and the notice and start error are cleared. `recorder_status.language` when idle is that setting, `bn` when unset or unreadable.
+
+**Start error (quick-record FR-5).** `Recorder::start_ad_hoc(language)` is the Start from outside the window (the menu bar, #235's links): no event, in `language`, else the last used. When it is refused with any code but `already_recording` (not idle is never a start error), the refusal is kept as `start_error: {code, message}` and announced through `on_change`; the log carries only `recorder: start refused (<code>)`. The window's `recorder_start` never sets it (its reply already shows the refusal). Any successful Start clears it, as does `dismiss_start_error` (`recorder_dismiss_start_error`), which announces only when there was one. Memory only, never stored.
 
 ## Recording
 
@@ -91,13 +93,14 @@ All run on a blocking thread (permission prompts, joins and ffmpeg block). Repli
 
 | Command | Reply | Errors |
 |---|---|---|
-| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null}` | none |
+| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null}` (`start_error`: see Start error) | none |
+| `recorder_dismiss_start_error` | `{}`; clears the start error (already clear is fine) | none |
 | `recorder_start {language, event_occurrence_id\|null}` | `{folder}` | see Start |
 | `recorder_pause` / `recorder_resume` | `{state}` | `not_recording` |
 | `recorder_stop` | `{state: "saving"}` at once | `not_recording` |
 | `recorder_retry {folder}` | `{state: "saving"}` at once | `not_found`, `already_recording` |
 
-`on_change(f)` runs `f` after every state or notice change (the menu-bar item uses it). `begin_saving()` holds `saving` while a retry converts.
+`on_change(f)` adds a listener: every listener runs, in the order added, after every state or notice change, called outside the lock so it may read `status()` (the menu-bar item uses it; the indicator will too). `begin_saving()` holds `saving` while a retry converts.
 
 ## Sleep and quit
 
@@ -136,6 +139,28 @@ Built in `tray::setup` on the main thread (skipped with a warning otherwise, so 
 | paused | `tray-paused.png` (template) | frozen `H:MM:SS` | disabled | "Resume" | enabled |
 | saving | idle icon | none | disabled | disabled | disabled |
 
-- First line, disabled, only when there is something to say: the last Start error from the menu (the FR-2 permission texts word for word, `not_configured`, `capture_failed`…), else an `error` or `setup` notice. A Start error clears once a recording runs.
-- Start recording: ad hoc, in the last language, on a thread. Open Meeting: shows and focuses the `main` window. Quit: `app.exit(0)`, so the quit logic above decides.
+- First line, disabled, only when there is something to say: the recorder's start error (the FR-2 permission texts word for word, `not_configured`, `capture_failed`), else an `error` or `setup` notice. The window's Dismiss clears it here too. "A recording is already running" is never shown: not idle is not a start error.
+- Start recording: `Recorder::start_ad_hoc(None)` on a thread. Open Meeting: shows and focuses the `main` window. Quit: `app.exit(0)`, so the quit logic above decides.
 - Every recorder change re-renders through `on_change`; a timer thread refreshes only the title while recording.
+
+## Links (`link.rs`)
+
+`meeting-manager://record/<action>` (quick-record FR-1 to FR-5, FR-12, D18). User guide: [../guides/quick-record.md](../guides/quick-record.md). Bundled builds only: macOS delivers opened links through `RunEvent::Opened`, which `run()` passes to `on_opened`; a development run receives none, so tests call `parse`, `dispatch` and the pure decisions.
+
+| Link | idle (and `Starting`) | recording | paused | saving |
+|---|---|---|---|---|
+| `start[?language=bn\|en]` | `start_ad_hoc(language)` | — | — | — |
+| `stop` | — | `stop(User)` | `stop(User)` | — |
+| `pause` | — | `pause` | — | — |
+| `resume` | — | — | `resume` | — |
+| `toggle[?language=bn\|en]` | `start_ad_hoc(language)` | `stop(User)` | `stop(User)` | — |
+
+"—" is `Outcome::Nothing`: no change, no error. `Starting` reports `idle`, so a start then gets `already_recording`, swallowed like `not_recording`. The updater's hold is `saving`, so every link does nothing during an install.
+
+- **`parse`** (pure). Scheme, host and path compare case-insensitively (`Url` keeps the host's case for a non-special scheme, so `parse` lowercases it); one trailing slash is allowed. In order: scheme not `meeting-manager`, host not `record`, an unknown path, userinfo, a port or a fragment → `unknown_route`; a query key other than `language`, `language` on `stop`/`pause`/`resume`, or `language` twice → `unknown_param`; `language` not exactly `bn` or `en` (empty and `EN` included) → `bad_language`.
+- **`on_opened`.** Each URL is parsed on the main thread; an ignored one logs `link ignored: <reason>`. An action goes to one worker thread named `link`, started by the first link, which runs `dispatch` for each in the order macOS delivered them (Start may wait on a permission prompt; later links wait behind it) and logs `link: <action> → <outcome>` (`started`, `stopped`, `paused`, `resumed`, `nothing`, or the refusal code). A refused start (any code but `already_recording`, which is `nothing`) becomes the start error and queues `focus_main` on the main thread (FR-5). Logs never carry the link, its query or the language.
+- **Cold launch (FR-4, D18).** `launch` builds `main` hidden. `on_launch` manages `LinkLaunch` and starts a `link-launch` timer: after `LAUNCH_GRACE` (100 ms) it shows the window unless a link arrived first. On a cold `open` macOS delivers the link before `setup`, before the recorder exists: `on_opened` queues its actions in `LinkLaunch` and `on_launch` runs them. The first link logs `link: first link before launch` or `link: first link <ms> ms after launch`. A link after the decision changes nothing. A second launch (single-instance) and the Dock (`RunEvent::Reopen`) still focus the window.
+
+## Floating indicator
+
+With "Show floating indicator while recording" on (`indicator_enabled`, on by default, read at each start), a recording from any source shows a small pill over every app and Space that stays through pause and saving and then shows the outcome; a `saving` without a recording (retry, recovery, the updater) never shows it. The Rust side (window, show/hide rule, position, settings) is in [desktop.md](../desktop.md#floating-indicator-indicator); the page inside it is `desktop/indicator.html`.

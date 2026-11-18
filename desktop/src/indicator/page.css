@@ -1,0 +1,7 @@
+/* The indicator window is transparent: only the pill draws a body (quick-record FR-6). */
+html,
+body,
+#root {
+  background: transparent;
+  overflow: hidden;
+}

@@ -15,6 +15,8 @@ export type RecorderStatus = {
   language: Language;
   folder: string | null;
   notice: Notice | null;
+  /** Why the last start from outside the window failed (quick-record FR-5), until dismissed. */
+  start_error: { code: string; message: string } | null;
 };
 export type RecorderStartError =
   | 'permission_mic'
@@ -165,6 +167,7 @@ export type UpdateStatus = {
 };
 export type UpdateInstallError = 'recording_active' | 'no_update';
 export type SetAutoUpdateError = 'store_unavailable';
+export type IndicatorSettingsError = 'store_unavailable';
 
 function isReply(value: unknown): value is { ok: boolean } {
   if (typeof value !== 'object' || value === null || !('ok' in value) || typeof value.ok !== 'boolean') {
@@ -235,3 +238,10 @@ export const updateCheck = () => call<{ started: true }>('update_check');
 export const updateInstall = () => call<{ started: true }, UpdateInstallError>('update_install');
 export const setAutoUpdate = (req: { enabled: boolean }) =>
   call<{ auto_update: boolean }, SetAutoUpdateError>('set_auto_update', req);
+
+export const recorderDismissStartError = () => call<object>('recorder_dismiss_start_error');
+export const indicatorSettings = () => call<{ enabled: boolean }, IndicatorSettingsError>('indicator_settings');
+export const setIndicatorEnabled = (req: { enabled: boolean }) =>
+  call<{ enabled: boolean }, IndicatorSettingsError>('set_indicator_enabled', req);
+export const indicatorDismiss = () => call<object>('indicator_dismiss');
+export const windowOpenMain = () => call<object>('window_open_main');

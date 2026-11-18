@@ -16,7 +16,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 tracing = "0.1"
-tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
+# `macos-private-api`: the indicator's transparent window (D17), with `app.macOSPrivateApi`.
+tauri = { version = "2.11", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-single-instance = "2"
 # Rust side only (D47): no capability lists it, so the webview cannot reach it.
 tauri-plugin-updater = "2"
@@ -50,10 +51,14 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSApplication",
     "NSButton",
     "NSControl",
+    "NSGraphics",
+    "NSPanel",
     "NSPasteboard",
     "NSResponder",
     "NSRunningApplication",
+    "NSScreen",
     "NSView",
+    "NSWindow",
     "NSWorkspace",
 ] }
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-foundation"] }

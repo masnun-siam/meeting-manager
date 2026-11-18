@@ -3,6 +3,7 @@ import {
   type Language,
   type RecorderState,
   type Reply,
+  recorderDismissStartError,
   recorderPause,
   recorderResume,
   recorderRetry,
@@ -38,6 +39,7 @@ export function RecordingBar() {
   const running = state === 'recording' || state === 'paused';
   const language = idle ? (chosen ?? status?.language ?? 'en') : (status?.language ?? 'en');
   const notice = status?.notice ?? null;
+  const startError = status?.start_error ?? null;
 
   // FR-1: once a recording runs, the idle default is the language it used, not an older pick.
   useEffect(() => {
@@ -65,6 +67,8 @@ export function RecordingBar() {
   const follow = (reply: StateReply) => setState(reply.state);
   const control = (call: () => Promise<Reply<StateReply>>) => run(call, follow);
   const retry = (folder: string) => run(() => recorderRetry({ folder }), follow);
+  // Quick-record FR-5: the poll keeps the alert until it reports the error cleared, so read the status again now.
+  const dismiss = () => run(recorderDismissStartError, refresh);
 
   const noticeIsProblem = notice !== null && (notice.kind === 'error' || notice.kind === 'setup');
 
@@ -142,6 +146,15 @@ export function RecordingBar() {
           ) : null}
         </div>
       </div>
+
+      {startError ? (
+        <div role="alert" className={`${styles.line} ${styles.problem} ${styles.startError}`}>
+          <p>{startError.message}</p>
+          <button type="button" onClick={dismiss} disabled={busy}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       <div role="status" className={styles.messages}>
         {state === 'saving' ? <p className={styles.line}>Saving the recording…</p> : null}

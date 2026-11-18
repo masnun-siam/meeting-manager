@@ -19,5 +19,5 @@ Written for agents about to change the code. Start with architecture, then the d
 | [features/desktop-calendar.md](features/desktop-calendar.md) | Desktop calendar module: EventKit, upcoming list, filters, ids, `calendar-changed` |
 | [features/desktop-recorder.md](features/desktop-recorder.md) | Desktop recording session: start checks, WAV, pause, stops, conversion, hand-off, notices |
 | [features/setup.md](features/setup.md) | `meeting install`, config file, Deepgram key, `meeting doctor` |
-| [guides/](guides/) | User guides: installation, quickstart (contributing is `CONTRIBUTING.md` at the root) |
+| [guides/](guides/) | User guides: installation, quickstart, [quick record](guides/quick-record.md) (links and Raycast hotkeys) (contributing is `CONTRIBUTING.md` at the root) |
 | [prds/](prds/) | Product requirements (owned by `/create-prd`) |

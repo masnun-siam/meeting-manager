@@ -3,7 +3,7 @@
 //! Tray and menu calls run on the main thread; other threads queue them there and never wait,
 //! so a main thread blocked in `quit` cannot deadlock a render.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -80,11 +80,6 @@ pub fn menu_state(status: &Status, start_error: Option<&str>) -> MenuState {
     }
 }
 
-/// A start error stays until a recording is running, from the menu or the window.
-fn kept_error(error: Option<String>, status: &Status) -> Option<String> {
-    error.filter(|_| !matches!(status.state, "recording" | "paused"))
-}
-
 /// `H:MM:SS`.
 pub fn clock(secs: u64) -> String {
     format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
@@ -99,7 +94,6 @@ struct Tray<R: Runtime> {
     start: MenuItem<R>,
     pause: MenuItem<R>,
     stop: MenuItem<R>,
-    start_error: Mutex<Option<String>>,
 }
 
 /// Called once at startup, on the main thread, before the other launch hooks. Without the main
@@ -154,7 +148,6 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Tray<R>> {
         start,
         pause,
         stop,
-        start_error: Mutex::new(None),
     })
 }
 
@@ -162,9 +155,12 @@ fn clicked<R: Runtime>(tray: &Arc<Tray<R>>, id: &str) {
     let recorder = &tray.recorder;
     match id {
         "start" => {
-            let tray = tray.clone();
-            // Off the main thread: Start may wait on a permission prompt.
-            thread::spawn(move || start_ad_hoc(&tray));
+            let recorder = recorder.clone();
+            // Off the main thread: Start may wait on a permission prompt. A refusal becomes the
+            // recorder's start error, and its announcement renders the menu.
+            thread::spawn(move || {
+                let _ = recorder.start_ad_hoc(None);
+            });
         }
         "pause" => {
             // A refusal means the state already moved on; the render shows where it went.
@@ -185,30 +181,12 @@ fn clicked<R: Runtime>(tray: &Arc<Tray<R>>, id: &str) {
     }
 }
 
-/// An ad hoc recording in the last language, as the window's Start without an event.
-fn start_ad_hoc<R: Runtime>(tray: &Arc<Tray<R>>) {
-    let language = tray.recorder.status().language;
-    let error = tray.recorder.start(language, || Ok(None)).err();
-    *tray
-        .start_error
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = error.map(|r| r.message);
-    render(tray);
-}
-
 impl<R: Runtime> Tray<R> {
     /// Shows the current status. Main thread only.
     fn apply(&self) {
         let status = self.recorder.status();
-        let error = {
-            let mut slot = self
-                .start_error
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            *slot = kept_error(slot.take(), &status);
-            slot.clone()
-        };
-        let state = menu_state(&status, error.as_deref());
+        let error = status.start_error.as_ref().map(|e| e.message.as_str());
+        let state = menu_state(&status, error);
         let updated = self
             .icon
             .set_icon(Image::from_bytes(state.icon.png()).ok())
@@ -283,6 +261,7 @@ mod tests {
             language: Language::Bn,
             folder: None,
             notice,
+            start_error: None,
         }
     }
 
@@ -370,15 +349,6 @@ mod tests {
             Some("Could not start"),
         );
         assert_eq!(state.notice.as_deref(), Some("Could not start"));
-    }
-
-    #[test]
-    fn a_start_error_clears_once_a_recording_runs() {
-        let error = || Some("A recording is already running; stop it first".to_string());
-        assert_eq!(kept_error(error(), &status("idle", 0, None)), error());
-        assert_eq!(kept_error(error(), &status("saving", 0, None)), error());
-        assert_eq!(kept_error(error(), &status("recording", 1, None)), None);
-        assert_eq!(kept_error(error(), &status("paused", 1, None)), None);
     }
 
     #[test]

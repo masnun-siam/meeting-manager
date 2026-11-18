@@ -245,4 +245,65 @@ describe('RecordingBar', () => {
     await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 3));
     expect(recorderStatus).toHaveBeenCalledTimes(calls);
   });
+
+  describe('start error (quick-record FR-5)', () => {
+    const MIC = 'Allow Meeting in System Settings › Privacy & Security › Microphone';
+    const withError = () => statusReply({ start_error: { code: 'permission_mic', message: MIC } });
+    const dismiss = () => screen.getByRole('button', { name: 'Dismiss' });
+
+    it('shows the message verbatim in an alert with Dismiss', async () => {
+      recorderStatus.mockResolvedValue(withError());
+      setup();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(MIC);
+      expect(dismiss()).toBeEnabled();
+    });
+
+    it('Dismiss clears it and reads the status again at once', async () => {
+      recorderStatus.mockResolvedValue(withError());
+      vi.mocked(api.recorderDismissStartError).mockResolvedValue({ ok: true });
+      const user = setup();
+      await screen.findByRole('alert');
+      const polls = recorderStatus.mock.calls.length;
+
+      recorderStatus.mockResolvedValue(statusReply());
+      await user.click(dismiss());
+      // No timer advance: only the read Dismiss starts can clear it, not the next poll.
+      await act(async () => {});
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(api.recorderDismissStartError).toHaveBeenCalledOnce();
+      expect(recorderStatus).toHaveBeenCalledTimes(polls + 1);
+    });
+
+    it('a failed Dismiss keeps the alert and shows why in the message line', async () => {
+      recorderStatus.mockResolvedValue(withError());
+      vi.mocked(api.recorderDismissStartError).mockRejectedValue(new Error('ipc closed'));
+      const user = setup();
+      await screen.findByRole('alert');
+
+      await user.click(dismiss());
+
+      expect(status()).toHaveTextContent('Could not reach the Meeting app: ipc closed');
+      expect(screen.getByRole('alert')).toHaveTextContent(MIC);
+    });
+
+    it('goes when a later status no longer has it, as after a successful Start', async () => {
+      recorderStatus.mockResolvedValueOnce(withError()).mockResolvedValue(statusReply({ state: 'recording' }));
+      setup();
+      await screen.findByRole('alert');
+
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('shows no alert when there is no start error', async () => {
+      setup();
+      await waitFor(() => expect(start()).toBeEnabled());
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
+    });
+  });
 });

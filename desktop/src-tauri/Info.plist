@@ -8,5 +8,16 @@
   <string>Meeting records the audio of your calls so it can transcribe and summarise the meeting.</string>
   <key>NSCalendarsFullAccessUsageDescription</key>
   <string>Meeting reads your calendar to list upcoming events and link a recording to its event.</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.masnunsiam.meeting-manager</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>meeting-manager</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

@@ -59,6 +59,7 @@ export function mockApi(overrides: Partial<Api> = {}): Api {
       language: 'en' as const,
       folder: null,
       notice: null,
+      start_error: null,
     })),
     recorderStart: vi.fn(async () => ({ ok: true as const, folder: '/recordings/meeting-2026-11-12_1000' })),
     recorderPause: vi.fn(async () => ({ ok: true as const, state: 'paused' as const })),
@@ -105,6 +106,11 @@ export function mockApi(overrides: Partial<Api> = {}): Api {
     updateCheck: vi.fn(async () => ({ ok: true as const, started: true as const })),
     updateInstall: vi.fn(async () => ({ ok: true as const, started: true as const })),
     setAutoUpdate: vi.fn(async () => ({ ok: true as const, auto_update: false })),
+    recorderDismissStartError: vi.fn(async () => ({ ok: true as const })),
+    indicatorSettings: vi.fn(async () => ({ ok: true as const, enabled: true })),
+    setIndicatorEnabled: vi.fn(async () => ({ ok: true as const, enabled: true })),
+    indicatorDismiss: vi.fn(async () => ({ ok: true as const })),
+    windowOpenMain: vi.fn(async () => ({ ok: true as const })),
     ...overrides,
   };
 }
