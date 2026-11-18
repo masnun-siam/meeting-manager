@@ -11,7 +11,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | Built | Window | Registered |
 |---|---|---|
 | Off (default) | label `off`, page `off.html` ("Built without FEATURE_DESKTOP_APP"), no capability | Nothing: no state, no command, no plugin, no hook |
-| On | label `main`, page `index.html` | The single-instance and updater plugins, the `App` state, the 26 commands, the launch hooks |
+| On | label `main`, page `index.html` | The single-instance and updater plugins, the `App` state, the 29 commands, the launch hooks |
 
 ## Rust side (`desktop/src-tauri/src`)
 
@@ -45,9 +45,9 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 
 The PRD's API table (Technical design › API) is the contract. Every command is `#[tauri::command(rename_all = "snake_case")]`, returns `serde_json::Value`, and answers `{ok: true, ...}` or `{ok: false, code, message}`.
 
-- `desktop/src/api.ts` has one typed function per command, the request and reply types, and each command's error codes as a string-literal union. Argument keys are snake_case, exactly the Rust argument names. A reply without a boolean `ok` throws `Invalid reply from the Meeting app`; an error reply is returned, not thrown.
+- `desktop/src/api.ts` has one typed function per command, the request and reply types, and each command's error codes as a string-literal union. Argument keys are snake_case, exactly the Rust argument names. A reply without a boolean `ok` throws `Invalid reply from the Meeting app`; an error reply is returned, not thrown. `recordingUrl(id)` is the one export that is not a command: it builds `recording://localhost/<id>`, the URL the player loads a recording from (note-view-upgrades D9).
 - `desktop/src/api.mock.ts`: `mockApi(overrides)` for component tests (`vi.mock('./api', async () => (await import('./api.mock')).mockApi())`).
-- A test in `lib.rs` checks that `api.ts` names the same 26 commands. A new command changes the contract: PRD first.
+- A test in `lib.rs` checks that `api.ts` names the same 29 commands. A new command changes the contract: PRD first.
 
 ## Capture boundary (`capture/mod.rs`)
 
@@ -94,6 +94,7 @@ Each command opens the store through `Env::store()`; an open or query failure is
 | `note_update` | Applies `title`, `body_md`, `my_notes`, `speaker` in that order through `Store::edit`, stopping at the first refusal (`UnknownSpeaker` is `not_editable`). A `done` row's vault note is then always rewritten (`vault::rewrite_from_row`, path saved), so the UI's Retry resends only `id`; a failure is `vault: "failed"` with the root cause as `vault_error`, a file system error as `cannot write the vault note: <io error>` (the note's file name holds the title, so it is left out). Other statuses take only "My notes", store only (D39) |
 | `note_rerun` | Refuses in order: `unknown_note`, `recording_missing`, `already_processing` (lock held), `tool_missing` (`meeting_path` unset, failing `spawn::check_tool`, or a failed spawn). Then `clear_edits` when `replace_edits`, then spawns `meeting process <recording> [--language]` detached |
 | `note_open` | `folder`: the recording's parent. `obsidian`: the stored `vault_note_path` if it is a file, else `vault::find_existing` in the vault folder (the found path is saved). No target is `missing_file`; a failed `open` is `open_failed` |
+| `note_copy` / `speaker_suggestions` / `note_delete_recording` | Stubs (note-view-upgrades, #198): each answers `not_implemented` ("<command> is not implemented yet") until #197, #202 and #209 replace it with the real command |
 
 ### `recording://` scheme (`notes/media.rs`)
 

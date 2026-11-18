@@ -119,6 +119,32 @@ pub fn note_open(app: State<'_, App>, id: i64, what: OpenWhat) -> Value {
     answer(open(&app.env, &app.notes, id, what))
 }
 
+// Stubs for the note view upgrades (PRD note-view-upgrades): registered so the UI contract and
+// the command list stay in step; #197 (`note_copy`), #202 (`speaker_suggestions`) and #209
+// (`note_delete_recording`) each replace one with the real command.
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn note_copy() -> Value {
+    not_implemented("note_copy")
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn speaker_suggestions() -> Value {
+    not_implemented("speaker_suggestions")
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn note_delete_recording() -> Value {
+    not_implemented("note_delete_recording")
+}
+
+fn not_implemented(command: &str) -> Value {
+    reply::err(
+        "not_implemented",
+        format!("{command} is not implemented yet"),
+    )
+}
+
 fn answer(reply: Reply) -> Value {
     reply.unwrap_or_else(|error| error)
 }
@@ -386,6 +412,24 @@ mod tests {
     use super::*;
 
     const TOO_LARGE: usize = 1_048_577;
+
+    #[test]
+    fn the_note_view_stubs_answer_not_implemented() {
+        for (reply, command) in [
+            (note_copy(), "note_copy"),
+            (speaker_suggestions(), "speaker_suggestions"),
+            (note_delete_recording(), "note_delete_recording"),
+        ] {
+            assert_eq!(
+                reply,
+                json!({
+                    "ok": false,
+                    "code": "not_implemented",
+                    "message": format!("{command} is not implemented yet"),
+                })
+            );
+        }
+    }
 
     /// A temp home with a store, a vault and a recordings folder; removed on drop.
     struct Fixture {
