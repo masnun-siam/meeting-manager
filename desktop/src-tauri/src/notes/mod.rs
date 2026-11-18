@@ -4,19 +4,21 @@
 mod copy;
 mod markdown;
 pub(crate) mod media;
+mod trash;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
 use meeting::Language;
+use meeting::config::check_recording;
 use meeting::jobs::Stage;
 use meeting::lock::{self, Lock};
 use meeting::store::{self, Edit, EditError, ListRow, Row, Status, Store};
 use meeting::{native, spawn, vault};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
 
 use crate::App;
 use crate::env::Env;
@@ -36,6 +38,8 @@ pub struct Notes {
     pub spawn: fn(&Path, &Path, Option<Language>, Option<&str>) -> io::Result<()>,
     /// Replaces the general pasteboard's content with plain text and, when given, HTML.
     pub pasteboard: fn(&str, Option<&str>) -> Result<(), String>,
+    /// Moves a file to the macOS Trash.
+    pub trash: fn(&Path) -> io::Result<()>,
 }
 
 impl Notes {
@@ -44,6 +48,7 @@ impl Notes {
             open: native::open_with_system,
             spawn: spawn::process_detached,
             pasteboard: copy::write_pasteboard,
+            trash: trash::move_to_trash,
         }
     }
 }
@@ -84,6 +89,7 @@ impl Update {
 pub enum OpenWhat {
     Obsidian,
     Folder,
+    Recording,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -134,19 +140,13 @@ pub fn note_copy(app: State<'_, App>, id: i64, format: CopyFormat) -> Value {
     answer(copy::copy(&app.env, &app.notes, id, format))
 }
 
-// Stub for the note view upgrades (PRD note-view-upgrades): registered so the UI contract and
-// the command list stay in step; #209 replaces it with the real `note_delete_recording`.
-
+/// Off the main thread: moving a file to the Trash may be slow.
 #[tauri::command(rename_all = "snake_case")]
-pub fn note_delete_recording() -> Value {
-    not_implemented("note_delete_recording")
-}
-
-fn not_implemented(command: &str) -> Value {
-    reply::err(
-        "not_implemented",
-        format!("{command} is not implemented yet"),
-    )
+pub async fn note_delete_recording<R: Runtime>(app: AppHandle<R>, id: i64) -> Value {
+    crate::admin::blocking(app, move |state| {
+        answer(delete_recording(&state.env, &state.notes, id))
+    })
+    .await
 }
 
 fn answer(reply: Reply) -> Value {
@@ -233,18 +233,18 @@ pub fn update(env: &Env, id: i64, fields: Update) -> Reply {
 pub fn rerun(env: &Env, notes: &Notes, id: i64, replace_edits: bool) -> Reply {
     let store = open_store(env)?;
     let row = find(&store, id)?;
-    let recording = &row.recording_path;
-    if !recording.is_file() {
+    if row.recording_deleted_at.is_some() {
         return Err(reply::err(
-            "recording_missing",
-            "the recording file no longer exists",
+            "recording_deleted",
+            "The recording was deleted.",
         ));
     }
+    let recording = &row.recording_path;
+    if !recording.is_file() {
+        return Err(recording_missing());
+    }
     if lock::is_held(&Lock::path_for(recording)) {
-        return Err(reply::err(
-            "already_processing",
-            "this recording is already being processed",
-        ));
+        return Err(already_processing());
     }
     let exe = meeting_path(env).map_err(|reason| {
         reply::err(
@@ -266,7 +266,72 @@ pub fn rerun(env: &Env, notes: &Notes, id: i64, replace_edits: bool) -> Reply {
     Ok(reply::ok(json!({})))
 }
 
-/// Opens the vault note (D37) or the meeting folder.
+/// Moves the note's own `recording.<ext>` to the macOS Trash under the recording's job lock,
+/// then marks the row (FR-9). Nothing else in the folder is touched; a failed move changes
+/// nothing. A store write failing after the move leaves the file in the Trash (accepted).
+pub fn delete_recording(env: &Env, notes: &Notes, id: i64) -> Reply {
+    let store = open_store(env)?;
+    let row = find(&store, id)?;
+    if !row.recording_path.is_file() {
+        return Err(recording_missing());
+    }
+    if lock::is_held(&Lock::path_for(&row.recording_path)) {
+        return Err(already_processing());
+    }
+    let config = env
+        .config()
+        .map_err(|reason| reply::err("delete_failed", reason))?;
+    let recording = check_recording(&config.recordings_dir, &row.recording_path).map_err(|_| {
+        tracing::warn!(id, "recording not in its own folder, not deleted");
+        reply::err(
+            "delete_failed",
+            "Only a recording in its own meeting folder can be deleted; move it back to \
+             <recordings folder>/<name>/recording.<ext> and try again",
+        )
+    })?;
+    let lock_path = Lock::path_for(&recording);
+    let _lock = Lock::acquire(&lock_path).map_err(|e| {
+        if lock::is_held(&lock_path) {
+            return already_processing();
+        }
+        tracing::warn!(
+            id,
+            kind = store::error_kind(&e),
+            "cannot lock the recording"
+        );
+        reply::err(
+            "delete_failed",
+            "Couldn't lock the recording's folder; check that it is writable and try again",
+        )
+    })?;
+    (notes.trash)(&recording).map_err(|e| {
+        tracing::warn!(id, kind = ?e.kind(), "cannot move the recording to the Trash");
+        reply::err(
+            "delete_failed",
+            format!("Couldn't move the recording to the Trash: {e}"),
+        )
+    })?;
+    store.set_recording_deleted(id, true).map_err(|e| {
+        tracing::warn!(id, "recording in the Trash but not marked deleted");
+        store_failed(e)
+    })?;
+    tracing::info!(id, "recording deleted");
+    let row = find(&store, id)?;
+    Ok(reply::ok(json!({ "note": note_json(&row) })))
+}
+
+fn recording_missing() -> Value {
+    reply::err("recording_missing", "the recording file no longer exists")
+}
+
+fn already_processing() -> Value {
+    reply::err(
+        "already_processing",
+        "this recording is already being processed",
+    )
+}
+
+/// Opens the vault note (D37), the meeting folder or the recording (FR-7, FR-8).
 pub fn open(env: &Env, notes: &Notes, id: i64, what: OpenWhat) -> Reply {
     let store = open_store(env)?;
     let row = find(&store, id)?;
@@ -277,6 +342,8 @@ pub fn open(env: &Env, notes: &Notes, id: i64, what: OpenWhat) -> Reply {
             .filter(|dir| dir.is_dir())
             .map(Path::to_path_buf),
         OpenWhat::Obsidian => vault_note(env, &store, &row),
+        OpenWhat::Recording => Some(row.recording_path.clone())
+            .filter(|path| row.recording_deleted_at.is_none() && path.is_file()),
     };
     let Some(target) = target else {
         return Err(reply::err(
@@ -470,18 +537,6 @@ mod tests {
 
     const TOO_LARGE: usize = 1_048_577;
 
-    #[test]
-    fn the_note_view_stub_answers_not_implemented() {
-        assert_eq!(
-            note_delete_recording(),
-            json!({
-                "ok": false,
-                "code": "not_implemented",
-                "message": "note_delete_recording is not implemented yet",
-            })
-        );
-    }
-
     /// A temp home with a store, a vault and a recordings folder; removed on drop.
     struct Fixture {
         env: Env,
@@ -628,6 +683,7 @@ mod tests {
         static OPENED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
         static SPAWNED: RefCell<Vec<(PathBuf, PathBuf, Option<Language>)>> =
             const { RefCell::new(Vec::new()) };
+        static TRASHED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
     }
 
     fn record_open(path: &Path) -> io::Result<()> {
@@ -657,12 +713,32 @@ mod tests {
         Err(io::Error::from(io::ErrorKind::PermissionDenied))
     }
 
+    /// Imitates the move: the file leaves its folder. The job lock must be held meanwhile.
+    fn record_trash(path: &Path) -> io::Result<()> {
+        assert!(
+            Lock::path_for(path).is_file(),
+            "the lock is held during the move"
+        );
+        fs::remove_file(path)?;
+        TRASHED.with(|t| t.borrow_mut().push(path.to_path_buf()));
+        Ok(())
+    }
+
+    fn fail_trash(_: &Path) -> io::Result<()> {
+        Err(io::Error::other("The volume has no Trash."))
+    }
+
     fn fakes() -> Notes {
         Notes {
             open: record_open,
             spawn: record_spawn,
             pasteboard: |_, _| panic!("the notes tests never copy"),
+            trash: record_trash,
         }
+    }
+
+    fn trashed() -> Vec<PathBuf> {
+        TRASHED.with(|t| t.take())
     }
 
     fn opened() -> Vec<PathBuf> {
@@ -835,6 +911,7 @@ mod tests {
             update(&f.env, 1, Update::default()),
             rerun(&f.env, &notes, 1, false),
             open(&f.env, &notes, 1, OpenWhat::Folder),
+            delete_recording(&f.env, &notes, 1),
         ];
         for reply in replies {
             let error = reply.unwrap_err();
@@ -847,6 +924,7 @@ mod tests {
         }
         assert!(opened().is_empty());
         assert!(spawned().is_empty());
+        assert!(trashed().is_empty());
     }
 
     #[test]
@@ -1086,6 +1164,20 @@ mod tests {
         fs::remove_file(&lock).unwrap();
         refuse("tool_missing");
 
+        // A deleted recording wins over a missing one (it is also not a file) and the lock.
+        fs::remove_file(&recording).unwrap();
+        fs::write(&lock, std::process::id().to_string()).unwrap();
+        f.store().set_recording_deleted(id, true).unwrap();
+        let error = rerun(&f.env, &notes, id, true).unwrap_err();
+        assert_eq!(error["code"], "recording_deleted");
+        assert_eq!(error["message"], "The recording was deleted.");
+        assert!(f.row(id).title_edited);
+        assert!(spawned().is_empty());
+        assert_eq!(code(rerun(&f.env, &notes, id + 1, true)), "unknown_note");
+        fs::remove_file(&lock).unwrap();
+        fs::write(&recording, b"audio").unwrap();
+        f.store().set_recording_deleted(id, false).unwrap();
+
         let tool = f.install_tool();
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o644)).unwrap();
         let error = rerun(&f.env, &notes, id, true).unwrap_err();
@@ -1229,6 +1321,10 @@ mod tests {
             notes.pasteboard as usize,
             copy::write_pasteboard as *const () as usize
         );
+        assert_eq!(
+            notes.trash as usize,
+            trash::move_to_trash as *const () as usize
+        );
     }
 
     #[test]
@@ -1255,6 +1351,8 @@ mod tests {
         );
         let what: OpenWhat = serde_json::from_value(json!("obsidian")).unwrap();
         assert_eq!(what, OpenWhat::Obsidian);
+        let what: OpenWhat = serde_json::from_value(json!("recording")).unwrap();
+        assert_eq!(what, OpenWhat::Recording);
         assert!(serde_json::from_value::<OpenWhat>(json!("shell")).is_err());
     }
 
@@ -1398,5 +1496,247 @@ mod tests {
         assert_eq!(reply["attendees"], json!([]));
         assert_eq!(reply["earlier"], json!(["Karim", "Nadia", "rahim"]));
         assert_eq!(code(suggestions(&f.env, other + 1)), "unknown_note");
+    }
+
+    #[test]
+    fn open_recording_opens_the_file_until_it_is_gone_or_deleted() {
+        let f = Fixture::new("openrec");
+        let (id, recording) = f.add_done("2026-10-19 1430");
+        let reply = open(&f.env, &fakes(), id, OpenWhat::Recording).unwrap();
+        assert_eq!(reply, json!({"ok": true}));
+        assert_eq!(opened(), std::slice::from_ref(&recording));
+
+        let failing = Notes {
+            open: fail_open,
+            ..fakes()
+        };
+        let error = open(&f.env, &failing, id, OpenWhat::Recording).unwrap_err();
+        assert_eq!(error["code"], "open_failed");
+        assert_eq!(error["message"], "cannot open it: open exited with 1");
+
+        // Marked deleted while the file is still there: not opened.
+        f.store().set_recording_deleted(id, true).unwrap();
+        assert_eq!(
+            code(open(&f.env, &fakes(), id, OpenWhat::Recording)),
+            "missing_file"
+        );
+        f.store().set_recording_deleted(id, false).unwrap();
+        fs::remove_file(&recording).unwrap();
+        assert_eq!(
+            code(open(&f.env, &fakes(), id, OpenWhat::Recording)),
+            "missing_file"
+        );
+        assert_eq!(
+            code(open(&f.env, &fakes(), id + 1, OpenWhat::Recording)),
+            "unknown_note"
+        );
+        assert!(opened().is_empty());
+    }
+
+    /// The meeting folder's files other than the recording, with their contents.
+    fn others(recording: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let dir = recording.parent().unwrap();
+        for name in ["transcript.md", "summary.md", "meta.json"] {
+            if !dir.join(name).exists() {
+                fs::write(dir.join(name), name).unwrap();
+            }
+        }
+        let mut files: Vec<(PathBuf, Vec<u8>)> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p != recording)
+            .map(|p| {
+                let bytes = fs::read(&p).unwrap();
+                (p, bytes)
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn delete_recording_trashes_only_the_recording_and_marks_the_row() {
+        let f = Fixture::new("delete");
+        let (id, recording) = edited(&f);
+        update(&f.env, id, rename("Speaker 1", "Nadia")).unwrap();
+        let before = f.row(id);
+        let kept = others(&recording);
+        let canonical = fs::canonicalize(&recording).unwrap();
+
+        let reply = delete_recording(&f.env, &fakes(), id).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["note"]["id"], id);
+        assert_eq!(reply["note"]["recording_deleted"], true);
+        assert_eq!(reply["note"]["recording_missing"], false);
+        assert_eq!(reply["note"]["media"], Value::Null);
+        assert_eq!(trashed(), [canonical]);
+        assert!(!recording.exists());
+        assert!(!Lock::path_for(&recording).exists());
+        assert_eq!(others(&recording), kept);
+
+        let after = f.row(id);
+        assert!(after.recording_deleted_at.is_some());
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.body_md, before.body_md);
+        assert_eq!(after.my_notes, "keep");
+        assert_eq!(after.speakers, before.speakers);
+        assert_eq!(after.vault_note_path, before.vault_note_path);
+        assert!(after.vault_note_path.unwrap().is_file());
+
+        // Deleted already: the file is gone, so it is missing.
+        assert_eq!(
+            code(delete_recording(&f.env, &fakes(), id)),
+            "recording_missing"
+        );
+        assert!(trashed().is_empty());
+    }
+
+    #[test]
+    fn delete_recording_works_for_no_speech_failed_and_archived_notes() {
+        let f = Fixture::new("deletekinds");
+        let no_speech = RunResult {
+            status: Status::NoSpeech,
+            title: None,
+            body_md: None,
+            speakers: vec![],
+            transcript: None,
+            ..done("", "2026-10-17T09:00")
+        };
+        let rows = [
+            f.add("2026-10-17 0900", no_speech),
+            f.add("2026-10-18 0900", failed("2026-10-18T09:00")),
+            f.add("Archive/2026-10-19 1430", done("Old", "2026-10-19T14:30")),
+        ];
+        for (id, recording) in rows {
+            let reply = delete_recording(&f.env, &fakes(), id).unwrap();
+            assert_eq!(reply["note"]["recording_deleted"], true, "{id}");
+            assert_eq!(
+                trashed(),
+                [fs::canonicalize(recording.parent().unwrap())
+                    .unwrap()
+                    .join("recording.webm")]
+            );
+            assert!(f.row(id).recording_deleted_at.is_some());
+        }
+    }
+
+    #[test]
+    fn delete_recording_refusals_come_in_order_and_change_nothing() {
+        let f = Fixture::new("deleterefuse");
+        let (id, recording) = f.add_done("2026-10-19 1430");
+        let notes = fakes();
+        let refuse = |expected: &str| {
+            assert_eq!(code(delete_recording(&f.env, &notes, id)), expected);
+            assert!(f.row(id).recording_deleted_at.is_none(), "{expected}");
+            assert!(trashed().is_empty(), "{expected}");
+        };
+        assert_eq!(
+            code(delete_recording(&f.env, &notes, id + 1)),
+            "unknown_note"
+        );
+
+        let lock = Lock::path_for(&recording);
+        fs::write(&lock, std::process::id().to_string()).unwrap();
+        fs::remove_file(&recording).unwrap();
+        refuse("recording_missing");
+        fs::write(&recording, b"audio").unwrap();
+        refuse("already_processing");
+        assert_eq!(
+            fs::read_to_string(&lock).unwrap(),
+            std::process::id().to_string()
+        );
+        fs::remove_file(&lock).unwrap();
+
+        fs::rename(f.env.home.join(".config"), f.env.home.join("config-away")).unwrap();
+        let error = delete_recording(&f.env, &notes, id).unwrap_err();
+        assert_eq!(error["code"], "delete_failed");
+        assert_eq!(
+            error["message"],
+            "meeting is not configured; run `meeting install`"
+        );
+        assert!(recording.is_file());
+        fs::rename(f.env.home.join("config-away"), f.env.home.join(".config")).unwrap();
+
+        // A stale lock (no such process) is taken over, then removed.
+        fs::write(&lock, "999999999").unwrap();
+        delete_recording(&f.env, &notes, id).unwrap();
+        assert_eq!(trashed().len(), 1);
+        assert!(!lock.exists());
+    }
+
+    #[test]
+    fn a_recording_outside_its_own_folder_is_not_deleted() {
+        let f = Fixture::new("ownfolder");
+        let home = f.env.home.clone();
+        fs::create_dir_all(home.join("Recordings")).unwrap();
+        let outside = home.join("Elsewhere/2026-10-19 1430/recording.webm");
+        let renamed = home.join("Recordings/2026-10-19 1500/audio.webm");
+        let linked = home.join("Recordings/2026-10-19 1600/recording.webm");
+        for path in [&outside, &renamed] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"audio").unwrap();
+        }
+        fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+
+        for path in [&outside, &renamed, &linked] {
+            let id = f
+                .store()
+                .merge_run(path, &done("Secret plans", "2026-10-19T14:30"))
+                .unwrap()
+                .id;
+            let error = delete_recording(&f.env, &fakes(), id).unwrap_err();
+            assert_eq!(error["code"], "delete_failed");
+            let message = error["message"].as_str().unwrap();
+            assert!(message.starts_with("Only a recording in its own meeting folder"));
+            assert!(!message.contains(home.to_str().unwrap()), "{message}");
+            assert!(!message.contains("Secret plans"), "{message}");
+            assert!(path.is_file());
+            assert!(f.row(id).recording_deleted_at.is_none());
+        }
+        assert!(trashed().is_empty());
+    }
+
+    #[test]
+    fn a_failed_move_changes_nothing() {
+        let f = Fixture::new("trashfail");
+        let (id, recording) = f.add_done("2026-10-19 1430");
+        let notes = Notes {
+            trash: fail_trash,
+            ..fakes()
+        };
+        let error = delete_recording(&f.env, &notes, id).unwrap_err();
+        assert_eq!(error["code"], "delete_failed");
+        assert_eq!(
+            error["message"],
+            "Couldn't move the recording to the Trash: The volume has no Trash."
+        );
+        assert!(recording.is_file());
+        assert!(!Lock::path_for(&recording).exists());
+        assert!(f.row(id).recording_deleted_at.is_none());
+    }
+
+    #[test]
+    fn a_store_failure_after_the_move_is_store_unavailable_and_frees_the_lock() {
+        let f = Fixture::new("deletestore");
+        let (id, recording) = f.add_done("2026-10-19 1430");
+        let ran = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(&f.env.store_path)
+            .arg(
+                "CREATE TRIGGER refuse BEFORE UPDATE OF recording_deleted_at ON meetings \
+                 BEGIN SELECT RAISE(ABORT, 'no'); END;",
+            )
+            .status()
+            .unwrap();
+        assert!(ran.success());
+
+        assert_eq!(
+            code(delete_recording(&f.env, &fakes(), id)),
+            "store_unavailable"
+        );
+        assert_eq!(trashed().len(), 1);
+        assert!(!recording.exists());
+        assert!(!Lock::path_for(&recording).exists());
+        assert!(f.row(id).recording_deleted_at.is_none());
     }
 }
