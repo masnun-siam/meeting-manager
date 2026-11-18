@@ -6,7 +6,7 @@ The source of truth for how this feature works for the business, as it is live t
 
 ## What it does
 
-Lets the user start, pause, resume and stop a desktop-app recording from outside the app (a Raycast Quicklink, Shortcuts, a script) through `meeting-manager://` links, and shows a small floating pill on screen for the whole recording with the time, Pause/Resume and Stop. All four rules are live in the desktop app.
+Lets the user start, pause, resume and stop a desktop-app recording from outside the app (a Raycast Quicklink, Shortcuts, a script) through `meeting-manager://` links, and shows a small floating pill on screen for the whole recording with the time, Pause/Resume and Stop. R-1 to R-4 are live in the desktop app; R-5 (an Alfred workflow) is planned.
 
 ## Rules
 
@@ -26,6 +26,10 @@ Lets the user start, pause, resume and stop a desktop-app recording from outside
   - Acceptance: following the guide, a Raycast hotkey starts a recording.
   - Delivery: delivered — `meeting-manager@6cd799a` PR #246
   - Sources: [quick-record PRD](../../prds/quick-record.md) FR-11
+- **R-5 Alfred workflow.** Each release carries `Meeting.alfredworkflow`; once imported, the Alfred keyword `rec` lists toggle, start, start in English, start in Bangla, pause, resume and stop, each opening its `meeting-manager://record/…` link, and one unassigned hotkey toggles recording.
+  - Acceptance: import the release's file, choose "Start recording in English" from `rec` → a recording starts in English with no window.
+  - Delivery: not delivered
+  - Sources: [alfred-workflow PRD](../../prds/alfred-workflow.md) FR-1 to FR-5
 
 ## Decisions
 
@@ -45,7 +49,8 @@ None.
 - 2026-11-18 planned (team) R-1 R-2 R-3 R-4 as specified, PRD [quick-record](../../prds/quick-record.md)
 - 2026-11-18 delivered R-3 floating indicator window, pill page and its Settings switch `meeting-manager@df83f19` PR #245, PR #244, PR #243
 - 2026-11-18 delivered R-1 R-2 R-4 recording links, quiet link launch with the shared start error, and the Raycast guide `meeting-manager@6cd799a` PR #246, PR #241, PR #242, PR #243
+- 2026-11-19 planned (team) R-5 Alfred workflow for the recording links, PRD [alfred-workflow](../../prds/alfred-workflow.md)
 
 ## Related
 
-- [docs/prds/quick-record.md](../../prds/quick-record.md), [docs/prds/desktop-app.md](../../prds/desktop-app.md), [docs/desktop.md](../../desktop.md).
+- [docs/prds/quick-record.md](../../prds/quick-record.md), [docs/prds/alfred-workflow.md](../../prds/alfred-workflow.md), [docs/prds/desktop-app.md](../../prds/desktop-app.md), [docs/desktop.md](../../desktop.md).
