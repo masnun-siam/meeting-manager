@@ -51,12 +51,14 @@ export function Pill() {
     }
   }, [state, notice]);
 
-  async function run<T>(call: () => Promise<Reply<T>>, onOk?: (reply: T) => void) {
+  /** Runs a command; an error reply shows for 4 s unless it is ignored. Resolves to whether it succeeded. */
+  async function run<T>(call: () => Promise<Reply<T>>, onOk?: (reply: T) => void): Promise<boolean> {
     setBusy(true);
     const result = await attempt(call);
     setBusy(false);
     if (result.ok) onOk?.(result.reply);
     else if (result.code === null || !IGNORED.has(result.code)) setProblem({ text: result.text });
+    return result.ok;
   }
 
   const dismiss = () => {
@@ -174,8 +176,8 @@ export function Pill() {
                 type="button"
                 data-variant="plain"
                 onClick={async () => {
-                  await openMain();
-                  await dismiss();
+                  // If the main window did not open, the pill stays to say why.
+                  if (await openMain()) await dismiss();
                 }}
               >
                 Open Meeting

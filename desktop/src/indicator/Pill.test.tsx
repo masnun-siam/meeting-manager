@@ -149,6 +149,16 @@ describe('Pill', () => {
     );
   });
 
+  it('Open Meeting that fails keeps the outcome pill and shows why', async () => {
+    vi.mocked(api.windowOpenMain).mockResolvedValue({ ok: false, code: 'window_failed', message: 'No main window' });
+    const { user } = await endWith(errorNotice);
+
+    await user.click(button('Open Meeting'));
+    expect(screen.getByRole('alert')).toHaveTextContent('No main window');
+    expect(api.indicatorDismiss).not.toHaveBeenCalled();
+    expect(button('Dismiss')).toBeInTheDocument();
+  });
+
   it('a new recording replaces a waiting outcome', async () => {
     await endWith(setupNotice);
     expect(button('Dismiss')).toBeInTheDocument();
