@@ -417,10 +417,12 @@ mod tests {
     ];
 
     /// Every `meeting-manager:` link in an Alfred `info.plist`, plain string work so no plist
-    /// crate is needed (alfred-workflow D9). A link ends at a quote (JSON item), `<` (XML
-    /// string) or whitespace.
+    /// crate is needed (alfred-workflow D9). The scheme matches in any case, as the app's
+    /// parser does. A link ends at a quote (JSON item), `<` (XML string) or whitespace.
     fn workflow_links(plist: &str) -> Vec<String> {
+        // ASCII lowercasing keeps byte offsets, so indices found in it slice `plist`.
         plist
+            .to_ascii_lowercase()
             .match_indices("meeting-manager:")
             .map(|(start, _)| {
                 let rest = &plist[start..];
@@ -455,14 +457,14 @@ mod tests {
     fn the_alfred_link_extractor_finds_every_link() {
         let plist = "<string>meeting-manager://record/stop</string>\n\
             <string>[{\"arg\":\"meeting-manager://record/start?language=en\"}]</string>\n\
-            meeting-manager://record/pause meeting-manager://record/a?x=1&amp;y=2";
+            meeting-manager://record/pause Meeting-Manager://record/a?x=1&amp;y=2";
         assert_eq!(
             workflow_links(plist),
             [
                 "meeting-manager://record/stop",
                 "meeting-manager://record/start?language=en",
                 "meeting-manager://record/pause",
-                "meeting-manager://record/a?x=1&y=2",
+                "Meeting-Manager://record/a?x=1&y=2",
             ]
         );
     }
