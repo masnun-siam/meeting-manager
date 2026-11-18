@@ -380,22 +380,22 @@ fn note_json(row: &Row) -> Value {
     note["recording_missing"] = json!(!deleted && !row.recording_path.is_file());
     note["recording_deleted"] = json!(deleted);
     note["attendees"] = json!(row.attendees.as_deref().unwrap_or_default());
-    note["media"] = json!(media(row));
+    note["media"] = json!(media_info(row));
     note
 }
 
 /// What the recording is, for the player (FR-5): `None` when it is deleted or gone. The hint is
 /// false for the containers WKWebView does not play (`mkv`, `ogg`).
-fn media(row: &Row) -> Option<Value> {
+fn media_info(row: &Row) -> Option<Value> {
     if row.recording_deleted_at.is_some() || !row.recording_path.is_file() {
         return None;
     }
     let ext = row.recording_path.extension()?.to_str()?.to_lowercase();
-    let kind = match ext.as_str() {
-        "webm" | "mp4" | "mov" | "mkv" => "video",
-        "m4a" | "mp3" | "wav" | "ogg" => "audio",
-        _ => return None,
-    };
+    // The kind is the top-level media type `recording://` serves the file with.
+    let (kind, _) = media::content_type(&ext).split_once('/')?;
+    if !matches!(kind, "audio" | "video") {
+        return None;
+    }
     let playable_hint = !matches!(ext.as_str(), "mkv" | "ogg");
     Some(json!({ "kind": kind, "playable_hint": playable_hint }))
 }
