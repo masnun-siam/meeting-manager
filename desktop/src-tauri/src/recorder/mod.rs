@@ -1000,6 +1000,10 @@ pub(crate) mod tests {
         capture(granted, granted, fake_start)
     }
 
+    pub(crate) fn mic_denied_capture() -> Capture {
+        capture(mic_denied, mic_denied, fake_start)
+    }
+
     /// Feeds `frames` of samples to the running fake capture, in 100 ms chunks.
     pub(crate) fn push(frames: usize) {
         let chunk = vec![1_000i16; 4_800];
