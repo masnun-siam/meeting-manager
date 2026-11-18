@@ -27,8 +27,8 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | `notes/copy.rs` | `markdown(row)` (FR-1's copy text), `copy` (the `note_copy` command), `write_pasteboard` (AppKit `NSPasteboard`, D10) |
 | `notes/media.rs` | The `recording://` scheme (`register`, called in `configure` for `Mode::On`; `respond` reads `App` at request time); `serve(&Env, method, path, range) -> Served` holds the logic |
 | `notes/markdown.rs` | `render_html` (summary markdown to safe HTML) and `shown_transcript` (speaker labels to current names) |
-| `admin/mod.rs` | `Admin { progress, trash, doctor, doctor_timeout }`; `rescan`, `rescan_status`, `health`, `note_archive`, `note_trash`, `settings_info`; hook `on_launch` (first backfill) |
-| `admin/backfill.rs` | Folder scan (`candidates`), `read_folder` (folder files to a `RunResult`), `run` (merge, then remove gone rows, then `backfill_done`), `open_or_rebuild` (move a broken store aside) |
+| `admin/mod.rs` | `Admin { progress, trash, doctor, doctor_timeout }`; `rescan`, `rescan_status`, `health`, `note_archive`, `note_trash`, `settings_info`; `launch_backfill`, `launch_attendee_fill`; hook `on_launch` (first backfill, then the one-time attendee fill) |
+| `admin/backfill.rs` | Folder scan (`candidates`), `read_folder` (folder files to a `RunResult`), `run` (merge, then remove gone rows, then `backfill_done`), `open_or_rebuild` (move a broken store aside), `fill_attendees` (the one-time attendee fill) |
 | `updater/mod.rs` | `Updater { version, check, restart, every, poll }` (FR-25, FR-26; below); `update_status`, `update_check`, `update_install`, `set_auto_update`; hook `on_launch` (automatic check and 6-hourly timer); `swap_tool`, the tool swap (FR-27), which fills `tool_error` through `Updater::set_tool_error` |
 | `updater/tool.rs` | `swap(bundled, target)`: replaces `meeting_path` with the bundled `meeting` when the bytes differ (FR-27; below) |
 | `tray.rs` | Hook `setup`: the menu-bar item ([features/desktop-recorder.md](features/desktop-recorder.md#menu-bar-item-trayrs)); needs the main thread, so the mock-runtime tests run without it |
@@ -131,9 +131,11 @@ No command takes a path from the UI. `health`, `note_archive` and `note_trash` a
 - `done` when `summary.md` exists: title from `meta.json`, else the summary's `# ` line; `body_md` without that line; speakers from `meta.json`.
 - `no_speech` when `transcript.md` has the line `No speech detected` and no utterance line.
 - otherwise `failed`: the newest `meta.json` run error, else the newest job's, split at `"<stage>: "`; with neither, a fixed "rerun the summary" message.
-- Every status: `language`, `duration_s` (rounded) and `recorded_at` from `meta.json` (`recorded_at_for` without it), `transcript` = `transcript::utterance_lines`, `source` and `event` from `context.json` by `pipeline::source_of` / `pipeline::event_link` (D40).
+- Every status: `language`, `duration_s` (rounded) and `recorded_at` from `meta.json` (`recorded_at_for` without it), `transcript` = `transcript::utterance_lines`, `source` and `event` from `context.json` by `pipeline::source_of` / `pipeline::event_link` (D40), `attendees` from it by `context::attendee_names` (`[]` with no usable `context.json`), replacing the stored list, so a Rescan after the file changed updates it.
 
 A file that can't be read counts as missing. After the folders, rows whose recording is no longer a file are removed, unless the recordings directory itself can't be read (an unmounted volume would make every recording look gone). `backfill_done` is set only when no row failed to store.
+
+**One-time attendee fill** (FR-3 of [note-view-upgrades](prds/note-view-upgrades.md); `on_launch` after the first backfill starts, when the store opens and has no `attendees_filled`): a thread named `attendee-fill` with its own store connection gives every row whose `attendees` is `NULL` the list from `<recording folder>/context.json` by `context::attendee_names`; a missing, unreadable or rule-failing file, or a gone folder, gives `[]`. `Store::fill_attendees` writes only while the column is `NULL`, so a list a run or Rescan wrote first wins. A row whose write fails stays `NULL` and the pass goes on; `attendees_filled` = `"true"` is set afterwards anyway (D14). Rows that cannot be listed leave it unset. No `config.toml` needed; a corrupt or newer store starts nothing, is logged by kind and is not moved aside (only Rescan rebuilds it). Logs carry `filled` and `failed` counts and error kinds only.
 
 ## Updates (`updater/`)
 

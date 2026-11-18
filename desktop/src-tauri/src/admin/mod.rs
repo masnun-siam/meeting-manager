@@ -64,10 +64,12 @@ pub struct Check {
     pub fix: String,
 }
 
-/// Called once at startup: the first backfill, in the background, when it has never finished.
+/// Called once at startup: the first backfill and the one-time attendee fill (FR-3), each in
+/// the background, when it has never finished.
 pub fn on_launch<R: Runtime>(app: &AppHandle<R>) {
     if let Some(state) = app.try_state::<App>() {
         launch_backfill(&state.env, &state.admin);
+        launch_attendee_fill(&state.env);
     }
 }
 
@@ -131,6 +133,32 @@ pub fn launch_backfill(env: &Env, admin: &Admin) -> Option<JoinHandle<()>> {
         return None;
     }
     start(env, admin, config, false)
+}
+
+/// Starts the one-time attendee fill only when the store opens and has no `attendees_filled`.
+/// Needs no `config.toml`: it reads the folders of the stored recording paths. A store that
+/// does not open is logged by kind and never moved aside (only Rescan rebuilds it).
+pub fn launch_attendee_fill(env: &Env) -> Option<JoinHandle<()>> {
+    let filled = env
+        .store()
+        .and_then(|store| store.setting(store::ATTENDEES_FILLED))
+        .inspect_err(|e| tracing::warn!(kind = store::error_kind(e), "no attendee fill"))
+        .ok()?;
+    if filled.is_some() {
+        return None;
+    }
+    let store_path = env.store_path.clone();
+    thread::Builder::new()
+        .name("attendee-fill".into())
+        .spawn(move || {
+            if let Err(e) =
+                Store::open(&store_path).and_then(|store| backfill::fill_attendees(&store))
+            {
+                tracing::warn!(kind = store::error_kind(&e), "attendee fill stopped");
+            }
+        })
+        .inspect_err(|e| tracing::warn!(kind = ?e.kind(), "cannot start the attendee fill"))
+        .ok()
 }
 
 /// `rescan`: `Ok` once a run is going (this one or one already running). Never
@@ -1217,5 +1245,214 @@ mod tests {
         );
         assert_eq!(admin.doctor as usize, run_doctor as *const () as usize);
         assert_eq!(admin.doctor_timeout, Duration::from_secs(10));
+    }
+
+    /// An event whose attendees are Ana (accepted), Bo (declined) and Cy (no answer yet).
+    fn invited() -> Value {
+        let mut event = event();
+        event["attendees"] = json!([
+            {"name": "Ana", "response": "accepted"},
+            {"name": "Bo", "response": "declined"},
+            {"name": "Cy", "response": "needs_action"},
+        ]);
+        event
+    }
+
+    /// A context with no event and a roster of `names`, the first one being the user.
+    fn roster(names: &[&str]) -> String {
+        let mut context: Value = serde_json::from_str(&context_json("meet", None)).unwrap();
+        context["participants"] = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| json!({"name": name, "self": i == 0}))
+            .collect();
+        context.to_string()
+    }
+
+    fn attendees(f: &Fixture, recording: &Path) -> Option<Vec<String>> {
+        f.row(recording).attendees
+    }
+
+    fn names(list: &[&str]) -> Option<Vec<String>> {
+        Some(list.iter().map(|n| n.to_string()).collect())
+    }
+
+    /// Models notes stored before attendees existed.
+    fn forget_attendees(f: &Fixture) {
+        sqlite(&f.env.store_path, "UPDATE meetings SET attendees = NULL;");
+    }
+
+    #[test]
+    fn backfill_and_rescan_set_attendees() {
+        let f = Fixture::new("attendees");
+        let event = f.meeting("event", "E");
+        write_beside(
+            &event,
+            "context.json",
+            &context_json("desktop", Some(invited())),
+        );
+        let call = f.meeting("call", "C");
+        write_beside(&call, "context.json", &roster(&["Me", "Dee"]));
+        let none = f.meeting("none", "N");
+        f.backfill().unwrap();
+        assert_eq!(attendees(&f, &event), names(&["Ana", "Cy"]));
+        assert_eq!(attendees(&f, &call), names(&["Me", "Dee"]));
+        assert_eq!(attendees(&f, &none), Some(vec![]));
+
+        // Edits and "My notes" stay; a changed file updates the list on the next Rescan.
+        let id = f.row(&event).id;
+        f.store().edit(id, Edit::Title("Mine".into())).unwrap();
+        f.store().edit(id, Edit::MyNotes("notes".into())).unwrap();
+        write_beside(&event, "context.json", &roster(&["Me", "Eve"]));
+        join(start_rescan(&f.env, &admin()).unwrap());
+        let row = f.row(&event);
+        assert_eq!(row.attendees, names(&["Me", "Eve"]));
+        assert_eq!(
+            (row.title.as_deref(), row.my_notes.as_str()),
+            (Some("Mine"), "notes")
+        );
+    }
+
+    #[test]
+    fn the_attendee_fill_runs_once_and_fills_only_empty_rows() {
+        let f = Fixture::new("fill");
+        let event = f.meeting("event", "E");
+        write_beside(
+            &event,
+            "context.json",
+            &context_json("desktop", Some(invited())),
+        );
+        let garbled = f.meeting("garbled", "G");
+        write_beside(&garbled, "context.json", "{not json");
+        let none = f.meeting("none", "N");
+        let gone = f.meeting("gone", "Gone");
+        let kept = f.meeting("kept", "K");
+        write_beside(&kept, "context.json", &roster(&["Me"]));
+        f.backfill().unwrap();
+        forget_attendees(&f);
+        let store = f.store();
+        store
+            .fill_attendees(f.row(&kept).id, &["Kept".into()])
+            .unwrap();
+        // The folder is gone but its row is still stored (no Rescan since).
+        fs::remove_dir_all(gone.parent().unwrap()).unwrap();
+        // Works with no config: it only reads the stored recording paths.
+        f.remove_config();
+
+        join(launch_attendee_fill(&f.env));
+        assert_eq!(attendees(&f, &event), names(&["Ana", "Cy"]));
+        assert_eq!(attendees(&f, &garbled), Some(vec![]));
+        assert_eq!(attendees(&f, &none), Some(vec![]));
+        assert_eq!(attendees(&f, &gone), Some(vec![]));
+        assert_eq!(attendees(&f, &kept), names(&["Kept"]));
+        assert_eq!(
+            store.setting(store::ATTENDEES_FILLED).unwrap().as_deref(),
+            Some("true")
+        );
+
+        // Done: a later launch starts nothing, even with rows null again.
+        forget_attendees(&f);
+        assert!(launch_attendee_fill(&f.env).is_none());
+        assert_eq!(attendees(&f, &event), None);
+    }
+
+    #[test]
+    fn the_attendee_fill_on_an_empty_store_just_sets_the_setting() {
+        let f = Fixture::new("fill-empty");
+        join(launch_attendee_fill(&f.env));
+        assert_eq!(
+            f.store()
+                .setting(store::ATTENDEES_FILLED)
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn a_row_that_cannot_be_written_stays_null_and_the_pass_goes_on() {
+        let f = Fixture::new("fill-refused");
+        let fine = f.meeting("fine", "F");
+        write_beside(
+            &fine,
+            "context.json",
+            &context_json("desktop", Some(invited())),
+        );
+        let refused = f.meeting("refused", "R");
+        write_beside(
+            &refused,
+            "context.json",
+            &context_json("desktop", Some(invited())),
+        );
+        let after = f.meeting("zafter", "Z");
+        f.backfill().unwrap();
+        forget_attendees(&f);
+        sqlite(
+            &f.env.store_path,
+            "CREATE TRIGGER refuse BEFORE UPDATE ON meetings \
+             WHEN NEW.recording_path LIKE '%/refused/%' BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        );
+
+        backfill::fill_attendees(&f.store()).unwrap();
+        assert_eq!(attendees(&f, &refused), None);
+        assert_eq!(attendees(&f, &fine), names(&["Ana", "Cy"]));
+        assert_eq!(attendees(&f, &after), Some(vec![]));
+        assert_eq!(
+            f.store()
+                .setting(store::ATTENDEES_FILLED)
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn the_attendee_fill_does_nothing_when_the_store_cannot_open_or_list() {
+        let f = Fixture::new("fill-corrupt");
+        f.corrupt_store();
+        assert!(launch_attendee_fill(&f.env).is_none());
+        assert!(f.broken().is_empty());
+
+        let newer = Fixture::new("fill-newer");
+        newer.meeting("m", "M");
+        newer.backfill().unwrap();
+        drop(newer.store());
+        sqlite(&newer.env.store_path, "PRAGMA user_version = 999;");
+        assert!(launch_attendee_fill(&newer.env).is_none());
+        assert!(newer.broken().is_empty());
+
+        // The rows cannot be listed: an error, nothing changed and the setting unset.
+        let unlisted = Fixture::new("fill-unlisted");
+        unlisted.meeting("m", "M");
+        unlisted.backfill().unwrap();
+        forget_attendees(&unlisted);
+        let store = unlisted.store();
+        sqlite(
+            &unlisted.env.store_path,
+            "ALTER TABLE meetings RENAME COLUMN attendees TO gone;",
+        );
+        assert!(backfill::fill_attendees(&store).is_err());
+        assert_eq!(store.setting(store::ATTENDEES_FILLED).unwrap(), None);
+    }
+
+    #[test]
+    fn a_thousand_rows_are_filled_within_ten_seconds() {
+        let f = Fixture::new("fill-many");
+        for i in 0..1000 {
+            let recording = f.recording(&format!("m{i:04}"), "webm");
+            write_beside(
+                &recording,
+                "context.json",
+                &context_json("desktop", Some(invited())),
+            );
+        }
+        f.backfill().unwrap();
+        forget_attendees(&f);
+
+        let started = Instant::now();
+        backfill::fill_attendees(&f.store()).unwrap();
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(10), "{took:?}");
+        assert!(f.store().without_attendees().unwrap().is_empty());
     }
 }
