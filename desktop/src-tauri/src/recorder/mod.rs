@@ -421,10 +421,18 @@ impl Recorder {
             && r.code != "already_recording"
         {
             tracing::info!("recorder: start refused ({})", r.code);
-            *lock(&self.inner.start_error) = Some(StartError {
-                code: r.code,
-                message: r.message.clone(),
-            });
+            {
+                // Under the state lock, as `start` clears it: a Start from the window that
+                // succeeded in the meantime wins, and the stale refusal is dropped.
+                let state = self.state();
+                if matches!(*state, State::Active(_)) {
+                    return started;
+                }
+                *lock(&self.inner.start_error) = Some(StartError {
+                    code: r.code,
+                    message: r.message.clone(),
+                });
+            }
             self.changed();
         }
         started
