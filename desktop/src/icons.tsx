@@ -121,6 +121,13 @@ export const SparkIcon = (p: P) => (
   </Icon>
 );
 
+export const CopyIcon = (p: P) => (
+  <Icon {...p}>
+    <rect x="8.5" y="8.5" width="11" height="11" rx="1.5" />
+    <path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" />
+  </Icon>
+);
+
 export const CheckIcon = (p: P) => (
   <Icon {...p}>
     <path d="M5 12.5l4.5 4.5L19 7.5" />
