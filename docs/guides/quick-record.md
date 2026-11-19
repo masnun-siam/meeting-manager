@@ -11,7 +11,7 @@ Start, pause, resume, stop and continue the desktop app's recorder from anywhere
 | `meeting-manager://record/pause` | Pauses a running recording |
 | `meeting-manager://record/resume` | Resumes a paused recording |
 | `meeting-manager://record/toggle` | Starts when nothing is recording, stops when recording or paused: one hotkey for both |
-| `meeting-manager://record/continue` | Continues the last recording when nothing is recording, if it stopped less than 2 hours ago; otherwise does nothing (see below) |
+| `meeting-manager://record/continue` | Continues the last recording when nothing is recording, within 2 hours of its stop; see below for when there is nothing to continue |
 
 `start` and `toggle` take `?language=bn` or `?language=en`, for example `meeting-manager://record/start?language=en`. Without it, the recording uses the language you used last. The language a link starts with becomes the last used.
 
@@ -57,4 +57,4 @@ Needs Alfred 5 with the Powerpack, and Meeting v0.3.0 or later installed in `/Ap
 3. To put toggle on a key, open Alfred **Preferences › Workflows › Meeting**, double-click the **Hotkey** object, record a key and press **Save**. The hotkey is unassigned after import. Pressing it starts a recording; pressing it again stops and saves.
 4. To change the keyword, double-click the **List Filter** object in the same workflow, edit **Keyword** and press **Save**. If another workflow also uses `rec`, Alfred shows both until you change one.
 
-Importing the file from a newer release updates the same workflow instead of adding a copy. Like any link, an item or hotkey that does not apply right now does nothing, and the workflow shows no confirmation of its own.
+Importing the file from a newer release updates the same workflow instead of adding a copy. Like any link, an item or hotkey that does not apply right now does nothing, and the workflow shows no confirmation of its own. **Continue last recording** needs a Meeting release with continued recordings; an older one ignores it.
