@@ -1,6 +1,6 @@
 # Quick record and floating indicator — business documentation
 
-**Module:** desktop · **Updated:** 2026-11-19 · **Repos:** meeting-manager
+**Module:** desktop · **Updated:** 2026-11-20 · **Repos:** meeting-manager
 
 The source of truth for how this feature works for the business, as it is live today. A PRD is the temporary source of truth for one change, from request to delivery, and locked once approved; after delivery, this doc says what is true. Meeting notes, chats and specs are the material it was built from, never the truth on their own.
 
@@ -51,7 +51,8 @@ None.
 - 2026-11-18 delivered R-1 R-2 R-4 recording links, quiet link launch with the shared start error, and the Raycast guide `meeting-manager@6cd799a` PR #246, PR #241, PR #242, PR #243
 - 2026-11-19 planned (team) R-5 Alfred workflow for the recording links, PRD [alfred-workflow](../../prds/alfred-workflow.md)
 - 2026-11-19 delivered R-5 Alfred workflow source, link drift test, release packing and its guide `meeting-manager@7c3be3d` PR #255, PR #254
+- 2026-11-20 planned (team) R-1 R-2 R-3 R-5 a `continue` link (flag `FEATURE_CONTINUE_RECORDING`); with nothing to continue it is a refused start that shows the window; closing the notice in the window also ends the pill's error outcome; Alfred `rec` gains "Continue last recording", PRD [continue-recording](../../prds/continue-recording.md) FR-1, FR-7, FR-13
 
 ## Related
 
-- [docs/prds/quick-record.md](../../prds/quick-record.md), [docs/prds/alfred-workflow.md](../../prds/alfred-workflow.md), [docs/prds/desktop-app.md](../../prds/desktop-app.md), [docs/desktop.md](../../desktop.md).
+- [docs/prds/quick-record.md](../../prds/quick-record.md), [docs/prds/alfred-workflow.md](../../prds/alfred-workflow.md), [docs/prds/continue-recording.md](../../prds/continue-recording.md), [docs/prds/desktop-app.md](../../prds/desktop-app.md), [docs/desktop.md](../../desktop.md).
