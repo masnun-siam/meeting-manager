@@ -4,6 +4,7 @@
 //! outcome or ignore reason.
 
 use std::mem;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
@@ -13,7 +14,7 @@ use meeting::Language;
 use tauri::{AppHandle, Manager, Runtime, Url};
 
 use crate::App;
-use crate::recorder::{Reason, Recorder};
+use crate::recorder::{Reason, Recorder, Refused};
 
 const SCHEME: &str = "meeting-manager";
 const HOST: &str = "record";
@@ -30,6 +31,8 @@ pub enum Action {
     Pause,
     Resume,
     Toggle(Option<Language>),
+    /// Continues the last recording (continue-recording FR-7).
+    Continue,
 }
 
 impl Action {
@@ -41,6 +44,7 @@ impl Action {
             Action::Pause => "pause",
             Action::Resume => "resume",
             Action::Toggle(_) => "toggle",
+            Action::Continue => "continue",
         }
     }
 }
@@ -89,9 +93,15 @@ impl Outcome {
     }
 }
 
-/// The link's action, or why it is ignored. `Url` lowercases the scheme but not the host of a
-/// non-special scheme, so host and path are lowercased here.
+/// The link's action, or why it is ignored, as this build handles it.
 pub fn parse(url: &Url) -> Result<Action, Ignored> {
+    parse_with(url, crate::continue_enabled())
+}
+
+/// `parse` for a build with or without `FEATURE_CONTINUE_RECORDING` (`continue_enabled`): off,
+/// `continue` is an unknown route. `Url` lowercases the scheme but not the host of a non-special
+/// scheme, so host and path are lowercased here.
+pub fn parse_with(url: &Url, continue_enabled: bool) -> Result<Action, Ignored> {
     let host = url.host_str().map(str::to_ascii_lowercase);
     let routed = url.scheme() == SCHEME
         && host.as_deref() == Some(HOST)
@@ -106,6 +116,7 @@ pub fn parse(url: &Url) -> Result<Action, Ignored> {
         "/pause" if routed => "pause",
         "/resume" if routed => "resume",
         "/toggle" if routed => "toggle",
+        "/continue" if routed && continue_enabled => "continue",
         _ => return Err(Ignored::UnknownRoute),
     };
     let takes_language = matches!(route, "start" | "toggle");
@@ -127,6 +138,7 @@ pub fn parse(url: &Url) -> Result<Action, Ignored> {
         "toggle" => Action::Toggle(language),
         "stop" => Action::Stop,
         "pause" => Action::Pause,
+        "continue" => Action::Continue,
         _ => Action::Resume,
     })
 }
@@ -137,12 +149,9 @@ pub fn dispatch(recorder: &Recorder, action: Action) -> Outcome {
     let state = recorder.status().state;
     match (action, state) {
         (Action::Start(language) | Action::Toggle(language), "idle") => {
-            match recorder.start_ad_hoc(language) {
-                Ok(_) => Outcome::Started,
-                Err(r) if r.code == "already_recording" => Outcome::Nothing,
-                Err(r) => Outcome::Refused(r.code),
-            }
+            started(recorder.start_ad_hoc(language))
         }
+        (Action::Continue, "idle") => started(recorder.continue_ad_hoc()),
         (Action::Stop | Action::Toggle(_), "recording" | "paused") => {
             // The saving thread finishes on its own.
             match recorder.stop(Reason::User) {
@@ -159,6 +168,15 @@ pub fn dispatch(recorder: &Recorder, action: Action) -> Outcome {
             Err(_) => Outcome::Nothing,
         },
         _ => Outcome::Nothing,
+    }
+}
+
+/// A start's or continue's outcome; `already_recording` (a racing start) is swallowed.
+fn started(result: Result<PathBuf, Refused>) -> Outcome {
+    match result {
+        Ok(_) => Outcome::Started,
+        Err(r) if r.code == "already_recording" => Outcome::Nothing,
+        Err(r) => Outcome::Refused(r.code),
     }
 }
 
@@ -364,12 +382,19 @@ fn start_worker<R: Runtime>(app: &AppHandle<R>) -> Option<Sender<Action>> {
 mod tests {
     use std::fs;
     use std::path::Path;
+    use std::sync::{Arc, Barrier};
 
     use super::*;
-    use crate::recorder::tests::{Rig, mic_denied_capture, ok_capture, rig};
+    use crate::recorder::tests::{Rig, earlier, mic_denied_capture, ok_capture, rig};
 
+    /// As a build with `FEATURE_CONTINUE_RECORDING` parses it.
     fn parsed(link: &str) -> Result<Action, Ignored> {
-        parse(&Url::parse(link).expect("a valid URL"))
+        parse_with(&Url::parse(link).expect("a valid URL"), true)
+    }
+
+    /// As a build without `FEATURE_CONTINUE_RECORDING` parses it.
+    fn parsed_unflagged(link: &str) -> Result<Action, Ignored> {
+        parse_with(&Url::parse(link).expect("a valid URL"), false)
     }
 
     #[test]
@@ -399,9 +424,45 @@ mod tests {
                 Action::Toggle(Some(Language::Bn)),
             ),
             ("meeting-manager://record/start?", Action::Start(None)),
+            ("meeting-manager://record/continue", Action::Continue),
+            ("meeting-manager://record/continue/", Action::Continue),
+            ("MEETING-MANAGER://Record/CONTINUE/", Action::Continue),
+            ("meeting-manager://record/continue?", Action::Continue),
         ];
         for (link, expected) in rows {
             assert_eq!(parsed(link), Ok(expected), "{link}");
+        }
+    }
+
+    #[test]
+    fn parse_follows_the_build_flag() {
+        let link = Url::parse("meeting-manager://record/continue").unwrap();
+        assert_eq!(parse(&link), parse_with(&link, crate::continue_enabled()));
+    }
+
+    #[test]
+    fn without_the_flag_continue_is_an_unknown_route_and_the_rest_is_unchanged() {
+        for link in [
+            "meeting-manager://record/continue",
+            "meeting-manager://record/continue/",
+            "MEETING-MANAGER://Record/CONTINUE/",
+            "meeting-manager://record/continue?x=1",
+            "meeting-manager://record/continue?language=en",
+        ] {
+            assert_eq!(parsed_unflagged(link), Err(Ignored::UnknownRoute), "{link}");
+        }
+        assert_eq!(
+            ignored_line(Ignored::UnknownRoute),
+            "link ignored: unknown_route"
+        );
+        for link in [
+            "meeting-manager://record/start?language=en",
+            "meeting-manager://record/toggle",
+            "meeting-manager://record/stop",
+            "meeting-manager://record/stop?language=en",
+            "meeting-manager://record/start?language=fr",
+        ] {
+            assert_eq!(parsed_unflagged(link), parsed(link), "{link}");
         }
     }
 
@@ -526,6 +587,22 @@ mod tests {
                 "meeting-manager://record/start?Language=en",
                 Ignored::UnknownParam,
             ),
+            (
+                "meeting-manager://record/continue?language=en",
+                Ignored::UnknownParam,
+            ),
+            (
+                "meeting-manager://record/continue?x=1",
+                Ignored::UnknownParam,
+            ),
+            (
+                "meeting-manager://record/continue?language=bn&language=bn",
+                Ignored::UnknownParam,
+            ),
+            (
+                "meeting-manager://record/continue/now",
+                Ignored::UnknownRoute,
+            ),
         ];
         for (link, expected) in rows {
             assert_eq!(parsed(link), Err(expected), "{link}");
@@ -557,10 +634,12 @@ mod tests {
             Action::Stop,
             Action::Pause,
             Action::Resume,
+            Action::Continue,
         ];
         let outcomes = [
             Outcome::Started,
             Outcome::Refused("permission_mic"),
+            Outcome::Refused("nothing_to_continue"),
             Outcome::Stopped,
             Outcome::Paused,
             Outcome::Resumed,
@@ -577,6 +656,10 @@ mod tests {
         assert_eq!(
             handled_line(Action::Start(Some(Language::En)), Outcome::Started),
             "link: start → started"
+        );
+        assert_eq!(
+            handled_line(Action::Continue, Outcome::Started),
+            "link: continue → started"
         );
     }
 
@@ -688,16 +771,25 @@ mod tests {
             Action::Pause,
             Action::Resume,
             Action::Toggle(Some(Language::Bn)),
+            Action::Continue,
         ];
         let rows: [(&str, &[Action]); 4] = [
             ("idle", &[Action::Stop, Action::Pause, Action::Resume]),
-            ("recording", &[Action::Start(None), Action::Resume]),
-            ("paused", &[Action::Start(None), Action::Pause]),
+            (
+                "recording",
+                &[Action::Start(None), Action::Resume, Action::Continue],
+            ),
+            (
+                "paused",
+                &[Action::Start(None), Action::Pause, Action::Continue],
+            ),
             ("saving", &all),
         ];
         for (state, actions) in rows {
             for (i, &action) in actions.iter().enumerate() {
                 let (rig, guard) = rig_in(&format!("dash-{state}-{i}"), state);
+                // Something to continue, so `continue` meets the state and not its absence.
+                earlier(&rig, 20, 1);
                 let before = snapshot(&rig);
                 assert_eq!(
                     dispatch(&rig.recorder, action),
@@ -733,6 +825,94 @@ mod tests {
             Outcome::Nothing,
         ] {
             assert!(!shows_window(outcome));
+        }
+    }
+
+    #[test]
+    fn continue_when_idle_records_the_next_part_without_the_window() {
+        let rig = rig("link-continue", ok_capture());
+        let folder = earlier(&rig, 20, 1);
+        let outcome = dispatch(&rig.recorder, Action::Continue);
+        assert_eq!(outcome, Outcome::Started);
+        assert!(!shows_window(outcome));
+        let status = rig.recorder.status();
+        assert_eq!(
+            (status.state, status.part, status.elapsed_s),
+            ("recording", Some(2), 20)
+        );
+        assert_eq!(status.folder.as_deref(), folder.to_str());
+        assert_eq!(status.start_error, None);
+        // A cold launch by this link keeps the window hidden.
+        let launch = LinkLaunch::default();
+        assert!(launch.link_arrived());
+        assert!(!launch.decide());
+        finish(&rig);
+    }
+
+    #[test]
+    fn continue_with_nothing_to_continue_is_a_refused_start_that_shows_the_window() {
+        let rig = rig("link-continue-nothing", ok_capture());
+        let outcome = dispatch(&rig.recorder, Action::Continue);
+        assert_eq!(outcome, Outcome::Refused("nothing_to_continue"));
+        assert!(shows_window(outcome));
+        let error = rig.recorder.status().start_error.unwrap();
+        assert_eq!(
+            (error.code, error.message.as_str()),
+            (
+                "nothing_to_continue",
+                "Nothing to continue: the last recording stopped more than 2 hours ago, or was moved."
+            )
+        );
+        assert_eq!(rig.state(), "idle");
+        rig.recorder.dismiss_start_error();
+        assert_eq!(rig.recorder.status().start_error, None);
+    }
+
+    #[test]
+    fn a_denied_continue_shows_starts_permission_error() {
+        let rig = rig("link-continue-mic", mic_denied_capture());
+        earlier(&rig, 20, 1);
+        let outcome = dispatch(&rig.recorder, Action::Continue);
+        assert_eq!(outcome, Outcome::Refused("permission_mic"));
+        assert!(shows_window(outcome));
+        assert_eq!(
+            rig.recorder.status().start_error.unwrap().message,
+            "Allow Meeting in System Settings › Privacy & Security › Microphone"
+        );
+    }
+
+    #[test]
+    fn two_quick_continue_links_record_once() {
+        let rig = rig("link-continue-race", ok_capture());
+        earlier(&rig, 20, 1);
+        let gate = Arc::new(Barrier::new(2));
+        let (recorder, other_gate) = (rig.recorder.clone(), gate.clone());
+        let other = thread::spawn(move || {
+            other_gate.wait();
+            dispatch(&recorder, Action::Continue)
+        });
+        gate.wait();
+        let here = dispatch(&rig.recorder, Action::Continue);
+        let outcomes = [here, other.join().unwrap()];
+        assert!(
+            outcomes.contains(&Outcome::Started) && outcomes.contains(&Outcome::Nothing),
+            "{outcomes:?}"
+        );
+        assert_eq!(rig.state(), "recording");
+        assert_eq!(rig.recorder.status().start_error, None);
+        finish(&rig);
+    }
+
+    #[test]
+    fn start_and_toggle_make_a_new_recording_when_one_can_be_continued() {
+        for action in [Action::Start(None), Action::Toggle(None)] {
+            let (rig, _) = rig_in(&format!("new-{}", action.kind()), "idle");
+            let folder = earlier(&rig, 20, 1);
+            assert_eq!(dispatch(&rig.recorder, action), Outcome::Started);
+            let status = rig.recorder.status();
+            assert_eq!((status.state, status.part), ("recording", None));
+            assert_ne!(status.folder.as_deref(), folder.to_str());
+            finish(&rig);
         }
     }
 
