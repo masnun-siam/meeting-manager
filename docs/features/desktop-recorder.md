@@ -85,7 +85,7 @@ On success the language is saved to the store setting `language` (a store failur
 | ffmpeg failed: WAV kept, no m4a | `error` | `ffmpeg failed: <last stderr line>` or `ffmpeg not found at <path>; run \`meeting doctor\`` | meeting folder |
 | Disk full: WAV kept (sizes repaired), no conversion | `error` | The disk is full, so recording stopped. … | meeting folder |
 
-`meeting_path` is read from `config.toml` at Stop; `ffmpeg_path` is the one checked at Start. The newest notice wins and is cleared by the next successful Start.
+`meeting_path` is read from `config.toml` at Stop; `ffmpeg_path` is the one checked at Start. The newest notice wins and is cleared by the next successful Start or by `dismiss_notice` (`recorder_dismiss_notice`, continue-recording FR-1), which takes only the notice lock, announces through `on_change` only when there was one and logs nothing. Dismissing an `error` notice with a `folder` drops its Retry; the kept WAV stays and the next launch's recovery converts it. A later notice shows again.
 
 ## Commands
 
@@ -95,6 +95,7 @@ All run on a blocking thread (permission prompts, joins and ffmpeg block). Repli
 |---|---|---|
 | `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null}` (`start_error`: see Start error) | none |
 | `recorder_dismiss_start_error` | `{}`; clears the start error (already clear is fine) | none |
+| `recorder_dismiss_notice` (not flagged) | `{}`; clears the notice (already clear is fine); announced through the change listeners, so the menu bar and pill drop it at once | none |
 | `recorder_start {language, event_occurrence_id\|null}` | `{folder}` | see Start |
 | `recorder_pause` / `recorder_resume` | `{state}` | `not_recording` |
 | `recorder_stop` | `{state: "saving"}` at once | `not_recording` |
@@ -139,7 +140,7 @@ Built in `tray::setup` on the main thread (skipped with a warning otherwise, so 
 | paused | `tray-paused.png` (template) | frozen `H:MM:SS` | disabled | "Resume" | enabled |
 | saving | idle icon | none | disabled | disabled | disabled |
 
-- First line, disabled, only when there is something to say: the recorder's start error (the FR-2 permission texts word for word, `not_configured`, `capture_failed`), else an `error` or `setup` notice. The window's Dismiss clears it here too. "A recording is already running" is never shown: not idle is not a start error.
+- First line, disabled, only when there is something to say: the recorder's start error (the FR-2 permission texts word for word, `not_configured`, `capture_failed`), else an `error` or `setup` notice. The window's Dismiss clears the start error here too, and `recorder_dismiss_notice` the notice. "A recording is already running" is never shown: not idle is not a start error.
 - Start recording: `Recorder::start_ad_hoc(None)` on a thread. Open Meeting: shows and focuses the `main` window. Quit: `app.exit(0)`, so the quit logic above decides.
 - Every recorder change re-renders through `on_change`; a timer thread refreshes only the title while recording.
 
