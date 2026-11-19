@@ -1,6 +1,6 @@
 # Native messaging
 
-Covers: crates/meeting/src/native.rs, crates/meeting/src/folders.rs, crates/meeting/src/spawn.rs, crates/meeting/src/context.rs, crates/meeting/tests/native_host.rs, extension/src/shared/native.ts, extension/src/shared/nativeClient.ts, extension/src/background/save.ts, extension/src/popup/JobsTab.tsx, extension/src/popup/useJobs.ts
+Covers: crates/meeting/src/native.rs, crates/meeting/src/config.rs (`check_part`), crates/meeting/src/folders.rs, crates/meeting/src/spawn.rs, crates/meeting/src/context.rs, crates/meeting/tests/native_host.rs, extension/src/shared/native.ts, extension/src/shared/nativeClient.ts, extension/src/background/save.ts, extension/src/popup/JobsTab.tsx, extension/src/popup/useJobs.ts
 
 The extension talks to the `meeting` binary through Chrome native messaging. Chrome starts `meeting <origin>` (no subcommand: the host manifest can't add arguments; `chrome_args` in `main.rs` turns it into `native-host <origin>`) per `chrome.runtime.sendNativeMessage` call; the host answers and exits at end of input. See [../architecture.md](../architecture.md), [processing.md](processing.md), [setup.md](setup.md).
 
@@ -22,6 +22,7 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 - Config failed to load and request is not `health`: `not_configured` (message names `meeting install`).
 - Config loaded: origin must equal `chrome-extension://<config.extension_id>/`, else `bad_request`. A `None` origin also fails.
 - Unknown `type` or bad fields: `bad_request`.
+- `process_part` on a host built without `FEATURE_CONTINUE_RECORDING=1` (`Host.continue_recording` off): `bad_request` ("unknown request type process_part", no path echoed), like an unknown type. Being after the config check, an unconfigured flag-off host answers `not_configured`.
 - With no config, `health` skips the origin check and reports why.
 - Only the message type is logged, never content.
 
@@ -30,6 +31,7 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 | Request (`type`) | Fields | Success reply | Notes |
 |---|---|---|---|
 | `process` | `path`, `language` (`bn`\|`en`), optional `context` | `{ok, job_id}` | `start_checked`; spawns `meeting process`. With `Host.context` on (`FEATURE_MEETING_CONTEXT=1` build), a `context` is checked by `context::check` and written to `context.json` beside the recording before the job file; a missing, rejected or unwritable context is logged by rule name only and never changes the reply. `context::check` also accepts `platform: "desktop"` and a `calendar_event` (the desktop app's fields; the extension sends neither). Off: `context` is ignored. |
+| `process_part` | `path` (absolute `recording-part-N.<ext>`), `language` (`bn`\|`en`) | `{ok, job_id}` | Continue flag on only. `config::check_part` gives the canonical `recording.<ext>` beside the part; a held lock is **not** refused (the continuation stops that run). Reuses the newest job of that recording from `JobStore::list` (updated in place: `queued`, `error` null, `started_at` and `title` kept), else a new job; spawns `meeting process <recording> --continue --language <l> --job-id <id>` (`spawn::continue_detached`). Shares `queue` with `process`, so a failed spawn behaves the same. |
 | `retry` | `job_id` | `{ok, job_id}` | Same as `process` on the old job's recording, no `--language`, no `context` (an existing `context.json` stays); `job_id` is the new job |
 | `archive` | `job_id` | `{ok}` | See [Archive](#archive) |
 | `trash` | `job_id` | `{ok}` | See [Trash](#trash) |
@@ -71,7 +73,7 @@ Error reply: `{ok: false, code, message}`.
 |---|---|
 | `bad_request` | Bad JSON, unknown type, bad field (e.g. language `fr`), wrong or missing origin, oversized frame |
 | `not_configured` | No or invalid config |
-| `invalid_path` | `check_recording` failed: not absolute, not `<recordings_dir>/<name>/recording.<ext>` or `<recordings_dir>/Archive/<name>/recording.<ext>` (ext one of `RECORDING_EXTENSIONS`: webm, mp4, m4a, mov, mkv, mp3, wav, ogg), missing, not a file, outside `recordings_dir` (after canonicalising, so symlinks out are refused) |
+| `invalid_path` | `check_recording` failed: not absolute, not `<recordings_dir>/<name>/recording.<ext>` or `<recordings_dir>/Archive/<name>/recording.<ext>` (ext one of `RECORDING_EXTENSIONS`: webm, mp4, m4a, mov, mkv, mp3, wav, ogg), missing, not a file, outside `recordings_dir` (after canonicalising, so symlinks out are refused). For `process_part`, `check_part` failed: not absolute, contains `..`, not `recording-part-N.<ext>` with N >= 2 (digits, no leading zero, lower-case ext from `RECORDING_EXTENSIONS`, `join::part_number`), missing, not a regular file (a symlinked part is refused), its folder a symlink, no `recording.<same ext>` that is a real file of the folder, folder not directly in `recordings_dir` (under `Archive/`, or nested) |
 | `already_processing` | `lock::is_held` on the recording's lock; no job is written |
 | `archive_failed` | `archive` failed after the check: the message names the step (`move`, `meta.json`, `vault note`, `jobs`) and the path; or the recording is gone and its jobs could not be removed, or `recordings_dir` could not be read |
 | `trash_failed` | `trash` could not move the folder (command missing or non-zero exit): the message names the reason; nothing moved, jobs stay; or the folder is in the Trash but its jobs could not be removed (the message says so); or the recording is gone and its jobs could not be removed |
@@ -128,6 +130,7 @@ The popup does not call `health`; no extension code sends it.
 `crates/meeting/tests/native_host.rs` runs the real binary with a temp `HOME`:
 
 - `list_jobs_round_trip_over_stdio`: framed `list_jobs` returns a job from the jobs dir.
+- `process_part_over_stdio_is_one_frame`: `process_part` gets exactly one frame and nothing else on stdout: `bad_request` in a flag-off build, `invalid_path` for the bogus path with the flag on; no job is written.
 - `process_and_retry_outlive_the_host`: `process` replies in under 1 s; a stub `ffmpeg` that fails shows the job reaching `failed` (`extracting: ffmpeg failed...`) after the host exited; `retry` yields a new `job_id`.
 
 Handler cases (origin, framing, path checks, locks, open, the store wiring) are unit tests in `native.rs`; the Archive and Trash rules are tested in `folders.rs`, the detached spawn in `spawn.rs`. Client parsing is covered by `extension/src/shared/nativeClient.test.ts`.

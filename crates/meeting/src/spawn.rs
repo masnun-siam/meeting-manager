@@ -85,6 +85,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::test_support::stub_meeting;
 
     fn temp(name: &str) -> PathBuf {
         let dir =
@@ -92,25 +93,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    /// A stand-in `meeting` that records its arguments, pid, process group and the devices
-    /// behind its stdio, then `done` last. The stdio descriptors are copied first because a
-    /// redirect would replace them.
-    fn stub(dir: &Path) -> PathBuf {
-        let path = dir.join("meeting");
-        let script = r#"#!/bin/sh
-d=$(/usr/bin/dirname "$0")
-exec 3<&0 4>&1 5>&2
-printf '%s\n' "$@" > "$d/args"
-echo $$ > "$d/pid"
-/bin/ps -o pgid= -p $$ > "$d/pgid"
-/usr/bin/stat -f %r /dev/fd/3 /dev/fd/4 /dev/fd/5 > "$d/stdio"
-/usr/bin/touch "$d/done"
-"#;
-        fs::write(&path, script).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path
     }
 
     struct Seen {
@@ -133,7 +115,7 @@ echo $$ > "$d/pid"
         job_id: Option<&str>,
     ) -> Seen {
         let dir = temp(name);
-        let exe = stub(&dir);
+        let exe = stub_meeting(&dir);
         spawn(
             &exe,
             Path::new("/r/my meeting/recording.m4a"),
@@ -246,7 +228,7 @@ echo $$ > "$d/pid"
     #[test]
     fn check_tool_accepts_only_an_absolute_executable_file() {
         let dir = temp("check");
-        let tool = stub(&dir);
+        let tool = stub_meeting(&dir);
         let plain = dir.join("plain");
         fs::write(&plain, "x").unwrap();
         fs::set_permissions(&plain, fs::Permissions::from_mode(0o644)).unwrap();

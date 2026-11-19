@@ -1,8 +1,10 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
+
+use crate::join::part_number;
 
 /// `~/.config/meeting-manager/config.toml`. Paths are absolute because Chrome
 /// launches the host with a bare `PATH`. Holds no secrets: the key is in the Keychain.
@@ -88,6 +90,64 @@ pub fn check_recording_folder(recordings_dir: &Path, path: &Path) -> Result<Path
         return Err(format!("{} is not a folder", parent.display()));
     }
     check_layout(recordings_dir, path, folder.join(name))
+}
+
+/// The canonical `recording.<ext>` a continued part belongs to. `path` must be an existing
+/// `recording-part-N.<ext>` (N >= 2, a regular file, no `..`) in a meeting folder directly
+/// inside `recordings_dir` (not a symlink, not under `Archive/`), with a `recording.<same
+/// ext>` that is a real file of that folder.
+pub fn check_part(recordings_dir: &Path, path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!("{} is not an absolute path", path.display()));
+    }
+    if path.components().any(|c| c == Component::ParentDir) {
+        return Err(format!(
+            "{} contains ..; send the folder's own path",
+            path.display()
+        ));
+    }
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+    else {
+        return Err(format!("{} is not a file", path.display()));
+    };
+    let Some(ext) = RECORDING_EXTENSIONS
+        .into_iter()
+        .find(|ext| part_number(name, ext).is_some())
+    else {
+        return Err(format!(
+            "{} is not a part; a part is recording-part-N.<ext> with N >= 2",
+            path.display()
+        ));
+    };
+    let part = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !part.file_type().is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    let folder = fs::symlink_metadata(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    if !folder.file_type().is_dir() {
+        return Err(format!(
+            "{} is not a folder; a symlinked meeting folder is refused",
+            parent.display()
+        ));
+    }
+    let folder = fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    let recording = check_recording(recordings_dir, &folder.join(format!("recording.{ext}")))?;
+    if recording.parent() != Some(folder.as_path()) {
+        return Err(format!(
+            "{} is not a file of {}; replace it with the recorded file",
+            recording.display(),
+            parent.display()
+        ));
+    }
+    let root = fs::canonicalize(recordings_dir)
+        .map_err(|e| format!("{}: {e}", recordings_dir.display()))?;
+    if folder.parent() != Some(root.as_path()) {
+        return Err(format!(
+            "{} is archived; continue only a recording that is not in Archive/",
+            parent.display()
+        ));
+    }
+    Ok(recording)
 }
 
 /// The rules both checks share: `canonical` is `recording.<ext>` directly inside
@@ -317,6 +377,115 @@ extension_id = "obbaikcmcdooakogedoiiflflbbhpgdh"
         );
         assert!(flat.contains("meeting import"), "{flat}");
         assert!(every_ext.iter().all(Result::is_ok), "{every_ext:?}");
+    }
+
+    #[test]
+    fn check_part_accepts_only_a_part_beside_its_recording() {
+        let dir = temp("config-part");
+        let _ = fs::remove_dir_all(&dir);
+        let rec = dir.join("rec");
+        for sub in ["m", "a", "Archive/m", "x/y", "only", "real", "dir", "two"] {
+            fs::create_dir_all(rec.join(sub)).unwrap();
+        }
+        for file in [
+            "m/recording.webm",
+            "m/recording-part-2.webm",
+            "m/recording-part-10.webm",
+            "m/recording-part-1.webm",
+            "m/recording-part-0.webm",
+            "m/recording-part-x.webm",
+            "m/recording-part-2.webm.part",
+            "m/recording-part-2.partial.wav",
+            "m/recording-part-2.txt",
+            "m/recording-part-3.m4a",
+            "m/recording-part-4.WEBM",
+            "a/recording.m4a",
+            "a/recording-part-2.m4a",
+            "Archive/m/recording.webm",
+            "Archive/m/recording-part-2.webm",
+            "x/y/recording.webm",
+            "x/y/recording-part-2.webm",
+            "recording.webm",
+            "recording-part-2.webm",
+            "only/recording-part-2.webm",
+            "two/recording-part-2.webm",
+            "two/other.webm",
+        ] {
+            fs::write(rec.join(file), "x").unwrap();
+        }
+        fs::create_dir_all(rec.join("dir/recording-part-2.webm")).unwrap();
+        fs::write(rec.join("dir/recording.webm"), "x").unwrap();
+        fs::write(dir.join("outside-part.webm"), "x").unwrap();
+        fs::create_dir_all(dir.join("elsewhere")).unwrap();
+        for file in ["recording.webm", "recording-part-2.webm"] {
+            fs::write(dir.join("elsewhere").join(file), "x").unwrap();
+        }
+        // Symlinked parts, inside and outside the folder, and symlinked meeting folders.
+        symlink(
+            dir.join("outside-part.webm"),
+            rec.join("m/recording-part-5.webm"),
+        )
+        .unwrap();
+        symlink(
+            rec.join("m/recording-part-2.webm"),
+            rec.join("m/recording-part-6.webm"),
+        )
+        .unwrap();
+        symlink(dir.join("elsewhere"), rec.join("out")).unwrap();
+        symlink(rec.join("m"), rec.join("in")).unwrap();
+        // A recording that is a symlink to another meeting's recording.
+        fs::write(rec.join("real/recording-part-2.webm"), "x").unwrap();
+        symlink(
+            rec.join("m/recording.webm"),
+            rec.join("real/recording.webm"),
+        )
+        .unwrap();
+
+        let check = |p: &str| check_part(&rec, &rec.join(p));
+        let accepted = (
+            check("m/recording-part-2.webm"),
+            check("m/recording-part-10.webm"),
+            check("a/recording-part-2.m4a"),
+        );
+        let refused = [
+            check_part(&rec, Path::new("rec/m/recording-part-2.webm")),
+            check("m/recording-part-7.webm"),
+            check("dir/recording-part-2.webm"),
+            check_part(&rec, &dir.join("elsewhere/recording-part-2.webm")),
+            check("m/recording-part-1.webm"),
+            check("m/recording-part-0.webm"),
+            check("m/recording-part-x.webm"),
+            check("m/recording-part-2.webm.part"),
+            check("m/recording-part-2.partial.wav"),
+            check("m/recording-part-2.txt"),
+            check("only/recording-part-2.webm"),
+            check("m/recording-part-3.m4a"),
+            check("recording-part-2.webm"),
+            check("x/y/recording-part-2.webm"),
+            check("Archive/m/recording-part-2.webm"),
+            check("m/../m/recording-part-2.webm"),
+            check("m/recording-part-5.webm"),
+            check("m/recording-part-6.webm"),
+            check("out/recording-part-2.webm"),
+            check("in/recording-part-2.webm"),
+            check("m/recording-part-4.WEBM"),
+            check("real/recording-part-2.webm"),
+            check("two/recording-part-2.webm"),
+        ];
+        let archived = check("Archive/m/recording-part-2.webm").unwrap_err();
+        let want = (
+            fs::canonicalize(rec.join("m/recording.webm")).unwrap(),
+            fs::canonicalize(rec.join("a/recording.m4a")).unwrap(),
+        );
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(accepted.0, Ok(want.0.clone()));
+        assert_eq!(accepted.1, Ok(want.0));
+        assert_eq!(accepted.2, Ok(want.1));
+        for (i, r) in refused.iter().enumerate() {
+            assert!(r.is_err(), "case {i}: {r:?}");
+        }
+        assert!(archived.contains("is archived"), "{archived}");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Fakes shared by the tests: a scripted Deepgram server and a stub `claude`.
+//! Fakes shared by the tests: a scripted Deepgram server, a stub `claude` and a stub `meeting`.
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -13,6 +13,25 @@ pub fn temp(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("meeting-test-{}-{name}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// A stand-in `meeting` that records its arguments, pid, process group and the devices
+/// behind its stdio, then `done` last. The stdio descriptors are copied first because a
+/// redirect would replace them.
+pub fn stub_meeting(dir: &Path) -> PathBuf {
+    let path = dir.join("meeting");
+    let script = r#"#!/bin/sh
+d=$(/usr/bin/dirname "$0")
+exec 3<&0 4>&1 5>&2
+printf '%s\n' "$@" > "$d/args"
+echo $$ > "$d/pid"
+/bin/ps -o pgid= -p $$ > "$d/pgid"
+/usr/bin/stat -f %r /dev/fd/3 /dev/fd/4 /dev/fd/5 > "$d/stdio"
+/usr/bin/touch "$d/done"
+"#;
+    fs::write(&path, script).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
 }
 
 /// A stub `claude` that records its arguments and stdin, then runs `tail`.
