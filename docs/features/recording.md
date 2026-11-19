@@ -150,6 +150,7 @@ flowchart TD
 - A failed Start (`resetWithError`) closes the offscreen document, resets to `idle` and sets an `error` notice. `start` also rethrows, which the SW logs.
 - `offscreen_error` before `offscreen_started` resets like a failed Start. After it, only the notice is set and `offscreen_stopped` follows.
 - If the popup cannot reach the SW, `RecordTab` shows "Could not reach the recorder".
+- **Dismiss** (FR-2, FR-3 in [continue-recording.md](../prds/continue-recording.md)): every message line (send error, notice, mic warning, stop reason, in that order) has a 24 px × button named "Dismiss message"; the context line has none. The notice, stop reason and mic warning send `dismiss {what: 'notice' | 'stop' | 'mic'}` and disappear when the SW writes the status: `notice: null`, `lastStop: null` (idle only, otherwise a no-op), or `micWarningDismissed: true` (Start writes a fresh status, so the warning comes back next recording). The send error is popup-local: × clears it with no message, and a dismiss that cannot be sent shows the reach error and keeps its line. After the line goes, focus moves to the × now at the same position (or the last one), else to Start recording (idle), Pause or Resume (running) or the Record tab (saving).
 - **Context line** (`FEATURE_MEETING_CONTEXT` on, phases `recording` and `paused` only; FR-5 in [meeting-context.md](../prds/meeting-context.md)): first in the status region, from `meeting_context`.
 
   | Platform, `capture` | Text |

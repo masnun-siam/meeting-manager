@@ -1,5 +1,12 @@
-import { useEffect, useState } from 'react';
-import type { Language, MeetingContextState, Notice, PopupCommand, RecorderStatus } from '../shared/messages';
+import { useEffect, useRef, useState } from 'react';
+import type {
+  DismissTarget,
+  Language,
+  MeetingContextState,
+  Notice,
+  PopupCommand,
+  RecorderStatus,
+} from '../shared/messages';
 import { elapsedMs, initialRecordingState, type StopReason } from '../shared/recordingState';
 import styles from './RecordTab.module.css';
 import { useMeetingContext } from './useMeetingContext';
@@ -51,24 +58,31 @@ function noticeText(notice: Notice): string {
 
 type Tone = 'info' | 'problem';
 
+/** `send` is the popup-local send error; the others are cleared in the recorder status. */
+type LineKind = 'send' | DismissTarget;
+
 interface Line {
+  kind: LineKind;
   text: string;
   tone: Tone;
 }
 
 function messageLines(status: RecorderStatus | null, sendError: string | null): Line[] {
   const lines: Line[] = [];
-  if (sendError) lines.push({ text: sendError, tone: 'problem' });
+  if (sendError) lines.push({ kind: 'send', text: sendError, tone: 'problem' });
   if (status?.notice) {
     lines.push({
+      kind: 'notice',
       text: noticeText(status.notice),
       tone: status.notice.kind === 'setup' || status.notice.kind === 'error' ? 'problem' : 'info',
     });
   }
-  if (status?.micIncluded === false) lines.push({ text: MIC_WARNING, tone: 'info' });
+  if (status?.micIncluded === false && !status.micWarningDismissed) {
+    lines.push({ kind: 'mic', text: MIC_WARNING, tone: 'info' });
+  }
   if (status?.state.phase === 'idle' && status.state.lastStop) {
     const stop = STOP_MESSAGES[status.state.lastStop];
-    if (stop) lines.push({ text: stop, tone: 'info' });
+    if (stop) lines.push({ kind: 'stop', text: stop, tone: 'info' });
   }
   return lines;
 }
@@ -118,8 +132,28 @@ function useStoredLanguage(): [Language, (language: Language) => void] {
   return [language, setLanguage];
 }
 
-function Message({ text, tone }: Line) {
-  return <p className={tone === 'problem' ? styles.problem : styles.info}>{text}</p>;
+interface MessageProps {
+  text: string;
+  tone: Tone;
+  onDismiss: () => void;
+  dismissRef: (button: HTMLButtonElement | null) => void;
+}
+
+function Message({ text, tone, onDismiss, dismissRef }: MessageProps) {
+  return (
+    <div className={styles.line}>
+      <p className={tone === 'problem' ? styles.problem : styles.info}>{text}</p>
+      <button
+        ref={dismissRef}
+        type="button"
+        aria-label="Dismiss message"
+        className={styles.dismiss}
+        onClick={onDismiss}
+      >
+        ×
+      </button>
+    </div>
+  );
 }
 
 export function RecordTab() {
@@ -139,18 +173,54 @@ export function RecordTab() {
     return () => clearInterval(id);
   }, [phase]);
 
-  async function send(command: PopupCommand) {
-    setSendError(null);
+  /** Sends without clearing a shown send error; true when it reached the service worker. */
+  async function post(command: PopupCommand): Promise<boolean> {
     try {
       if (command.type === 'start') await chrome.storage.local.set({ language: command.language });
       await chrome.runtime.sendMessage(command);
+      return true;
     } catch (error) {
       setSendError(`Could not reach the recorder: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
     }
+  }
+
+  async function send(command: PopupCommand) {
+    setSendError(null);
+    await post(command);
   }
 
   const lines = messageLines(status, sendError);
   const running = phase === 'recording' || phase === 'paused';
+
+  const startRef = useRef<HTMLButtonElement>(null);
+  const pauseResumeRef = useRef<HTMLButtonElement>(null);
+  const dismissRefs = useRef(new Map<LineKind, HTMLButtonElement>());
+  /** The closed line's index and how many lines there were; focus moves once the list gets shorter. */
+  const pendingFocus = useRef<{ index: number; count: number } | null>(null);
+
+  // After every render: a status-backed line disappears only when storage changes, so focus cannot move in the click.
+  useEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending || lines.length >= pending.count) return;
+    pendingFocus.current = null;
+    if (lines.length > 0) {
+      dismissRefs.current.get(lines[Math.min(pending.index, lines.length - 1)].kind)?.focus();
+      return;
+    }
+    // The main record control: Start when idle, Pause or Resume while running, the Record tab while saving.
+    const main = startRef.current ?? pauseResumeRef.current ?? document.getElementById('tab-record');
+    main?.focus();
+  });
+
+  async function dismiss(kind: LineKind, index: number) {
+    pendingFocus.current = { index, count: lines.length };
+    if (kind === 'send') {
+      setSendError(null);
+      return;
+    }
+    if (!(await post({ type: 'dismiss', what: kind }))) pendingFocus.current = null;
+  }
   const line = running && context ? contextLine(context) : null;
 
   const shownLanguage = phase === 'idle' ? language : (status?.language ?? language);
@@ -178,6 +248,7 @@ export function RecordTab() {
         {phase === 'idle' ? (
           <button
             type="button"
+            ref={startRef}
             aria-label="Start recording"
             className={styles.record}
             onClick={() => send({ type: 'start', language })}
@@ -186,11 +257,21 @@ export function RecordTab() {
         {running ? (
           <div className={styles.actions}>
             {phase === 'recording' ? (
-              <button type="button" className={styles.secondary} onClick={() => send({ type: 'pause' })}>
+              <button
+                ref={pauseResumeRef}
+                type="button"
+                className={styles.secondary}
+                onClick={() => send({ type: 'pause' })}
+              >
                 Pause
               </button>
             ) : (
-              <button type="button" className={styles.secondary} onClick={() => send({ type: 'resume' })}>
+              <button
+                ref={pauseResumeRef}
+                type="button"
+                className={styles.secondary}
+                onClick={() => send({ type: 'resume' })}
+              >
                 Resume
               </button>
             )}
@@ -224,8 +305,17 @@ export function RecordTab() {
             <span className={styles.srOnly}>{line.announce}</span>
           </>
         ) : null}
-        {lines.map((message) => (
-          <Message key={message.text} {...message} />
+        {lines.map((message, index) => (
+          <Message
+            key={message.kind}
+            text={message.text}
+            tone={message.tone}
+            onDismiss={() => dismiss(message.kind, index)}
+            dismissRef={(button) => {
+              if (button) dismissRefs.current.set(message.kind, button);
+              else dismissRefs.current.delete(message.kind);
+            }}
+          />
         ))}
       </div>
     </div>

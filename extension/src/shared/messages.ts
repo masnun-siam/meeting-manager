@@ -11,7 +11,12 @@ export type PopupCommand =
   | { type: 'start'; language: Language }
   | { type: 'pause' }
   | { type: 'resume' }
-  | { type: 'stop' };
+  | { type: 'stop' }
+  /** Clears a Record tab message: the notice, the stop reason (idle only) or the mic warning (this recording). */
+  | { type: 'dismiss'; what: DismissTarget };
+
+/** The Record tab messages the service worker can clear. A send error is popup-local and never sent. */
+export type DismissTarget = 'notice' | 'stop' | 'mic';
 
 /** Service worker → offscreen document. */
 export type OffscreenCommand =
@@ -71,6 +76,8 @@ export interface RecorderStatus {
   language: Language;
   /** null until the offscreen document has started; false means tab audio only. */
   micIncluded: boolean | null;
+  /** The mic warning was dismissed; `start` builds a status without it, so it resets per recording. */
+  micWarningDismissed?: boolean;
   notice: Notice | null;
   /** The captured tab, so `tabs.onRemoved` still matches after the service worker slept. */
   tabId: number | null;

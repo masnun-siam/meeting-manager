@@ -10,7 +10,7 @@ import {
 } from './recordingControl';
 import { recoverLeftovers } from './recover';
 
-const POPUP_COMMANDS: ReadonlySet<string> = new Set(['start', 'pause', 'resume', 'stop']);
+const POPUP_COMMANDS: ReadonlySet<string> = new Set(['start', 'pause', 'resume', 'stop', 'dismiss']);
 const OFFSCREEN_EVENTS: ReadonlySet<string> = new Set(['offscreen_started', 'offscreen_stopped', 'offscreen_error']);
 const CONTENT_EVENTS: ReadonlySet<string> = new Set(['context_update', 'context_hello']);
 

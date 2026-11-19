@@ -4,6 +4,7 @@ import {
   type ContextUpdate,
   MEETING_CONTEXT_KEY,
   type MeetingContextState,
+  type PopupCommand,
   RECORDER_STATUS_KEY,
   type RecorderStatus,
 } from '../shared/messages';
@@ -571,6 +572,84 @@ describe('running recording', () => {
     await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'capture_ended' });
     expect(status().state).toEqual({ phase: 'idle', lastStop: 'capture_ended' });
     expect(status().notice).toEqual({ kind: 'error', message: 'disk full' });
+  });
+});
+
+describe('dismiss', () => {
+  const idle = (extra: Partial<RecorderStatus> = {}): RecorderStatus => ({
+    state: { phase: 'idle', lastStop: 'tab_closed' },
+    language: 'en',
+    micIncluded: null,
+    notice: { kind: 'saved' },
+    tabId: null,
+    ...extra,
+  });
+
+  it('clears the notice and leaves the rest', async () => {
+    stored[RECORDER_STATUS_KEY] = idle();
+    await handlePopupCommand({ type: 'dismiss', what: 'notice' });
+
+    expect(status()).toEqual(idle({ notice: null }));
+    expect(setBadgeText).not.toHaveBeenCalled();
+  });
+
+  it('is fine with a notice that is already clear', async () => {
+    stored[RECORDER_STATUS_KEY] = idle({ notice: null });
+    await handlePopupCommand({ type: 'dismiss', what: 'notice' });
+
+    expect(status()).toEqual(idle({ notice: null }));
+  });
+
+  it('clears the stop reason when idle', async () => {
+    stored[RECORDER_STATUS_KEY] = idle();
+    await handlePopupCommand({ type: 'dismiss', what: 'stop' });
+
+    expect(status()).toEqual(idle({ state: { phase: 'idle', lastStop: null } }));
+  });
+
+  it('changes nothing for the stop reason outside idle', async () => {
+    await startRecording();
+    const before = status();
+    await handlePopupCommand({ type: 'dismiss', what: 'stop' });
+
+    expect(status()).toBe(before);
+  });
+
+  it('hides the mic warning for this recording only', async () => {
+    await startRecording();
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: false });
+    await handlePopupCommand({ type: 'dismiss', what: 'mic' });
+    expect(status()).toMatchObject({ micIncluded: false, micWarningDismissed: true });
+
+    await handlePopupCommand({ type: 'stop' });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    await startRecording();
+
+    expect(status().micWarningDismissed).toBeUndefined();
+  });
+
+  it.each([{ type: 'dismiss', what: 'context' }, { type: 'dismiss' }])(
+    'ignores %j without a write',
+    async (command) => {
+      stored[RECORDER_STATUS_KEY] = idle();
+      const before = status();
+
+      await expect(handlePopupCommand(command as PopupCommand)).resolves.toBeUndefined();
+      expect(status()).toBe(before);
+    },
+  );
+
+  it('runs after a command already queued', async () => {
+    await startRecording();
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handlePopupCommand({ type: 'stop' });
+
+    const stopped = handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    const dismissed = handlePopupCommand({ type: 'dismiss', what: 'notice' });
+    await Promise.all([stopped, dismissed]);
+
+    expect(status().state).toEqual({ phase: 'idle', lastStop: 'user' });
+    expect(status().notice).toBeNull();
   });
 });
 
