@@ -117,7 +117,7 @@ sequenceDiagram
 | `useJobs` | Sends `list_jobs` with `limit: 10` on mount and every 3 s (`POLL_MS`); clears the timer on unmount |
 | Ordering | Each fetch gets an increasing id; a reply older than one already applied is dropped |
 | View states | `loading`, `ready` (jobs), `error` (reply message, or "Could not reach the meeting tool: ...") |
-| Row | Title (or folder name; file name for a file not named `recording.<ext>`), local start time, stage, error text when `failed` |
+| Row | A card: title (or folder name; file name for a file not named `recording.<ext>`), a stage chip, local start time, error text when `failed`. The chip's text is the raw stage (capitalised by CSS); its `data-tone` comes from `TONE: Record<Stage, Tone>`: `queued`, `working` (`joining` to `writing`), `done`, `failed`; a stage this build does not know shows as `working` |
 | Buttons | `done` with `summary_path`: Open summary; `done`: Open folder; `failed`: Retry; `done` and `failed`: Archive and Trash (two-step: the first click reads "Confirm trash" for 3 s, a second click in that time sends `trash`) |
 | Actions | `JobsTab.run` sends `open`, `retry`, `archive` or `trash`; a failed reply shows its `message` in a status line; a successful `retry`, `archive` or `trash` calls `refresh()` |
 

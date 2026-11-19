@@ -379,3 +379,78 @@ describe('JobsTab', () => {
     expect(listCalls()).toBe(before);
   });
 });
+
+describe('JobsTab cards', () => {
+  const tone = (row: HTMLElement, stage: string) => within(row).getByText(stage).dataset.tone;
+
+  it.each([
+    ['queued', 'queued'],
+    ['joining', 'working'],
+    ['extracting', 'working'],
+    ['transcribing', 'working'],
+    ['summarising', 'working'],
+    ['writing', 'working'],
+    ['done', 'done'],
+    ['failed', 'failed'],
+  ] as const)('shows a %s job with the %s chip and its stage as text', async (stage, expected) => {
+    sendNative.mockResolvedValue(jobs(job({ stage })));
+    setup();
+
+    const [row] = await screen.findAllByRole('listitem');
+    expect(tone(row, stage)).toBe(expected);
+  });
+
+  it('falls back to the working tone for a stage an older tool sends', async () => {
+    const stage: string = 'uploading';
+    sendNative.mockResolvedValue(jobs({ ...job(), stage } as JobSummary));
+    setup();
+
+    const [row] = await screen.findAllByRole('listitem');
+    expect(tone(row, 'uploading')).toBe('working');
+  });
+
+  it('shows no buttons on a running job', async () => {
+    sendNative.mockResolvedValue(jobs(job({ stage: 'joining' })));
+    setup();
+
+    const [row] = await screen.findAllByRole('listitem');
+    expect(within(row).queryAllByRole('button')).toEqual([]);
+  });
+
+  it('shows a done, a running and a failed card with their chips and actions', async () => {
+    sendNative.mockResolvedValue(
+      jobs(
+        job({ job_id: 'd', stage: 'done', summary_path: '/s.md' }),
+        job({ job_id: 'r', stage: 'summarising' }),
+        job({ job_id: 'f', stage: 'failed', error: 'Deepgram key rejected' }),
+      ),
+    );
+    setup();
+
+    const [done, running, failed] = await screen.findAllByRole('listitem');
+    const names = (row: HTMLElement) =>
+      within(row)
+        .queryAllByRole('button')
+        .map((b) => b.textContent);
+    expect([tone(done, 'done'), tone(running, 'summarising'), tone(failed, 'failed')]).toEqual([
+      'done',
+      'working',
+      'failed',
+    ]);
+    expect(names(done)).toEqual(['Open summary', 'Open folder', 'Archive', 'Trash']);
+    expect(names(running)).toEqual([]);
+    expect(names(failed)).toEqual(['Retry', 'Archive', 'Trash']);
+    expect(failed).toHaveTextContent('Deepgram key rejected');
+  });
+
+  it('moves the chip to the new tone on the next poll', async () => {
+    sendNative.mockResolvedValueOnce(jobs(job({ stage: 'writing' }))).mockResolvedValue(jobs(job({ stage: 'done' })));
+    setup();
+    const [first] = await screen.findAllByRole('listitem');
+    expect(tone(first, 'writing')).toBe('working');
+
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+
+    expect(await screen.findByText('done')).toHaveAttribute('data-tone', 'done');
+  });
+});

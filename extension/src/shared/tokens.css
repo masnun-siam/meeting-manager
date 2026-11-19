@@ -42,6 +42,15 @@
   --record-text: #b42318;
   --focus-ring: #9a5b00;
 
+  --chip-queued-fill: #ece9e2;
+  --chip-queued-text: #4a4f5a;
+  --chip-working-fill: #fff1db;
+  --chip-working-text: #8a5100;
+  --chip-done-fill: #e1f4ea;
+  --chip-done-text: #18794e;
+  --chip-failed-fill: #fde8e8;
+  --chip-failed-text: #b42318;
+
   --radius-pill: 999px;
   --radius-card: 16px;
 
@@ -62,6 +71,15 @@
     --record: #ff4d4f;
     --record-text: #ff4d4f;
     --focus-ring: #ffb547;
+
+    --chip-queued-fill: #2a2d35;
+    --chip-queued-text: #c9c6bf;
+    --chip-working-fill: #3a2c14;
+    --chip-working-text: #ffb547;
+    --chip-done-fill: #143223;
+    --chip-done-text: #5fd394;
+    --chip-failed-fill: #3d1a1b;
+    --chip-failed-text: #ff7a7b;
   }
 }
 
