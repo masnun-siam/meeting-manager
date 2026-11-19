@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MeetingContextState, Notice, RecorderStatus } from '../shared/messages';
 import { initialRecordingState, type RecordingState } from '../shared/recordingState';
-import { RecordTab } from './RecordTab';
+import { formatElapsed, RecordTab } from './RecordTab';
 
 const flag = vi.hoisted(() => ({ on: false }));
 vi.mock('../shared/flags', () => ({ meetingContextEnabled: () => flag.on }));
@@ -76,29 +78,66 @@ describe('RecordTab', () => {
   it('starts idle on Bengali when nothing is stored', async () => {
     setup();
 
-    expect(await screen.findByRole('combobox', { name: 'Language' })).toHaveValue('bn');
-    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
+    expect(await screen.findByRole('radio', { name: 'বাংলা' })).toBeChecked();
+    expect(screen.getByRole('radiogroup', { name: 'Language' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeEnabled();
+  });
+
+  it('shows a dimmed, decorative 0:00:00 when idle', async () => {
+    setup();
+
+    await screen.findByRole('button', { name: 'Start recording' });
+    const idle = screen.getByText('0:00:00');
+    expect(idle).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByRole('timer')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).not.toContainElement(idle);
+  });
+
+  it('labels the Bengali choice as Bengali text', async () => {
+    setup();
+
+    expect((await screen.findByRole('radio', { name: 'বাংলা' })).closest('label')).toHaveAttribute('lang', 'bn');
+  });
+
+  it('moves between the language choices with the arrow keys', async () => {
+    const user = setup();
+
+    await user.click(await screen.findByRole('radio', { name: 'বাংলা' }));
+    await user.keyboard('{ArrowRight}');
+
+    expect(screen.getByRole('radio', { name: 'English' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'English' })).toHaveFocus();
+  });
+
+  it('styles a problem differently from information', async () => {
+    stored = recording({ micIncluded: false, notice: { kind: 'error', message: 'Disk full' } });
+    setup();
+
+    const problem = await screen.findByText('Disk full');
+    const info = screen.getByText('Microphone not included: recording tab audio only.');
+    expect(problem.className).not.toBe(info.className);
   });
 
   it('shows the stored language', async () => {
     local = { language: 'en' };
     setup();
 
-    expect(await screen.findByDisplayValue('English')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'English' })).toBeChecked());
   });
 
   it('ignores a stored language it does not know', async () => {
     local = { language: 'fr' };
     setup();
 
-    expect(await screen.findByRole('combobox', { name: 'Language' })).toHaveValue('bn');
+    await waitFor(() => expect(chrome.storage.local.get).toHaveBeenCalled());
+    expect(await screen.findByRole('radio', { name: 'বাংলা' })).toBeChecked();
   });
 
   it('sends start with the chosen language and stores it', async () => {
     const user = setup();
 
-    await user.selectOptions(await screen.findByRole('combobox', { name: 'Language' }), 'English');
-    await user.click(screen.getByRole('button', { name: 'Start' }));
+    await user.click(await screen.findByRole('radio', { name: 'English' }));
+    await user.click(screen.getByRole('button', { name: 'Start recording' }));
 
     expect(localSet).toHaveBeenCalledWith({ language: 'en' });
     expect(sendMessage).toHaveBeenCalledWith({ type: 'start', language: 'en' });
@@ -108,13 +147,15 @@ describe('RecordTab', () => {
     stored = recording({ language: 'en' });
     const user = setup();
 
-    expect(await screen.findByRole('timer', { name: 'Recorded time' })).toHaveTextContent('● REC 00:04:00');
-    expect(screen.getByRole('combobox', { name: 'Language' })).toBeDisabled();
-    expect(screen.getByRole('combobox', { name: 'Language' })).toHaveValue('en');
+    expect(await screen.findByRole('timer', { name: 'Recorded time' })).toHaveTextContent(/^0:04:00$/);
+    expect(screen.getByText('REC')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'English' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'বাংলা' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'English' })).toBeChecked();
     await act(async () => {
       vi.advanceTimersByTime(1000);
     });
-    expect(screen.getByRole('timer')).toHaveTextContent('00:04:01');
+    expect(screen.getByRole('timer')).toHaveTextContent(/^0:04:01$/);
 
     await user.click(screen.getByRole('button', { name: 'Pause' }));
     expect(sendMessage).toHaveBeenCalledWith({ type: 'pause' });
@@ -126,7 +167,9 @@ describe('RecordTab', () => {
     stored = status({ phase: 'paused', startedAt: T0 - 300_000, recordedMs: 61_000 });
     const user = setup();
 
-    expect(await screen.findByRole('timer')).toHaveTextContent('II Paused 00:01:01');
+    expect(await screen.findByRole('timer')).toHaveTextContent(/^0:01:01$/);
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.queryByText('REC')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Resume' }));
     expect(sendMessage).toHaveBeenCalledWith({ type: 'resume' });
     expect(screen.getByRole('button', { name: 'Stop & save' })).toBeInTheDocument();
@@ -183,25 +226,26 @@ describe('RecordTab', () => {
     stored = status({ phase: 'idle', lastStop: 'user' });
     setup();
 
-    await screen.findByRole('button', { name: 'Start' });
+    await screen.findByRole('button', { name: 'Start recording' });
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('re-renders when the status in session storage changes', async () => {
     setup();
-    await screen.findByRole('button', { name: 'Start' });
+    await screen.findByRole('button', { name: 'Start recording' });
 
     act(() => listener({ recorder: { newValue: recording() } }));
 
-    expect(await screen.findByRole('timer')).toHaveTextContent('● REC');
-    expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('timer')).toBeInTheDocument();
+    expect(screen.getByText('REC')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start recording' })).not.toBeInTheDocument();
   });
 
   it('shows why it could not reach the recorder', async () => {
     sendMessage.mockRejectedValue(new Error('Receiving end does not exist.'));
     const user = setup();
 
-    await user.click(await screen.findByRole('button', { name: 'Start' }));
+    await user.click(await screen.findByRole('button', { name: 'Start recording' }));
 
     expect(await screen.findByText('Could not reach the recorder: Receiving end does not exist.')).toBeInTheDocument();
   });
@@ -376,7 +420,7 @@ describe('RecordTab', () => {
       setup();
 
       await waitFor(() => expect(sessionGet).toHaveBeenCalledWith('meeting_context'));
-      await screen.findByRole('combobox', { name: 'Language' });
+      await screen.findByRole('radiogroup', { name: 'Language' });
       expect(screen.getByRole('status')).toBeEmptyDOMElement();
     });
 
@@ -388,7 +432,7 @@ describe('RecordTab', () => {
 
       act(() => listener({ recorder: { newValue: status(initialRecordingState) } }));
 
-      await screen.findByRole('button', { name: 'Start' });
+      await screen.findByRole('button', { name: 'Start recording' });
       expect(visibleLine()).toBeUndefined();
     });
 
@@ -412,5 +456,30 @@ describe('RecordTab', () => {
       expect(sessionGet).not.toHaveBeenCalledWith('meeting_context');
       expect(screen.getByRole('status')).toBeEmptyDOMElement();
     });
+  });
+});
+
+describe('formatElapsed', () => {
+  it.each([
+    [0, '0:00:00'],
+    [999, '0:00:00'],
+    [61_000, '0:01:01'],
+    [3_599_000, '0:59:59'],
+    [3 * 3_600_000, '3:00:00'],
+  ])('formats %i ms as %s', (ms, text) => {
+    expect(formatElapsed(ms)).toBe(text);
+  });
+});
+
+describe('RecordTab.module.css', () => {
+  const css = readFileSync(join(import.meta.dirname, 'RecordTab.module.css'), 'utf8');
+
+  it('stops the REC pulse under reduced motion', () => {
+    expect(css).toMatch(/\.rec::before\s*\{[^}]*animation: pulse/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.rec::before\s*\{\s*animation: none;/);
+  });
+
+  it('uses no colour literals', () => {
+    expect(css).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
   });
 });

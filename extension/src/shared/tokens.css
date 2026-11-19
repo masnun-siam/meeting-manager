@@ -34,6 +34,7 @@
   --surface-raised: #ffffff;
   --text: #14161b;
   --text-muted: #5c616d;
+  --text-dim: #878c98;
   --border: #e3dfd6;
   --accent: #ffb547;
   --on-accent: #14161b;
@@ -55,6 +56,7 @@
     --surface-raised: #1b1e25;
     --text: #f2efe8;
     --text-muted: #8a8f9c;
+    --text-dim: #626773;
     --border: #2a2d35;
     --accent: #ffb547;
     --on-accent: #0f1115;
