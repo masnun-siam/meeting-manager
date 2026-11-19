@@ -1,8 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import {
   type Language,
   type RecorderState,
+  type RecorderStatus,
   type Reply,
+  recorderContinue,
   recorderDismissNotice,
   recorderDismissStartError,
   recorderPause,
@@ -12,6 +14,7 @@ import {
   recorderStop,
 } from '../api';
 import { CloseIcon, MicIcon, PauseIcon, PlayIcon, RecordIcon, RetryIcon, StopIcon } from '../icons';
+import { formatClock } from '../notes/view/format';
 import { attempt } from './attempt';
 import { LanguageSelect } from './LanguageSelect';
 import { canRetry, noticeText } from './notices';
@@ -45,6 +48,9 @@ export function RecordingBar() {
   const language = idle ? (chosen ?? status?.language ?? 'en') : (status?.language ?? 'en');
   const notice = status?.notice ?? null;
   const startError = status?.start_error ?? null;
+  // Continue-recording FR-6: offered only while idle; the poll drops it once the window passed.
+  const continuable = idle ? (status?.continuable ?? null) : null;
+  const part = running ? (status?.part ?? null) : null;
 
   // FR-1: once a recording runs, the idle default is the language it used, not an older pick.
   useEffect(() => {
@@ -92,6 +98,12 @@ export function RecordingBar() {
         refresh();
       },
     );
+  // Like Start; the earlier part's language is the session's (D9), so the select is not read.
+  const cont = () =>
+    run(recorderContinue, () => {
+      setState('recording');
+      refresh();
+    });
   const follow = (reply: StateReply) => setState(reply.state);
   const control = (call: () => Promise<Reply<StateReply>>) => run(call, follow);
   const retry = (folder: string) => run(() => recorderRetry({ folder }), follow);
@@ -122,6 +134,7 @@ export function RecordingBar() {
               <span className={state === 'recording' ? styles.rec : styles.paused}>
                 {state === 'recording' ? '● REC' : 'II Paused'}
               </span>
+              {part ? <span className={styles.part}>Continuing · part {part}</span> : null}
               <span role="timer" aria-label="Recorded time" className={styles.timer}>
                 {formatElapsed(status?.elapsed_s ?? 0)}
               </span>
@@ -153,6 +166,7 @@ export function RecordingBar() {
             <RecordIcon />
             Start recording
           </button>
+          {continuable ? <Continue last={continuable} onClick={cont} disabled={status === null || busy} /> : null}
           {idle ? null : (
             <>
               {state === 'paused' ? (
@@ -226,6 +240,38 @@ function focusNext(bar: HTMLElement, index: number) {
   const next = left[Math.min(Math.max(index, 0), left.length - 1)];
   const control = bar.querySelector<HTMLButtonElement>('[data-controls] button:not(:disabled)');
   (next ?? control ?? bar).focus();
+}
+
+/** Continue-recording FR-6: Continue beside Start, with the meeting's folder, recorded time and stop age. */
+function Continue({
+  last,
+  onClick,
+  disabled,
+}: {
+  last: NonNullable<RecorderStatus['continuable']>;
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  const facts = useId();
+  // `stopped_at` is Unix epoch ms; the 1 s status poll re-renders, so the age stays current.
+  const minutes = Math.max(0, Math.floor((Date.now() - last.stopped_at) / 60_000));
+  return (
+    <span className={styles.continue}>
+      <button
+        type="button"
+        aria-label="Continue last recording"
+        aria-describedby={facts}
+        onClick={onClick}
+        disabled={disabled}
+      >
+        <PlayIcon size={14} />
+        Continue
+      </button>
+      <span id={facts} className={styles.facts}>
+        <span className={styles.folder}>{last.name}</span> · {formatClock(last.recorded_s)} · stopped {minutes} min ago
+      </span>
+    </span>
+  );
 }
 
 /** One message line with its × at the end, named "Dismiss message" (continue-recording FR-1, FR-3). */
