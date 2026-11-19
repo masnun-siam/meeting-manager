@@ -16,6 +16,7 @@ pub mod ical;
 pub mod import;
 pub mod install;
 pub mod jobs;
+pub mod join;
 pub mod lock;
 pub mod logging;
 pub mod meta;

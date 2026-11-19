@@ -219,6 +219,22 @@ describe('Pill', () => {
     expect(api.indicatorDismiss).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['saved', saved],
+    ['error', errorNotice],
+  ])('a %s outcome goes when the notice is cleared in the main window, with no indicatorDismiss', async (_, notice) => {
+    await endWith(notice);
+    expect(screen.getByRole('status')).toHaveTextContent(notice.message);
+
+    recorderStatus.mockResolvedValue(statusReply());
+    await poll();
+
+    expect(screen.queryByText(notice.message)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Meeting' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
+    expect(api.indicatorDismiss).not.toHaveBeenCalled();
+  });
+
   it('marks the pill as the drag region and uses no inline style', async () => {
     recorderStatus.mockResolvedValue(statusReply({ state: 'recording' }));
     const { container } = setup();

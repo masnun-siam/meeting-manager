@@ -12,6 +12,7 @@ use crate::config::home;
 #[serde(rename_all = "lowercase")]
 pub enum Stage {
     Queued,
+    Joining,
     Extracting,
     Transcribing,
     Summarising,
@@ -25,6 +26,7 @@ impl Stage {
     pub fn name(self) -> &'static str {
         match self {
             Stage::Queued => "queued",
+            Stage::Joining => "joining",
             Stage::Extracting => "extracting",
             Stage::Transcribing => "transcribing",
             Stage::Summarising => "summarising",
@@ -199,6 +201,7 @@ mod tests {
     fn stage_serialises_lowercase() {
         let stages = [
             (Stage::Queued, "queued"),
+            (Stage::Joining, "joining"),
             (Stage::Extracting, "extracting"),
             (Stage::Transcribing, "transcribing"),
             (Stage::Summarising, "summarising"),

@@ -17,6 +17,16 @@ pub struct Meta {
     pub title: Option<String>,
     pub speakers: Vec<Speaker>,
     pub runs: Vec<Run>,
+    /// Parts joined onto the recording so far (continue-recording); 0 when absent.
+    #[serde(default)]
+    pub parts_joined: u32,
+    /// The join's journal: the part file names being joined, set only between the complete
+    /// temp file and the deletion of the parts, so a crashed join can be finished or redone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joining_parts: Vec<String>,
+    /// With `joining_parts`: the joined file's size, the proof that it replaced the recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joining_size: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -125,6 +135,9 @@ mod tests {
                 evidence: "introduced himself".into(),
             }],
             runs: vec![],
+            parts_joined: 0,
+            joining_parts: vec![],
+            joining_size: None,
         }
     }
 
@@ -145,6 +158,32 @@ mod tests {
         let loaded = Meta::load(&path).unwrap();
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(loaded, Some(sample()));
+    }
+
+    #[test]
+    fn a_meta_without_the_join_keys_loads_with_none_joined() {
+        let mut json = serde_json::to_value(sample()).unwrap();
+        let map = json.as_object_mut().unwrap();
+        assert!(map.remove("parts_joined").is_some());
+        assert!(!map.contains_key("joining_parts"), "absent when empty");
+        assert!(!map.contains_key("joining_size"), "absent when none");
+        let meta: Meta = serde_json::from_value(json).unwrap();
+        assert_eq!((meta.parts_joined, meta.joining_parts.len()), (0, 0));
+    }
+
+    #[test]
+    fn the_join_keys_round_trip() {
+        let dir = temp("meta-join-keys");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.meta.json");
+        let mut meta = sample();
+        meta.parts_joined = 3;
+        meta.joining_parts = vec!["recording-part-4.webm".into()];
+        meta.joining_size = Some(12_345);
+        meta.save(&path).unwrap();
+        let loaded = Meta::load(&path).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(loaded, Some(meta));
     }
 
     #[test]

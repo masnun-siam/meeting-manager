@@ -1,6 +1,6 @@
 # Rust crate: `meeting`
 
-Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (lib.rs, main.rs, calendar.rs, calendar_fetch.rs, pipeline.rs, plan.rs, jobs.rs, meta.rs, lock.rs, extract.rs, folders.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, context_block.rs, ical.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, spawn.rs, store.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
+Covers: crates/meeting/Cargo.toml, crates/meeting/src/ (lib.rs, main.rs, calendar.rs, calendar_fetch.rs, pipeline.rs, plan.rs, jobs.rs, join.rs, meta.rs, lock.rs, extract.rs, folders.rs, import.rs, deepgram.rs, transcript.rs, summarise.rs, summary_md.rs, context.rs, context_block.rs, ical.rs, vault.rs, notify.rs, logging.rs, test_support.rs, config.rs, secret.rs, spawn.rs, store.rs, install.rs, doctor.rs, native.rs), crates/meeting/tests/
 
 One crate (`meeting`, edition 2024) with a library (`src/lib.rs`, linked by the desktop app) and the `meeting` binary (`src/main.rs`). Dependencies: `clap`, `serde`, `serde_json`, `toml`, `anyhow`, `tracing`, `tracing-subscriber`, `ureq` (HTTP), `keyring` (Keychain), `rusqlite` (bundled SQLite with FTS5, for the desktop app's store). External programs: `ffmpeg`, `claude`, `osascript`. See [architecture.md](architecture.md) for how the crate fits with the extension.
 
@@ -33,6 +33,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `meta.rs` | `meta.json`: language, speakers, run history; `recorded_at` from folder name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
 | `lock.rs` | Per-recording PID lock file | `Lock::acquire`, `Lock::path_for`, `is_held` |
 | `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
+| `join.rs` | Continue recording: joins `recording-part-N.<ext>` onto the recording by stream copy, with a crash journal in `meta.json` | `join`, `parts_of`, `part_number` |
 | `folders.rs` | Archive and Trash for one recording folder, by recording path: the moves, the `meta.json` and vault note rewrite, job removal and, when given a store, the row update. Returns a `Refusal` (code and message) instead of failing. `archive_folder` / `trash_folder` apply the same rules and steps to the folder of a recording the app deleted, without the file (FR-10). The native host calls only `archive` / `trash`; the desktop app calls all four | `archive`, `trash`, `archive_folder`, `trash_folder`, `Refusal` |
 | `import.rs` | `meeting import`: validate, name and copy a source into a new meeting folder | `import` |
 | `deepgram.rs` | Deepgram HTTP client with retries | `Deepgram`, `Deepgram::transcribe` |
@@ -100,7 +101,7 @@ flowchart TD
 - Dependency injection by struct fields and fn pointers, not traits: `Pipeline.key: fn() -> Result<String>`, `Pipeline.calendar: fn() -> Result<Option<String>>`, `Pipeline.calendar_policy`, `Deepgram { base_url, retry_delays }`, `native::Host { open, key, ... }`, `doctor::Env`. Tests swap the fields.
 - Subprocesses (`ffmpeg`, `claude`, `osascript`, `ps`) use absolute paths from config or constants, because Chrome starts the host with a bare `PATH`.
 - Writes that readers may see use write-to-`.tmp`-then-rename (`write_atomic`, `extract` uses `.part`, `vault::write_note` uses a dotted `.tmp`). `config.rs` `save_to` writes directly.
-- Feature flags: `FEATURE_MEETING_CONTEXT` (`context_enabled`) and `FEATURE_DESKTOP_APP` (`desktop_enabled`) are read once at build time in `main.rs`, both through `flag_gate` (on only for `1`), and passed to the library as plain `bool` fields (`context`, `desktop`) or arguments (`install::install`'s `desktop`). The library reads no flag itself. With `desktop` off, `install` writes no `meeting_path`, `doctor` has no `meeting_path` check and the native host opens no store.
+- Feature flags: `FEATURE_MEETING_CONTEXT` (`context_enabled`), `FEATURE_DESKTOP_APP` (`desktop_enabled`) and `FEATURE_CONTINUE_RECORDING` (`continue_enabled`) are read once at build time in `main.rs`, all through `flag_gate` (on only for `1`), and passed to the library as plain `bool` fields (`context`, `desktop`, `continue_recording`) or arguments (`install::install`'s `desktop`). The library reads no flag itself. With `desktop` off, `install` writes no `meeting_path`, `doctor` has no `meeting_path` check and the native host opens no store.
 - Logging: `tracing` macros, file only, via `logging::init()`. See Gotchas.
 - Time: UTC strings built by hand (`jobs::format_utc`), no time crate.
 - Not removing a file that is absent: `remove` helpers treat `NotFound` as success (`pipeline.rs`, `lock.rs`).

@@ -1,6 +1,6 @@
 # Processing: recording to transcript and note
 
-Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/store.rs (as the pipeline uses it), crates/meeting/src/plan.rs, crates/meeting/src/extract.rs, crates/meeting/src/deepgram.rs, crates/meeting/src/transcript.rs, crates/meeting/src/summarise.rs, crates/meeting/src/context.rs, crates/meeting/src/context_block.rs, crates/meeting/src/summary_md.rs, crates/meeting/src/vault.rs, crates/meeting/src/meta.rs, crates/meeting/src/jobs.rs, crates/meeting/src/lock.rs, crates/meeting/src/notify.rs
+Covers: crates/meeting/src/pipeline.rs, crates/meeting/src/store.rs (as the pipeline uses it), crates/meeting/src/plan.rs, crates/meeting/src/extract.rs, crates/meeting/src/join.rs, crates/meeting/src/deepgram.rs, crates/meeting/src/transcript.rs, crates/meeting/src/summarise.rs, crates/meeting/src/context.rs, crates/meeting/src/context_block.rs, crates/meeting/src/summary_md.rs, crates/meeting/src/vault.rs, crates/meeting/src/meta.rs, crates/meeting/src/jobs.rs, crates/meeting/src/lock.rs, crates/meeting/src/notify.rs
 
 `meeting process <recording>` turns a recording (`webm`, `mp4`, `m4a`, `mov`, `mkv`, `mp3`, `wav` or `ogg`) into a transcript, a summary, and an Obsidian note. It runs in the foreground. It refuses any path that is not `<recordings_dir>/<name>/recording.<ext>` (or under `Archive/`) before writing a job, so a refused path leaves no Jobs-tab row; the refusal points to moving the file into its own folder or to `meeting import`. The native host starts it as a detached child ([native-messaging.md](native-messaging.md)); the recording itself comes from [recording.md](recording.md). Crate layout: [../tool.md](../tool.md).
 
@@ -35,7 +35,10 @@ sequenceDiagram
     opt desktop flag on
         P->>P: store start_run (row processing)
     end
-    P->>FS: plan::plan(mtimes)
+    opt continue flag on and parts or a join journal (joining)
+        P->>X: join recording + parts (stream copy)
+    end
+    P->>FS: plan::plan(mtimes; a join forces re-transcription)
     P->>FS: save meta + job
     opt plan.extract
         P->>X: webm to .audio.ogg
@@ -76,7 +79,8 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 | File | Written by | Lifetime |
 |---|---|---|
 | `lock` | `Lock::acquire` | Holds the PID; removed on drop. A lock from a dead PID is taken over. |
-| `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`). |
+| `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`), `parts_joined` (0 when absent), and `joining_parts` with `joining_size` only while a join is in flight. |
+| `recording-part-<N>.<ext>` | the extension or the desktop app (continue recording) | Only with the continue flag on: joined onto the recording and deleted, see [Joining parts](#joining-parts). |
 | `audio.ogg` | `extract::extract` (via `.part`, renamed on success) | Mono, 16 kHz, Opus 32 kbps. Deleted on success. |
 | `deepgram.json` | `write_atomic` | Raw Deepgram response. Deleted on success. |
 | `context.json` | `native::store_context` (host, on `process`) | Kept, only with the context flag on. The extension's meeting context after the PRD limits; reused by `retry`, moved with the folder on Archive/Trash. Read by `context::load` once per run with either flag on; a file that fails `context::check` is ignored and logged by rule name only. The desktop app writes it too, with `platform: "desktop"` and an optional `calendar_event`; see [Notes store](#notes-store-desktop-flag-on). |
@@ -126,6 +130,8 @@ With `FEATURE_DESKTOP_APP=1` in the tool build (`Pipeline.desktop`), every run a
 ```mermaid
 stateDiagram-v2
     [*] --> queued
+    queued --> joining: continue flag on and parts
+    joining --> extracting
     queued --> extracting: plan.extract
     queued --> transcribing: audio or raw fresh
     queued --> summarising: transcript fresh
@@ -135,6 +141,7 @@ stateDiagram-v2
     summarising --> writing
     writing --> done
     queued --> failed
+    joining --> failed
     extracting --> failed
     transcribing --> failed
     summarising --> failed
@@ -148,6 +155,30 @@ stateDiagram-v2
 - A re-run with the same `--job-id` updates that job in place and keeps its `started_at`; without one, a new `job_id` is made. Each run is one entry in `meta.json` `runs`, keyed by `job_id`.
 - Archive ([native-messaging.md](native-messaging.md#archive)) moves the folder and rewrites `meta.json`'s `recording` and the note's `recording`/`transcript` paths, so a later `meeting process` on the archived recording updates the same note.
 - stdout prints each stage name, then `done: <summary path>` (or `done: No speech detected`).
+
+## Joining parts
+
+Continue recording (PRD `docs/prds/continue-recording.md` FR-10, FR-11, FR-14). Only with `FEATURE_CONTINUE_RECORDING=1` in the tool build (`Pipeline.continue_recording`); off, parts are never looked for and every run is as above.
+
+- Under the lock, before the plan, `Pipeline::join_parts` lists `recording-part-<N>.<ext>` in the folder (`join::parts_of`; `join::part_number` is the one parser: N >= 2, digits, no leading zero, the recording's extension). Look-alikes (`recording-part-1.webm`, `recording-part-2.webm.part`, ...) are ignored. With no part and no journal nothing changes and no `joining` stage is shown.
+- With parts the job enters `joining`; `join::join` checks each part opens in ffmpeg, then joins `recording.<ext>` and the parts in ascending N with the concat demuxer by stream copy (`webm` as `-f webm`, `m4a` as `-f ipod`; other formats are refused) into `recording.<ext>.part`, through the list file `recording.<ext>.join.txt`.
+- A join forces re-transcription: `transcript.md` and `deepgram.json` are deleted as soon as the join returns, and the plan gets `retranscribe || joined > 0`, so a Retry without a language still transcribes the whole recording again; the same note and store row are updated, keeping edits as any rerun.
+- Refused, with nothing changed: a part in another format (both names in the error), a part that is not a regular file (a symlink), a part ffmpeg cannot open (the error ends with the part's name), ffmpeg missing. Each part is opened by ffmpeg before the concat, because the concat demuxer skips a part it cannot open and still exits 0 (`-xerror` is not used: it fails valid m4a joins on AAC's non-monotonic DTS). A part whose streams differ from the recording's (say audio only after audio and video) is not detected; both surfaces record one layout. The job fails at `joining`; running again tries again. Without a stored language or `--language`, a run with parts fails at `queued`.
+- Only the part count and seconds are logged.
+
+The journal (`meta.json` `joining_parts` and `joining_size`) makes a crash at any point safe:
+
+1. Write `recording.<ext>.part`, give it the recording's permission bits, fsync it.
+2. Save `joining_parts` (the part names) and `joining_size` (the temp file's size) to `meta.json`.
+3. Rename the temp file over `recording.<ext>`, fsync the folder.
+4. Remove the list file, delete the parts in ascending N.
+5. Clear the journal and add the count to `parts_joined`, in one save. A failure in recovery leaves the journal in place for the next run.
+
+| A run finds | Crash was | It does |
+|---|---|---|
+| `joining_parts` and the temp file, or a recording whose size is not `joining_size` | before the rename: the original is intact (the temp file may have been removed by something else) | removes the temp file, the list file and the journal, then joins afresh |
+| `joining_parts`, no temp file, the recording has `joining_size` | after the rename | deletes the listed parts (only names that are parts of this recording), clears the journal, counts them in `parts_joined`, and re-transcribes; nothing is joined twice |
+| a temp file and no journal | before step 2 | overwrites the temp file in a fresh join |
 
 ## Importing a recording
 
@@ -179,6 +210,7 @@ stateDiagram-v2
 
 | Stage | Failure | Behaviour |
 |---|---|---|
+| join | ffmpeg missing, a part it cannot open, a non-zero exit; a part in another format or not a regular file | `recording.<ext>`, every part and `parts_joined` unchanged; temp and list files removed. Error carries the last stderr line or names the files. |
 | extract | ffmpeg missing or non-zero exit | Error carries the last stderr line; `.part` removed, no partial audio. |
 | transcribe | HTTP 401/403 | Fails at once: key rejected, tells the user to run `meeting config set-key`. |
 | transcribe | HTTP 429 or 5xx | Retries after 5 s, 20 s, 60 s (4 attempts), then fails. |
