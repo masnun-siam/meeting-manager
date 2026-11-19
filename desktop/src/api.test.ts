@@ -95,7 +95,7 @@ describe('api', () => {
     const commands = new Set(cases.map(([name]) => name.split(' ')[0]));
     const exported = Object.keys(api).filter((name) => name !== 'recordingUrl');
     expect([...commands].sort()).toEqual(exported.sort());
-    expect(commands.size).toBe(34);
+    expect(commands.size).toBe(35);
   });
 
   it('builds the recording URL the player loads, without invoking anything', () => {
