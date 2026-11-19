@@ -537,6 +537,24 @@ describe('Continue (continue-recording FR-6, FR-8)', () => {
     expect(buttons.indexOf(start())).toBeLessThan(buttons.indexOf(cont()));
   });
 
+  it('the poll keeps "N min ago" current', async () => {
+    setup();
+    await waitFor(() => expect(cont()).toHaveAccessibleDescription(/stopped 5 min ago$/));
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(cont()).toHaveAccessibleDescription(/stopped 6 min ago$/);
+  });
+
+  it('Continue from the keyboard moves focus to Pause once recording', async () => {
+    const user = setup();
+    await waitFor(() => expect(cont()).toBeEnabled());
+
+    holdPolls();
+    cont().focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pause' })).toHaveFocus());
+  });
+
   it('just stopped reads "stopped 0 min ago"', async () => {
     recorderStatus.mockResolvedValue(statusReply({ continuable: last(0) }));
     setup();

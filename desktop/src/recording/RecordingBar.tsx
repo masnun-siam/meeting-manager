@@ -41,6 +41,8 @@ export function RecordingBar() {
   const [errorHidden, setErrorHidden] = useState(false);
   const bar = useRef<HTMLElement>(null);
   const focusAfter = useRef<PendingFocus | null>(null);
+  // Continue leaves the DOM once recording; focus it held moves to the first enabled control (Pause).
+  const focusControl = useRef(false);
 
   const state = status?.state ?? 'idle';
   const idle = state === 'idle';
@@ -67,6 +69,12 @@ export function RecordingBar() {
     if (!pending || pending.button.isConnected || !bar.current) return;
     focusAfter.current = null;
     focusNext(bar.current, pending.index);
+  });
+
+  useLayoutEffect(() => {
+    if (!focusControl.current || idle || !bar.current) return;
+    focusControl.current = false;
+    firstControl(bar.current)?.focus();
   });
 
   async function run<T>(call: () => Promise<Reply<T>>, onOk: (reply: T) => void): Promise<boolean> {
@@ -99,8 +107,9 @@ export function RecordingBar() {
       },
     );
   // Like Start; the earlier part's language is the session's (D9), so the select is not read.
-  const cont = () =>
+  const cont = (button: HTMLButtonElement) =>
     run(recorderContinue, () => {
+      focusControl.current = document.activeElement === button;
       setState('recording');
       refresh();
     });
@@ -238,9 +247,11 @@ const dismissButtons = (bar: HTMLElement) =>
 function focusNext(bar: HTMLElement, index: number) {
   const left = dismissButtons(bar);
   const next = left[Math.min(Math.max(index, 0), left.length - 1)];
-  const control = bar.querySelector<HTMLButtonElement>('[data-controls] button:not(:disabled)');
-  (next ?? control ?? bar).focus();
+  (next ?? firstControl(bar) ?? bar).focus();
 }
+
+const firstControl = (bar: HTMLElement) =>
+  bar.querySelector<HTMLButtonElement>('[data-controls] button:not(:disabled)');
 
 /** Continue-recording FR-6: Continue beside Start, with the meeting's folder, recorded time and stop age. */
 function Continue({
@@ -249,7 +260,7 @@ function Continue({
   disabled,
 }: {
   last: NonNullable<RecorderStatus['continuable']>;
-  onClick: () => void;
+  onClick: (button: HTMLButtonElement) => void;
   disabled: boolean;
 }) {
   const facts = useId();
@@ -261,7 +272,7 @@ function Continue({
         type="button"
         aria-label="Continue last recording"
         aria-describedby={facts}
-        onClick={onClick}
+        onClick={(event) => onClick(event.currentTarget)}
         disabled={disabled}
       >
         <PlayIcon size={14} />
