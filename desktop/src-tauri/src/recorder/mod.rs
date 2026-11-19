@@ -798,7 +798,14 @@ impl Recorder {
             // Never stuck in `saving`: the WAV, if still there, can be retried.
             let (notice, last) = saved.unwrap_or_else(|_| {
                 let notice = Notice::retry("Saving failed unexpectedly; retry", &stopped.folder);
-                (notice, None)
+                // A new recording is the last one whatever the outcome, as Start cleared it; a
+                // part leaves the meeting's stored value as it was.
+                let last = part.is_none().then(|| Saved {
+                    folder: stopped.folder.clone(),
+                    recorded_s: stopped.frames / u64::from(SAMPLE_RATE),
+                    parts: 1,
+                });
+                (notice, last)
             });
             // Before `idle`, so a poll never sees `idle` without it.
             if let Some(last) = last {
@@ -2834,6 +2841,42 @@ pub(crate) mod tests {
         // The part's copy left in the old folder was the same file.
         assert!(!folder.join(handoff::part_wav(2)).exists());
         assert!(!folder.join(handoff::part_m4a(2)).exists());
+    }
+
+    fn broken_minute(_: u64) -> anyhow::Result<String> {
+        anyhow::bail!("/bin/date failed")
+    }
+
+    #[test]
+    fn continue_keeps_the_link_when_a_moved_part_cannot_become_a_new_meeting() {
+        let rig = rig_from(
+            "continue-moved-fails",
+            Deps {
+                local_minute: broken_minute,
+                ..deps(ok_capture(), 3 * 3600, wav::open, || true)
+            },
+        );
+        let folder = earlier(&rig, 42, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(12 * SECOND);
+        let archive = rig.home.join("Recordings").join("Archive");
+        fs::create_dir_all(&archive).unwrap();
+        fs::rename(&folder, archive.join(EARLIER)).unwrap();
+        let status = rig.stop(Reason::User);
+        let notice = status.notice.unwrap();
+        assert_eq!(notice.kind, Kind::Error);
+        assert!(
+            notice.message.starts_with(&format!(
+                "Could not add to {EARLIER}: it was moved, and saving it as a new meeting failed: "
+            )),
+            "{}",
+            notice.message
+        );
+        assert_eq!(status.state, "idle");
+        // Nothing recorded is lost: the link stays for launch recovery.
+        assert_eq!(wav::repair(&link(&rig, 2)).unwrap(), 12 * SECOND as u64);
+        assert!(spawns_under(&rig.home).is_empty());
+        assert_eq!(stored_last(&rig).recorded_s, 42);
     }
 
     #[test]
