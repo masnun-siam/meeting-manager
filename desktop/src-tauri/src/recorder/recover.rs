@@ -490,6 +490,13 @@ mod tests {
         samples: crate::capture::Samples,
         events: crate::capture::Events,
     ) -> anyhow::Result<crate::capture::Stream> {
+        // A panic here makes the start fail, which the test sees.
+        RACING.with(|r| {
+            let recorder = r.borrow().clone().expect("set by the test");
+            assert_eq!(recorder.status().state, "idle");
+            let second = recorder.start(Language::En, || Ok(None));
+            assert_eq!(second.unwrap_err().code, "already_recording");
+        });
         recover_racing();
         (ok_capture().start)(samples, events)
     }
