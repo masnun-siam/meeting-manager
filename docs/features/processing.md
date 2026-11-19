@@ -28,7 +28,10 @@ sequenceDiagram
     participant D as Deepgram
     participant C as claude
     participant V as Vault
-    M->>P: recording, retranscribe, language, job_id
+    M->>P: recording, retranscribe, language, job_id, continuing
+    opt --continue (continue flag on)
+        P->>FS: lock::stop_holder (stop the earlier run, reuse its job id)
+    end
     P->>FS: write job (queued)
     P->>FS: Lock::acquire(lock)
     P->>FS: load meta.json, context.json (either flag on)
@@ -78,7 +81,7 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 
 | File | Written by | Lifetime |
 |---|---|---|
-| `lock` | `Lock::acquire` | Holds the PID; removed on drop. A lock from a dead PID is taken over. |
+| `lock` | `Lock::acquire` | Holds the PID; removed on drop. A lock from a dead PID is taken over; `--continue` stops a live holder first, see [Continuing](#continuing). |
 | `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`), `parts_joined` (0 when absent), and `joining_parts` with `joining_size` only while a join is in flight. |
 | `recording-part-<N>.<ext>` | the extension or the desktop app (continue recording) | Only with the continue flag on: joined onto the recording and deleted, see [Joining parts](#joining-parts). |
 | `audio.ogg` | `extract::extract` (via `.part`, renamed on success) | Mono, 16 kHz, Opus 32 kbps. Deleted on success. |
@@ -180,6 +183,25 @@ The journal (`meta.json` `joining_parts` and `joining_size`) makes a crash at an
 | `joining_parts`, no temp file, the recording has `joining_size` | after the rename | deletes the listed parts (only names that are parts of this recording), clears the journal, counts them in `parts_joined`, and re-transcribes; nothing is joined twice |
 | a temp file and no journal | before step 2 | overwrites the temp file in a fresh join |
 
+## Continuing
+
+`meeting process <recording> --continue` (continue flag on; built without it the flag is hidden and refused with `unexpected argument '--continue'`) is how a continuation starts its run at once instead of waiting for, or failing on, the earlier one. `spawn::continue_detached` starts it detached for the native host and the desktop app (`<exe> process <recording> --continue [--language bn|en] [--job-id <id>]`, own process group, null stdio).
+
+Before the job is written, `lock::stop_holder` reads the PID in the folder's `lock`:
+
+| Lock holds | What happens |
+|---|---|
+| nothing, garbage, a dead PID, a zombie, or this process | Nothing; `Lock::acquire` handles it as for any run. |
+| a live process whose `ps` command line is not `meeting process <this recording>` (a reused PID, another recording, `meeting import`) | Nothing is signalled; the lock is removed as stale (log: `lock was stale`). |
+| a live `meeting process` run of this recording | SIGTERM (`/bin/kill`) to its process group when it leads one (`pgid == pid`, as every spawned run does, so ffmpeg and `claude` end too), else to the PID alone (a run started from a shell shares the shell's group). After `stop_grace` (10 s) SIGKILL, then one more wait. Once it is gone the lock is removed and the run takes it as usual (log: `stopping earlier run: TERM`/`KILL`, `stopped earlier run`). |
+| a holder still alive after SIGKILL | The run fails at `queued`, no job written: `cannot stop the earlier run (process <pid>); stop it and run again`. The lock is left. |
+
+The identity check (`is_process_run`): ` process ` right after a word ending in `meeting`, then an absolute path, cut at the first ` --`, that canonicalises to the recording. A killed run never removes its own lock or writes again; the new run owns the job and the store row.
+
+Without `--job-id`, `--continue` reuses the id of the newest job whose `recording` is this recording (`JobStore::list`), so the Jobs list keeps one row per meeting and `started_at` is kept; with no earlier job a new id is made.
+
+A run killed while its starter lives on (the host, the desktop app) stays a zombie until reaped, so `stop_holder` reads `ps -o stat=` and counts a `Z` process as ended.
+
 ## Importing a recording
 
 `meeting import <file> --language bn|en [--date "YYYY-MM-DD HH:MM"]` handles a recording made outside Chrome, such as a phone voice memo or a desktop call. It checks the file, copies it to `<recordings_dir>/meeting-<date>_<time>/recording.<ext>`, prints `imported → <path>`, then runs the pipeline above with the same stage lines, job, notification and exit code as `meeting process`.
@@ -219,7 +241,7 @@ The journal (`meta.json` `joining_parts` and `joining_size`) makes a crash at an
 | summarise | No result in 15 minutes | Claude is killed; fails with a timeout message. |
 | summarise | Calendar: Keychain read error, fetch failure (offline, timeout, non-2xx, over 50 MiB, not iCalendar, TLS, redirect to `http` or more than 3), parse error | Never fails the job: logged as `calendar <kind>` (`keychain`, the `FetchError` kind such as `calendar too large`, or `not iCalendar`), the note gets `calendar: "fetch_failed"` and the summary runs without calendar data. A match logs `calendar matched`, no match `calendar no_match`. |
 | write | Vault directory missing | Fails, tells the user to run `meeting install`. |
-| any | Another run holds the lock | Fails with `already processing`; the other run's lock and store row are left alone. |
+| any | Another run holds the lock | Fails with `already processing`; the other run's lock and store row are left alone. With `--continue` the other run is stopped first instead ([Continuing](#continuing)). |
 | any | Notes store cannot be opened or written (desktop flag on) | Never fails the job: logged as `store <operation> failed: <kind>`; the note is written from Claude's output. |
 
 - On failure the job becomes `failed` (and, with the desktop flag on, the store row), intermediates are kept, and `main.rs` sends a notification with the stage and the first 100 chars of the reason.

@@ -10,7 +10,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 
 | Command | Does | Details |
 |---|---|---|
-| `meeting process <recording> [--retranscribe] [--language bn\|en] [--job-id <id>]` | Builds a `Pipeline`, runs it in the foreground, sends a macOS notification at the end. `--job-id` is hidden: the native host passes it. | [features/processing.md](features/processing.md) |
+| `meeting process <recording> [--retranscribe] [--language bn\|en] [--job-id <id>] [--continue]` | Builds a `Pipeline`, runs it in the foreground, sends a macOS notification at the end. `--job-id` is hidden: the native host passes it. `--continue` (continue flag only; hidden and refused without it) stops an earlier run of the meeting and reuses its job id. | [features/processing.md](features/processing.md) |
 | `meeting install` | Registers the native host, writes config. | [features/setup.md](features/setup.md) |
 | `meeting config set-key` | Stores the Deepgram key in the Keychain (hidden prompt). | [features/setup.md](features/setup.md) |
 | `meeting config set-calendar` | Only with `FEATURE_MEETING_CONTEXT=1`: checks, fetches and parses the secret iCal address (hidden prompt), then stores it in the Keychain; empty answer removes it. | [features/setup.md](features/setup.md) |
@@ -31,7 +31,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `plan.rs` | Pure function: which stages to skip, from file mtimes | `plan`, `Plan`, `Files` |
 | `jobs.rs` | Job file store, `Stage` enum, atomic write, UTC time and ids | `Job`, `JobStore`, `Stage`, `write_atomic`, `now_utc`, `new_job_id` |
 | `meta.rs` | `meta.json`: language, speakers, run history; `recorded_at` from folder name | `Meta`, `Run`, `Speaker`, `recorded_at_for` |
-| `lock.rs` | Per-recording PID lock file | `Lock::acquire`, `Lock::path_for`, `is_held` |
+| `lock.rs` | Per-recording PID lock file; for `--continue`, stops the run holding it after checking its command line (`/bin/ps`, `/bin/kill`) | `Lock::acquire`, `Lock::path_for`, `is_held`, `stop_holder` |
 | `extract.rs` | ffmpeg: video to mono 16 kHz Opus | `extract` |
 | `join.rs` | Continue recording: joins `recording-part-N.<ext>` onto the recording by stream copy, with a crash journal in `meta.json` | `join`, `parts_of`, `part_number` |
 | `folders.rs` | Archive and Trash for one recording folder, by recording path: the moves, the `meta.json` and vault note rewrite, job removal and, when given a store, the row update. Returns a `Refusal` (code and message) instead of failing. `archive_folder` / `trash_folder` apply the same rules and steps to the folder of a recording the app deleted, without the file (FR-10). The native host calls only `archive` / `trash`; the desktop app calls all four | `archive`, `trash`, `archive_folder`, `trash_folder`, `Refusal` |
@@ -46,7 +46,7 @@ Defined in `crates/meeting/src/main.rs` (`Cli`, `Command`, `run`).
 | `logging.rs` | File logger init | `init` |
 | `config.rs` | `config.toml` load/save, `home()`, `check_recording` (the foldered-recording path rule), `check_recording_folder` (the same rule for an absent file in an existing folder), `RECORDING_EXTENSIONS` | `Config`, `home`, `check_recording`, `check_recording_folder`, `RECORDING_EXTENSIONS` |
 | `secret.rs` | Keychain access for the Deepgram key and the calendar address; `meeting config set-calendar` logic | `deepgram_key`, `set_key`, `calendar_address`, `set_calendar`, `read_hidden` |
-| `spawn.rs` | Start `meeting process` detached (own process group, null stdio) from an absolute path, and the rule for a usable tool path (absolute, executable regular file). Used by `native` and the `meeting_path` doctor check; the desktop app will call both | `process_detached`, `check_tool` |
+| `spawn.rs` | Start `meeting process` detached (own process group, null stdio) from an absolute path, and the rule for a usable tool path (absolute, executable regular file). Used by `native` and the `meeting_path` doctor check; the desktop app will call both. `continue_detached` has the same shape and adds `--continue` | `process_detached`, `continue_detached`, `check_tool` |
 | `store.rs` | The desktop app's notes database (`notes.sqlite`: SQLite, WAL, FTS5 search): open and migrate by `PRAGMA user_version`, one row per recording, the rerun merge that keeps edits, the edit rules, search, attendees, the "recording deleted" mark and the "used before" names. Called by `pipeline` and by `folders` (through `native`) in a desktop build; see [Notes store](#notes-store) | `Store` (incl. `set_recording_deleted`, `deleted_paths`, `without_attendees`, `fill_attendees`, `used_before`), `Row`, `ListRow`, `RunStart`, `RunResult`, `Edit`, `EditError`, `OpenError`, `ATTENDEES_FILLED`, `error_kind`, `shown_name`, `default_path` |
 | `install.rs` | `meeting install` | `install` |
 | `doctor.rs` | `meeting doctor` checks (incl. the gated `calendar` and `meeting_path` checks), manifest path | `checks`, `Env`, `manifest_path` |
@@ -99,7 +99,7 @@ flowchart TD
 
 - Errors: `anyhow::Result` everywhere, no custom error types, except `calendar_fetch::FetchError` and `ical::Error` (fixed kinds with no address or input text, so neither reaches the log) and `store::OpenError` / `store::EditError` (states a caller must tell apart). Context via `.with_context(|| format!("cannot ... {}", path.display()))`. Messages that the user can act on name the fix (`run \`meeting doctor\``, `run \`meeting config set-key\``). `main` logs the error with `{e:#}` and returns it.
 - Dependency injection by struct fields and fn pointers, not traits: `Pipeline.key: fn() -> Result<String>`, `Pipeline.calendar: fn() -> Result<Option<String>>`, `Pipeline.calendar_policy`, `Deepgram { base_url, retry_delays }`, `native::Host { open, key, ... }`, `doctor::Env`. Tests swap the fields.
-- Subprocesses (`ffmpeg`, `claude`, `osascript`, `ps`) use absolute paths from config or constants, because Chrome starts the host with a bare `PATH`.
+- Subprocesses (`ffmpeg`, `claude`, `osascript`, `ps`, `kill`) use absolute paths from config or constants, because Chrome starts the host with a bare `PATH`.
 - Writes that readers may see use write-to-`.tmp`-then-rename (`write_atomic`, `extract` uses `.part`, `vault::write_note` uses a dotted `.tmp`). `config.rs` `save_to` writes directly.
 - Feature flags: `FEATURE_MEETING_CONTEXT` (`context_enabled`), `FEATURE_DESKTOP_APP` (`desktop_enabled`) and `FEATURE_CONTINUE_RECORDING` (`continue_enabled`) are read once at build time in `main.rs`, all through `flag_gate` (on only for `1`), and passed to the library as plain `bool` fields (`context`, `desktop`, `continue_recording`) or arguments (`install::install`'s `desktop`). The library reads no flag itself. With `desktop` off, `install` writes no `meeting_path`, `doctor` has no `meeting_path` check and the native host opens no store.
 - Logging: `tracing` macros, file only, via `logging::init()`. See Gotchas.

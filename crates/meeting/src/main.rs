@@ -35,6 +35,9 @@ enum Command {
         language: Option<Language>,
         #[arg(long, hide = true)]
         job_id: Option<String>,
+        /// Stop an earlier run of this meeting, join its new parts and process again.
+        #[arg(long = "continue")]
+        continue_run: bool,
     },
     /// Copy a recording made elsewhere into its own meeting folder and process it.
     Import {
@@ -88,20 +91,24 @@ pub fn continue_enabled() -> bool {
     flag_gate(option_env!("FEATURE_CONTINUE_RECORDING"))
 }
 
-/// The CLI for this build. Clap cannot remove a derived subcommand, so with the gate off
-/// `set-calendar` is hidden here and refused in `run`.
-fn cli(context: bool) -> clap::Command {
-    let cli = Cli::command();
-    if context {
-        return cli;
+/// The CLI for this build. Clap cannot remove a derived subcommand or argument, so with
+/// its gate off `set-calendar` (context) or `process --continue` (continue) is hidden here
+/// and refused in `run`.
+fn cli(context: bool, continuing: bool) -> clap::Command {
+    let mut cli = Cli::command();
+    if !context {
+        cli = cli.mut_subcommand("config", |c| {
+            c.mut_subcommand("set-calendar", |s| s.hide(true))
+        });
     }
-    cli.mut_subcommand("config", |c| {
-        c.mut_subcommand("set-calendar", |s| s.hide(true))
-    })
+    if !continuing {
+        cli = cli.mut_subcommand("process", |s| s.mut_arg("continue_run", |a| a.hide(true)));
+    }
+    cli
 }
 
-fn parse(context: bool, args: Vec<OsString>) -> Result<Cli, clap::Error> {
-    cli(context)
+fn parse(context: bool, continuing: bool, args: Vec<OsString>) -> Result<Cli, clap::Error> {
+    cli(context, continuing)
         .try_get_matches_from(args)
         .and_then(|m| Cli::from_arg_matches(&m))
 }
@@ -114,13 +121,14 @@ fn fetch_calendar(address: &str) -> Result<String, FetchError> {
 fn main() -> anyhow::Result<()> {
     logging::init();
     let context = context_enabled();
-    let cli = parse(context, chrome_args(std::env::args_os())).unwrap_or_else(|e| {
+    let continuing = continue_enabled();
+    let cli = parse(context, continuing, chrome_args(std::env::args_os())).unwrap_or_else(|e| {
         if e.use_stderr() {
             tracing::error!("{}", e.kind());
         }
         e.exit()
     });
-    let result = run(cli.command, context);
+    let result = run(cli.command, context, continuing);
     if let Err(e) = &result {
         tracing::error!("{e:#}");
     }
@@ -153,7 +161,7 @@ fn install_next(has_key: bool, context: bool) -> String {
     next
 }
 
-fn run(command: Command, context: bool) -> anyhow::Result<()> {
+fn run(command: Command, context: bool, continuing: bool) -> anyhow::Result<()> {
     if let Command::Config {
         command: ConfigCommand::SetCalendar,
     } = command
@@ -208,8 +216,12 @@ fn run(command: Command, context: bool) -> anyhow::Result<()> {
         retranscribe,
         language,
         job_id,
+        continue_run,
     } = &command
     {
+        if *continue_run && !continuing {
+            bail!("unexpected argument '--continue'");
+        }
         tracing::info!("meeting process");
         return process(
             Config::load()?,
@@ -217,6 +229,7 @@ fn run(command: Command, context: bool) -> anyhow::Result<()> {
             *retranscribe,
             *language,
             job_id.clone(),
+            *continue_run,
         );
     }
     if let Command::Import {
@@ -234,7 +247,7 @@ fn run(command: Command, context: bool) -> anyhow::Result<()> {
             import::local_minute,
         )?;
         println!("imported → {}", path.display());
-        return process(config, &path, false, Some(*language), None);
+        return process(config, &path, false, Some(*language), None, false);
     }
     if let Command::Install = command {
         tracing::info!("meeting install");
@@ -299,6 +312,7 @@ fn process(
     retranscribe: bool,
     language: Option<Language>,
     job_id: Option<String>,
+    continuing: bool,
 ) -> anyhow::Result<()> {
     let pipeline = Pipeline {
         config,
@@ -312,10 +326,18 @@ fn process(
         desktop: desktop_enabled(),
         store_path: store::default_path(&config::home()?),
         continue_recording: continue_enabled(),
+        stop_grace: Duration::from_secs(10),
         calendar: secret::calendar_address,
         calendar_policy: Policy::REAL,
     };
-    match pipeline.run(recording, retranscribe, language, job_id, &mut io::stdout()) {
+    match pipeline.run(
+        recording,
+        retranscribe,
+        language,
+        job_id,
+        continuing,
+        &mut io::stdout(),
+    ) {
         Ending::Done { title } => {
             notify::notify(&notify::message(&Outcome::Done { title: &title }));
             Ok(())
@@ -365,7 +387,7 @@ mod tests {
     }
 
     fn config_help(context: bool) -> String {
-        cli(context)
+        cli(context, false)
             .find_subcommand_mut("config")
             .unwrap()
             .render_long_help()
@@ -378,21 +400,21 @@ mod tests {
         let off = config_help(false);
         assert!(off.contains("set-key"));
         assert!(!off.contains("set-calendar"), "{off}");
-        cli(false).debug_assert();
+        cli(false, false).debug_assert();
     }
 
     #[test]
     fn set_calendar_is_refused_with_the_gate_off() {
         let args = ["meeting", "config", "set-calendar"].map(OsString::from);
-        let on = parse(true, args.to_vec()).unwrap();
+        let on = parse(true, false, args.to_vec()).unwrap();
         assert!(matches!(
             on.command,
             Command::Config {
                 command: ConfigCommand::SetCalendar
             }
         ));
-        let off = parse(false, args.to_vec()).unwrap();
-        let e = run(off.command, false).unwrap_err();
+        let off = parse(false, false, args.to_vec()).unwrap();
+        let e = run(off.command, false, false).unwrap_err();
         assert_eq!(e.to_string(), "unrecognized subcommand 'set-calendar'");
     }
 
@@ -429,6 +451,7 @@ mod tests {
             language,
             job_id,
             retranscribe,
+            continue_run,
         } = cli.command
         else {
             panic!("expected process");
@@ -437,6 +460,59 @@ mod tests {
         assert_eq!(language, Some(Language::Bn));
         assert_eq!(job_id.as_deref(), Some("x"));
         assert!(!retranscribe);
+        assert!(!continue_run);
+    }
+
+    #[test]
+    fn continue_is_accepted_with_language_and_job_id() {
+        let args = [
+            "meeting",
+            "process",
+            "/r/m/recording.m4a",
+            "--continue",
+            "--language",
+            "en",
+            "--retranscribe",
+            "--job-id",
+            "j-1",
+        ]
+        .map(OsString::from);
+        let cli = parse(false, true, args.to_vec()).unwrap();
+        let Command::Process {
+            language,
+            job_id,
+            retranscribe,
+            continue_run,
+            ..
+        } = cli.command
+        else {
+            panic!("expected process");
+        };
+        assert_eq!(language, Some(Language::En));
+        assert_eq!(job_id.as_deref(), Some("j-1"));
+        assert!(retranscribe && continue_run);
+    }
+
+    fn process_help(continuing: bool) -> String {
+        cli(false, continuing)
+            .find_subcommand_mut("process")
+            .unwrap()
+            .render_long_help()
+            .to_string()
+    }
+
+    #[test]
+    fn continue_is_hidden_from_help_and_refused_with_the_gate_off() {
+        assert!(process_help(true).contains("--continue"));
+        let off = process_help(false);
+        assert!(off.contains("--retranscribe"));
+        assert!(!off.contains("--continue"), "{off}");
+        assert!(!off.contains("--job-id"), "{off}");
+        cli(false, false).debug_assert();
+        let args = ["meeting", "process", "/r/m/recording.m4a", "--continue"].map(OsString::from);
+        let off = parse(false, false, args.to_vec()).unwrap();
+        let e = run(off.command, false, false).unwrap_err();
+        assert_eq!(e.to_string(), "unexpected argument '--continue'");
     }
 
     #[test]
