@@ -8,7 +8,7 @@ The user presses Start in the popup. The extension records the active tab and th
 
 | Part | File | Responsibility |
 |---|---|---|
-| Record tab | `popup/RecordTab.tsx` | Language select, Start / Pause / Resume / Stop & save, timer, messages, context line (flag on). Sends `PopupCommand`. |
+| Record tab | `popup/RecordTab.tsx` | Large `H:MM:SS` timer (dimmed `0:00:00` when idle), round "Start recording" button, then REC (pulsing dot, static under Reduce motion) or Paused label with Pause / Resume and Stop & save, the "বাংলা \| English" radio group (disabled unless idle), "Saving…", messages, context line (flag on). Sends `PopupCommand`. |
 | Status hook | `popup/useRecorderStatus.ts` | Live `RecorderStatus` from `chrome.storage.session`. |
 | Context hook | `popup/useMeetingContext.ts` | Live `meeting_context` from `chrome.storage.session`, flag on only. |
 | Control | `background/recordingControl.ts` | Owns state, badge, offscreen lifecycle, stop and save orchestration. |

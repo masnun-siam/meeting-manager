@@ -142,7 +142,7 @@ Full guide, including building the app from source, updating and uninstalling: *
 
 ### From Chrome
 
-1. On the meeting tab, open the extension popup, pick **Bengali** or **English** and press **Start**. The first time, a page asks for mic permission; grant it and press Start again.
+1. On the meeting tab, open the extension popup, pick **বাংলা** (Bengali) or **English** and press the round red **Start recording** button. The first time, a page asks for mic permission; grant it and press Start recording again.
 2. **Pause** and **Resume** as needed, then **Stop & save**. Recording also stops at 3 hours or when the tab closes.
 3. Processing runs in the background. The **Jobs** tab shows progress and opens the summary or folder; **Retry** reruns a failed job, **Archive** moves it to `~/Downloads/Meetings/Archive/`, **Trash** (click twice, macOS 15+) moves it to the Trash and keeps the vault note.
 
