@@ -67,6 +67,17 @@ pub fn is_held(path: &Path) -> bool {
 /// dead or held by any other process is left to `Lock::acquire`'s stale path, or removed as
 /// stale, and nothing is signalled.
 pub fn stop_holder(lock: &Path, recording: &Path, grace: Duration) -> anyhow::Result<()> {
+    stop_with(lock, recording, grace, send)
+}
+
+/// `stop_holder` with the signal sender injected, so a test can model a holder that
+/// survives SIGKILL.
+fn stop_with(
+    lock: &Path,
+    recording: &Path,
+    grace: Duration,
+    send: fn(&str, Target),
+) -> anyhow::Result<()> {
     let Some(pid) = fs::read_to_string(lock)
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok())
@@ -346,6 +357,24 @@ mod tests {
         assert!(!alive(pid));
         assert!(ended(child, GRACE), "the group's child survived");
         assert!(!lock.exists());
+    }
+
+    #[test]
+    fn continue_fails_and_keeps_the_lock_when_the_run_cannot_be_stopped() {
+        let (dir, rec) = meeting_stub("continue-stuck", SLEEPS);
+        let (pid, child) = start(&dir, &rec, true);
+        let lock = dir.join("m/lock");
+        fs::write(&lock, pid.to_string()).unwrap();
+        let error = stop_with(&lock, &rec, GRACE, |_, _| {}).unwrap_err();
+        let survived = alive(pid);
+        send("KILL", Target::Group(pid));
+        assert!(ended(child, GRACE));
+        assert_eq!(
+            error.to_string(),
+            format!("cannot stop the earlier run (process {pid}); stop it and run again")
+        );
+        assert!(survived);
+        assert_eq!(fs::read_to_string(&lock).unwrap(), pid.to_string());
     }
 
     #[test]
