@@ -58,6 +58,13 @@ export interface ProcessRequest {
   context?: ContextPayload;
 }
 
+/** Hands a saved `recording-part-N.<ext>` to the tool, which joins it onto its meeting. */
+export interface ProcessPartRequest {
+  type: 'process_part';
+  path: string;
+  language: Language;
+}
+
 export interface RetryRequest {
   type: 'retry';
   job_id: string;
@@ -90,6 +97,7 @@ export interface HealthRequest {
 
 export type NativeRequest =
   | ProcessRequest
+  | ProcessPartRequest
   | RetryRequest
   | ListJobsRequest
   | OpenRequest
@@ -147,6 +155,7 @@ export interface HealthSuccess {
 
 interface NativeSuccessByType {
   process: ProcessSuccess;
+  process_part: ProcessSuccess;
   retry: RetrySuccess;
   list_jobs: ListJobsSuccess;
   open: OpenSuccess;

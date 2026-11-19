@@ -20,6 +20,10 @@ describe('sendNative', () => {
       { ok: true, job_id: 'j1' },
     ],
     [
+      { type: 'process_part', path: '/tmp/m/recording-part-2.webm', language: 'bn' },
+      { ok: true, job_id: 'j1' },
+    ],
+    [
       { type: 'retry', job_id: 'j1' },
       { ok: true, job_id: 'j2' },
     ],

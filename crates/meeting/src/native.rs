@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::Language;
 use crate::calendar_fetch::FetchError;
-use crate::config::{Config, check_recording};
+use crate::config::{Config, check_part, check_recording};
 use crate::context;
 use crate::doctor;
 use crate::folders::{self, Refusal};
@@ -47,6 +47,10 @@ enum Request {
     Trash {
         job_id: String,
     },
+    ProcessPart {
+        path: PathBuf,
+        language: Language,
+    },
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -70,6 +74,8 @@ pub struct Host {
     pub context: bool,
     /// `FEATURE_DESKTOP_APP`: off, no store is touched.
     pub desktop: bool,
+    /// `FEATURE_CONTINUE_RECORDING`: off, `process_part` is `bad_request`.
+    pub continue_recording: bool,
     pub calendar: fn() -> anyhow::Result<Option<String>>,
     pub fetch: fn(&str) -> Result<String, FetchError>,
 }
@@ -206,6 +212,13 @@ fn dispatch(host: &Host, origin: Option<&str>, bytes: &[u8]) -> anyhow::Result<V
         Request::Retry { job_id } => retry(host, &job_id),
         Request::Archive { job_id } => archive(host, config_of(host), &job_id),
         Request::Trash { job_id } => trash(host, config_of(host), &job_id),
+        // Built without the flag, the request is as unknown as any other type.
+        Request::ProcessPart { .. } if !host.continue_recording => {
+            Ok(error("bad_request", "unknown request type process_part"))
+        }
+        Request::ProcessPart { path, language } => {
+            process_part(host, config_of(host), &path, language)
+        }
         Request::Health => Ok(json!({"ok": true, "checks": doctor::checks(&doctor::Env {
             config: &host.config,
             key: host.key,
@@ -331,8 +344,41 @@ fn start_checked(
     if let (true, Some(raw)) = (host.context, context) {
         store_context(&recording, raw);
     }
+    queue(host, new_job(recording), language, spawn::process_detached)
+}
+
+/// Hands a saved part to `meeting process --continue`. A held lock is no refusal: the
+/// continuation stops that run. The meeting's latest job is reused, so it stays one job.
+fn process_part(
+    host: &Host,
+    config: &Config,
+    path: &Path,
+    language: Language,
+) -> anyhow::Result<Value> {
+    let recording = match check_part(&config.recordings_dir, path) {
+        Ok(recording) => recording,
+        Err(reason) => return Ok(error("invalid_path", reason)),
+    };
+    let latest = host
+        .jobs
+        .list(usize::MAX)?
+        .into_iter()
+        .find(|job| job.recording == recording);
+    let job = match latest {
+        Some(mut job) => {
+            job.stage = Stage::Queued;
+            job.error = None;
+            job.updated_at = now_utc();
+            job
+        }
+        None => new_job(recording),
+    };
+    queue(host, job, Some(language), spawn::continue_detached)
+}
+
+fn new_job(recording: PathBuf) -> Job {
     let now = now_utc();
-    let mut job = Job {
+    Job {
         job_id: new_job_id(),
         recording,
         title: None,
@@ -341,11 +387,23 @@ fn start_checked(
         started_at: now.clone(),
         updated_at: now,
         summary_path: None,
-    };
+    }
+}
+
+/// `spawn::process_detached` or `spawn::continue_detached`.
+type Spawn = fn(&Path, &Path, Option<Language>, Option<&str>) -> io::Result<()>;
+
+/// Writes the queued job and starts its run. A run that cannot start is a failed job, and the
+/// reply is still `ok`: the job list shows the failure.
+fn queue(
+    host: &Host,
+    mut job: Job,
+    language: Option<Language>,
+    spawn: Spawn,
+) -> anyhow::Result<Value> {
     host.jobs.write(&job)?;
     // The child is neither kept nor waited on: it is reparented when the host exits.
-    if let Err(e) = spawn::process_detached(&host.exe, &job.recording, language, Some(&job.job_id))
-    {
+    if let Err(e) = spawn(&host.exe, &job.recording, language, Some(&job.job_id)) {
         let message = format!("queued: cannot start meeting process: {e}");
         tracing::error!("{message}");
         job.stage = Stage::Failed;
@@ -386,6 +444,7 @@ mod tests {
     use super::*;
     use crate::jobs::{Job, Stage};
     use crate::store::{RunStart, Source};
+    use crate::test_support::stub_meeting;
 
     const ORIGIN: &str = "chrome-extension://ext/";
 
@@ -440,6 +499,7 @@ mod tests {
             exe: dir.join("meeting"),
             context: true,
             desktop: false,
+            continue_recording: true,
             calendar: || Ok(None),
             fetch: |_| panic!("no calendar is stored"),
         }
@@ -960,6 +1020,290 @@ mod tests {
             &host,
             json!({"type": "process", "path": recording, "language": "en"}),
         );
+        let job = host
+            .jobs
+            .read(reply["job_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(job.stage, Stage::Failed);
+        assert!(
+            job.error
+                .unwrap()
+                .starts_with("queued: cannot start meeting process: ")
+        );
+    }
+
+    /// `rec/m/recording.webm` (returned canonical) with `recording-part-2.webm` beside it.
+    fn with_part(dir: &Path) -> PathBuf {
+        let recording = webm(dir);
+        fs::write(dir.join("rec/m/recording-part-2.webm"), "x").unwrap();
+        recording
+    }
+
+    fn part_req(host: &Host, path: &Path) -> Value {
+        one(
+            host,
+            json!({"type": "process_part", "path": path, "language": "bn"}),
+        )
+    }
+
+    fn wait_for(path: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no {}",
+                path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn process_part_queues_a_job_and_spawns_with_continue() {
+        let dir = temp("native-part-spawn");
+        let mut host = host(&dir);
+        host.exe = stub_meeting(&dir);
+        let recording = with_part(&dir);
+        let reply = part_req(&host, &dir.join("rec/m/recording-part-2.webm"));
+        let id = reply["job_id"].as_str().unwrap().to_string();
+        let job = host.jobs.read(&id).unwrap().unwrap();
+        wait_for(&dir.join("done"));
+        let args = fs::read_to_string(dir.join("args")).unwrap();
+        let pid = fs::read_to_string(dir.join("pid")).unwrap();
+        let pgid = fs::read_to_string(dir.join("pgid")).unwrap();
+        let stdio = fs::read_to_string(dir.join("stdio")).unwrap();
+        let null = fs::metadata("/dev/null").unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(reply, json!({"ok": true, "job_id": id}));
+        assert_eq!(job.stage, Stage::Queued);
+        assert_eq!(job.recording, recording);
+        let want = format!(
+            "process\n{}\n--continue\n--language\nbn\n--job-id\n{id}\n",
+            recording.display()
+        );
+        assert_eq!(args, want);
+        assert_eq!(pid.trim(), pgid.trim(), "own process group");
+        let null_dev = std::os::unix::fs::MetadataExt::rdev(&null).to_string();
+        assert!(stdio.lines().all(|l| l.trim() == null_dev), "{stdio}");
+    }
+
+    #[test]
+    fn process_part_reuses_the_latest_job_id() {
+        let dir = temp("native-part-reuse");
+        let mut host = host(&dir);
+        host.exe = stub_meeting(&dir);
+        let recording = with_part(&dir);
+        let other = Job {
+            recording: dir.join("rec/other/recording.webm"),
+            ..job("newest-other", "2026-10-20T10:00:00Z", None)
+        };
+        let older = Job {
+            recording: recording.clone(),
+            ..job("older", "2026-10-19T09:00:00Z", None)
+        };
+        let latest = Job {
+            recording: recording.clone(),
+            title: Some("Standup".into()),
+            stage: Stage::Failed,
+            error: Some("summarising: boom".into()),
+            ..job("latest", "2026-10-19T10:00:00Z", None)
+        };
+        for j in [&other, &older, &latest] {
+            host.jobs.write(j).unwrap();
+        }
+        let reply = part_req(&host, &dir.join("rec/m/recording-part-2.webm"));
+        let updated = host.jobs.read("latest").unwrap().unwrap();
+        wait_for(&dir.join("done"));
+        let count = fs::read_dir(&host.jobs.dir).unwrap().count();
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(reply, json!({"ok": true, "job_id": "latest"}));
+        assert_eq!(updated.stage, Stage::Queued);
+        assert_eq!(updated.error, None);
+        assert_eq!(updated.started_at, "2026-10-19T10:00:00Z");
+        assert_ne!(updated.updated_at, "2026-10-19T10:00:00Z");
+        assert_eq!(updated.title.as_deref(), Some("Standup"));
+        assert_eq!(count, 3, "no second job file");
+    }
+
+    #[test]
+    fn process_part_ignores_a_held_lock() {
+        let dir = temp("native-part-locked");
+        let mut host = host(&dir);
+        host.exe = stub_meeting(&dir);
+        let recording = with_part(&dir);
+        fs::write(Lock::path_for(&recording), std::process::id().to_string()).unwrap();
+        let reply = part_req(&host, &dir.join("rec/m/recording-part-2.webm"));
+        let job = host.jobs.read(reply["job_id"].as_str().unwrap()).unwrap();
+        wait_for(&dir.join("done"));
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(job.unwrap().stage, Stage::Queued);
+    }
+
+    #[test]
+    fn process_part_rejects_bad_paths() {
+        use std::os::unix::fs::symlink;
+        let dir = temp("native-part-paths");
+        let mut host = host(&dir);
+        host.exe = stub_meeting(&dir);
+        let rec = dir.join("rec");
+        with_part(&dir);
+        for sub in ["Archive/m", "x/y", "only", "dir/recording-part-2.webm"] {
+            fs::create_dir_all(rec.join(sub)).unwrap();
+        }
+        for file in [
+            "m/recording-part-1.webm",
+            "m/recording-part-0.webm",
+            "m/recording-part-x.webm",
+            "m/recording-part-2.webm.part",
+            "m/recording-part-2.partial.wav",
+            "m/recording-part-2.txt",
+            "m/recording-part-3.m4a",
+            "m/recording-part-4.WEBM",
+            "recording.webm",
+            "recording-part-2.webm",
+            "x/y/recording.webm",
+            "x/y/recording-part-2.webm",
+            "Archive/m/recording.webm",
+            "Archive/m/recording-part-2.webm",
+            "only/recording-part-2.webm",
+            "dir/recording.webm",
+        ] {
+            fs::write(rec.join(file), "x").unwrap();
+        }
+        fs::write(dir.join("outside.webm"), "x").unwrap();
+        fs::create_dir_all(dir.join("elsewhere")).unwrap();
+        for file in ["recording.webm", "recording-part-2.webm"] {
+            fs::write(dir.join("elsewhere").join(file), "x").unwrap();
+        }
+        symlink(
+            dir.join("outside.webm"),
+            rec.join("m/recording-part-5.webm"),
+        )
+        .unwrap();
+        symlink(
+            rec.join("m/recording-part-2.webm"),
+            rec.join("m/recording-part-6.webm"),
+        )
+        .unwrap();
+        symlink(dir.join("elsewhere"), rec.join("out")).unwrap();
+        symlink(rec.join("m"), rec.join("in")).unwrap();
+
+        let paths = [
+            PathBuf::from("rec/m/recording-part-2.webm"),
+            rec.join("m/recording-part-7.webm"),
+            rec.join("dir/recording-part-2.webm"),
+            dir.join("elsewhere/recording-part-2.webm"),
+            rec.join("m/recording-part-1.webm"),
+            rec.join("m/recording-part-0.webm"),
+            rec.join("m/recording-part-x.webm"),
+            rec.join("m/recording-part-2.webm.part"),
+            rec.join("m/recording-part-2.partial.wav"),
+            rec.join("m/recording-part-2.txt"),
+            rec.join("only/recording-part-2.webm"),
+            rec.join("m/recording-part-3.m4a"),
+            rec.join("recording-part-2.webm"),
+            rec.join("x/y/recording-part-2.webm"),
+            rec.join("Archive/m/recording-part-2.webm"),
+            rec.join("m/../m/recording-part-2.webm"),
+            rec.join("m/recording-part-5.webm"),
+            rec.join("m/recording-part-6.webm"),
+            rec.join("out/recording-part-2.webm"),
+            rec.join("in/recording-part-2.webm"),
+            rec.join("m/recording-part-4.WEBM"),
+        ];
+        let codes: Vec<_> = paths
+            .iter()
+            .map(|p| part_req(&host, p)["code"].clone())
+            .collect();
+        let wrote_jobs = host.jobs.dir.exists();
+        let spawned = dir.join("args").exists();
+        fs::remove_dir_all(&dir).unwrap();
+        for (path, code) in paths.iter().zip(&codes) {
+            assert_eq!(code, "invalid_path", "{}", path.display());
+        }
+        assert!(!wrote_jobs);
+        assert!(!spawned);
+    }
+
+    #[test]
+    fn process_part_needs_a_config_and_the_extension_origin() {
+        let dir = temp("native-part-config");
+        let mut host = host(&dir);
+        with_part(&dir);
+        let part = dir.join("rec/m/recording-part-2.webm");
+        let request = json!({"type": "process_part", "path": part, "language": "en"});
+        let wrong_origin = ask(
+            &host,
+            Some("chrome-extension://other/"),
+            frames(std::slice::from_ref(&request)),
+        );
+        let no_origin = ask(&host, None, frames(std::slice::from_ref(&request)));
+        host.config = Err("not configured".into());
+        let unconfigured = one(&host, request);
+        let wrote_jobs = host.jobs.dir.exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(wrong_origin[0]["code"], "bad_request");
+        assert_eq!(no_origin[0]["code"], "bad_request");
+        assert_eq!(unconfigured["code"], "not_configured");
+        assert!(!wrote_jobs);
+    }
+
+    #[test]
+    fn process_part_is_bad_request_with_the_flag_off() {
+        let dir = temp("native-part-off");
+        let host = Host {
+            continue_recording: false,
+            exe: stub_meeting(&dir),
+            ..host(&dir)
+        };
+        with_part(&dir);
+        let valid = dir.join("rec/m/recording-part-2.webm");
+        let invalid = dir.join("rec/m/recording-part-1.webm");
+        let replies = [part_req(&host, &valid), part_req(&host, &invalid)];
+        let wrote_jobs = host.jobs.dir.exists();
+        let spawned = dir.join("args").exists();
+        fs::remove_dir_all(&dir).unwrap();
+        for reply in &replies {
+            assert_eq!(reply["code"], "bad_request");
+            let message = reply["message"].as_str().unwrap();
+            assert!(!message.contains("recording-part"), "{message}");
+            assert!(!message.contains(dir.to_str().unwrap()), "{message}");
+        }
+        assert!(!wrote_jobs);
+        assert!(!spawned);
+    }
+
+    #[test]
+    fn process_part_with_a_bad_language_or_a_missing_field_is_bad_request() {
+        let dir = temp("native-part-lang");
+        let host = host(&dir);
+        with_part(&dir);
+        let part = dir.join("rec/m/recording-part-2.webm");
+        let codes = [
+            json!({"type": "process_part", "path": part, "language": "fr"}),
+            json!({"type": "process_part", "path": part}),
+            json!({"type": "process_part", "language": "en"}),
+        ]
+        .map(|r| one(&host, r)["code"].clone());
+        let wrote_jobs = host.jobs.dir.exists();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(codes, ["bad_request"; 3]);
+        assert!(!wrote_jobs);
+    }
+
+    #[test]
+    fn a_failed_part_spawn_is_a_failed_job_with_an_ok_reply() {
+        let dir = temp("native-part-spawn-fail");
+        let mut host = host(&dir);
+        host.exe = dir.join("no-such-exe");
+        with_part(&dir);
+        let reply = part_req(&host, &dir.join("rec/m/recording-part-2.webm"));
         let job = host
             .jobs
             .read(reply["job_id"].as_str().unwrap())

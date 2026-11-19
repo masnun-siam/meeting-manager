@@ -201,6 +201,7 @@ fn run(command: Command, context: bool, continuing: bool) -> anyhow::Result<()> 
             exe: std::env::current_exe()?,
             context,
             desktop: desktop_enabled(),
+            continue_recording: continue_enabled(),
             calendar: secret::calendar_address,
             fetch: fetch_calendar,
         };
