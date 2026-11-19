@@ -11,6 +11,7 @@ export function statusReply(extra: Partial<RecorderStatus> = {}): Ok<RecorderSta
     notice: null,
     start_error: null,
     continuable: null,
+    part: null,
     ...extra,
   };
 }

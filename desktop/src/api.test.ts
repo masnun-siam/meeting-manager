@@ -18,6 +18,7 @@ const cases: Case[] = [
     'recorder_start',
     { language: 'bn', event_occurrence_id: 'occurrence-1' },
   ],
+  ['recorderContinue', () => api.recorderContinue(), 'recorder_continue', undefined],
   ['recorderPause', () => api.recorderPause(), 'recorder_pause', undefined],
   ['recorderResume', () => api.recorderResume(), 'recorder_resume', undefined],
   ['recorderStop', () => api.recorderStop(), 'recorder_stop', undefined],
@@ -95,7 +96,7 @@ describe('api', () => {
     const commands = new Set(cases.map(([name]) => name.split(' ')[0]));
     const exported = Object.keys(api).filter((name) => name !== 'recordingUrl');
     expect([...commands].sort()).toEqual(exported.sort());
-    expect(commands.size).toBe(35);
+    expect(commands.size).toBe(36);
   });
 
   it('builds the recording URL the player loads, without invoking anything', () => {

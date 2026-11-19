@@ -100,7 +100,7 @@ impl Recorder {
 
     /// The folder of the recording that is starting, running or saving: never touched by
     /// recovery.
-    fn session_folder(&self) -> Option<PathBuf> {
+    pub(super) fn session_folder(&self) -> Option<PathBuf> {
         match &*self.state() {
             State::Starting(folder) => folder.clone(),
             State::Active(s) => Some(s.folder.clone()),

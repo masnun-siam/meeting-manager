@@ -18,7 +18,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::mem;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -36,6 +36,7 @@ use crate::App;
 use crate::calendar::{self, CalendarError};
 use crate::capture::{self, Capture, Denied, Event, SAMPLE_RATE, Stream};
 use crate::env::Env;
+use crate::recorder::continuable::LastRecording;
 use crate::reply;
 use continuable::Continuable;
 use handoff::{CheckToolFn, SpawnFn, Tools};
@@ -87,6 +88,8 @@ pub struct Deps {
     /// Creates the WAV's sink (`wav::open`).
     pub open_wav: fn(&std::path::Path) -> anyhow::Result<Box<dyn wav::Sink>>,
     pub spawn: SpawnFn,
+    /// Hands off a continued meeting (`meeting::spawn::continue_detached`).
+    pub spawn_continue: SpawnFn,
     pub check_tool: CheckToolFn,
     pub cap_s: u64,
     pub flush_every: Duration,
@@ -159,6 +162,8 @@ pub struct Status {
     /// The last recording, while it can be continued (continue-recording FR-4); `null` unless
     /// idle and built with the flag.
     pub continuable: Option<Continuable>,
+    /// The part number while a continued part records (continue-recording FR-8), else `null`.
+    pub part: Option<u32>,
 }
 
 /// A start that failed with no window to show it in (FR-5), until the user dismisses it.
@@ -196,6 +201,32 @@ struct Session {
     writer: WavWriter,
     stream: Stream,
     ctl: SyncSender<Msg>,
+    /// Set when the session continues an earlier meeting.
+    part: Option<Part>,
+}
+
+/// A continued part of an earlier meeting (continue-recording FR-8, FR-9).
+#[derive(Clone)]
+struct Part {
+    /// The part number: `recording-part-N.partial.wav`.
+    n: u32,
+    /// The meeting's recorded frames before this part.
+    base_frames: u64,
+    /// A hard link of the part's WAV directly under the recordings folder, so the audio
+    /// survives the meeting folder being moved while the part records (D17).
+    link: PathBuf,
+}
+
+impl Part {
+    fn wav(&self, folder: &Path) -> PathBuf {
+        folder.join(handoff::part_wav(self.n))
+    }
+
+    /// Removes the part's WAV and its link: a part that never became active keeps nothing.
+    fn discard(&self, folder: &Path) {
+        let _ = fs::remove_file(self.wav(folder));
+        let _ = fs::remove_file(&self.link);
+    }
 }
 
 enum State {
@@ -257,6 +288,7 @@ impl Recorder {
                 local_minute: meeting::import::local_minute,
                 open_wav: wav::open,
                 spawn: meeting::spawn::process_detached,
+                spawn_continue: meeting::spawn::continue_detached,
                 check_tool: meeting::spawn::check_tool,
                 cap_s: CAP_S,
                 flush_every: FLUSH_EVERY,
@@ -300,10 +332,10 @@ impl Recorder {
     }
 
     pub fn status(&self) -> Status {
-        let (state, frames, language, folder, idle) = match &*self.state() {
-            State::Idle => ("idle", 0, None, None, true),
+        let (state, frames, language, folder, idle, part) = match &*self.state() {
+            State::Idle => ("idle", 0, None, None, true, None),
             // A start in progress offers nothing: it is about to replace the last recording.
-            State::Starting(_) => ("idle", 0, None, None, false),
+            State::Starting(_) => ("idle", 0, None, None, false, None),
             State::Active(s) => {
                 let paused = s.shared.paused.load(Ordering::Relaxed);
                 (
@@ -312,13 +344,14 @@ impl Recorder {
                     Some(s.language),
                     Some(s.folder.clone()),
                     false,
+                    s.part.as_ref().map(|p| p.n),
                 )
             }
             State::Saving {
                 folder,
                 frames,
                 language,
-            } => ("saving", *frames, *language, folder.clone(), false),
+            } => ("saving", *frames, *language, folder.clone(), false, None),
         };
         Status {
             state,
@@ -328,6 +361,7 @@ impl Recorder {
             notice: lock(&self.inner.notice).clone(),
             start_error: lock(&self.inner.start_error).clone(),
             continuable: if idle { self.continuable() } else { None },
+            part,
         }
     }
 
@@ -371,24 +405,53 @@ impl Recorder {
         language: Language,
         event: impl FnOnce() -> Result<Option<CalendarEvent>, Refused>,
     ) -> Result<PathBuf, Refused> {
-        {
-            let mut state = self.state();
-            if !matches!(*state, State::Idle) {
-                return Err(Refused::new(
-                    "already_recording",
-                    "A recording is already running; stop it first",
-                ));
-            }
-            *state = State::Starting(None);
+        self.claim()?;
+        let folder = self.activate(self.guarded(|| self.open(language, event)))?;
+        tracing::info!("recorder: started");
+        Ok(folder)
+    }
+
+    /// Records the next part of the last recording into its meeting folder (continue-recording
+    /// FR-6, FR-8): Start's checks after `nothing_to_continue`, the recorded time counted from
+    /// the meeting's total. Every refusal leaves the meeting folder as it was and the state `idle`.
+    pub fn continue_recording(&self) -> Result<PathBuf, Refused> {
+        self.claim()?;
+        let folder = self.activate(self.guarded(|| self.open_part()))?;
+        tracing::info!("recorder: continued part");
+        Ok(folder)
+    }
+
+    /// `idle` → `starting`, so a second start or continue is refused until this one is done.
+    fn claim(&self) -> Result<(), Refused> {
+        let mut state = self.state();
+        if !matches!(*state, State::Idle) {
+            return Err(Refused::new(
+                "already_recording",
+                "A recording is already running; stop it first",
+            ));
         }
-        // A panic in an injected call must not leave the recorder stuck in `Starting`.
-        let opened = panic::catch_unwind(AssertUnwindSafe(|| self.open(language, event)))
-            .unwrap_or_else(|_| {
-                Err(Refused::new(
-                    "capture_failed",
-                    "Could not start recording; try again",
-                ))
-            });
+        *state = State::Starting(None);
+        Ok(())
+    }
+
+    /// Runs `open`: a panic in an injected call must not leave the recorder stuck in `Starting`.
+    fn guarded(
+        &self,
+        open: impl FnOnce() -> Result<(Session, Receiver<Msg>), Refused>,
+    ) -> Result<(Session, Receiver<Msg>), Refused> {
+        panic::catch_unwind(AssertUnwindSafe(open)).unwrap_or_else(|_| {
+            Err(Refused::new(
+                "capture_failed",
+                "Could not start recording; try again",
+            ))
+        })
+    }
+
+    /// `starting` → `recording` with the opened session and its watcher, or back to `idle`.
+    fn activate(
+        &self,
+        opened: Result<(Session, Receiver<Msg>), Refused>,
+    ) -> Result<PathBuf, Refused> {
         let mut state = self.state();
         let (session, rx) = match opened {
             Ok(opened) => opened,
@@ -397,13 +460,17 @@ impl Recorder {
                 return Err(refused);
             }
         };
-        let (id, folder) = (session.id, session.folder.clone());
+        let (id, folder, language) = (session.id, session.folder.clone(), session.language);
+        let continued = session.part.is_some();
         // Cleared before the session is visible, so a fast automatic stop's notice survives.
         *lock(&self.inner.notice) = None;
         *lock(&self.inner.start_error) = None;
-        // The new recording is the last one from here (continue-recording FR-4); cleared before
-        // it is visible too, so a fast automatic stop's `remember_last` is never overwritten.
-        self.clear_last();
+        // A new recording is the last one from here (continue-recording FR-4); cleared before
+        // it is visible too, so a fast automatic stop's `remember_last` is never overwritten. A
+        // continued part keeps it: the meeting stays the last recording.
+        if !continued {
+            self.clear_last();
+        }
         *state = State::Active(Box::new(session));
         // Spawned with the lock held, so a stop queued before it ran finds the session active.
         let weak = Arc::downgrade(&self.inner);
@@ -422,7 +489,6 @@ impl Recorder {
             ));
         }
         drop(state);
-        tracing::info!("recorder: started");
         self.save_language(language);
         self.changed();
         Ok(folder)
@@ -479,6 +545,68 @@ impl Recorder {
         event: impl FnOnce() -> Result<Option<CalendarEvent>, Refused>,
     ) -> Result<(Session, Receiver<Msg>), Refused> {
         let deps = &self.inner.deps;
+        let config = self.configured()?;
+        let started = (deps.clock)();
+        let event = event()?;
+        if let Some(event) = &event {
+            within_horizon(event, started.now_ms.div_euclid(1000))?;
+        }
+        permitted(deps)?;
+        let now_s = u64::try_from(started.now_ms.div_euclid(1000)).unwrap_or(0);
+        let folder = folder::new_folder(&config.recordings_dir, deps.local_minute, now_s)
+            .map_err(|e| Refused::new("capture_failed", format!("{e:#}")))?;
+        // Before the WAV exists: launch recovery treats any WAV whose folder the state does not
+        // name as a leftover (#262).
+        *self.state() = State::Starting(Some(folder.clone()));
+        let opened = self.open_in(
+            folder.clone(),
+            None,
+            language,
+            started,
+            event,
+            config.ffmpeg_path,
+        );
+        if opened.is_err() {
+            let _ = fs::remove_dir_all(&folder);
+        }
+        opened
+    }
+
+    /// `open` for the next part of the last recording: `nothing_to_continue`, then Start's
+    /// checks, then the part's WAV and its link in the existing meeting folder. The meeting's
+    /// `recording.m4a` and `context.json` are never touched; a refusal removes only the part's
+    /// own files.
+    fn open_part(&self) -> Result<(Session, Receiver<Msg>), Refused> {
+        let last = self.last_continuable().ok_or_else(|| {
+            Refused::new(
+                "nothing_to_continue",
+                "Nothing to continue: the last recording stopped more than 2 hours ago, or was moved.",
+            )
+        })?;
+        let deps = &self.inner.deps;
+        let config = self.configured()?;
+        let started = (deps.clock)();
+        permitted(deps)?;
+        let folder = PathBuf::from(&last.folder);
+        let part = next_part(&folder, &config.recordings_dir, &last);
+        // Before the part's WAV exists, as for a new folder (#262).
+        *self.state() = State::Starting(Some(folder.clone()));
+        let opened = self.open_in(
+            folder.clone(),
+            Some(part.clone()),
+            last.language,
+            started,
+            None,
+            config.ffmpeg_path,
+        );
+        if opened.is_err() {
+            part.discard(&folder);
+        }
+        opened
+    }
+
+    /// The configuration, with ffmpeg where it says: `not_configured` otherwise.
+    fn configured(&self) -> Result<meeting::config::Config, Refused> {
         let config = self
             .inner
             .env
@@ -493,37 +621,24 @@ impl Recorder {
                 ),
             ));
         }
-        let started = (deps.clock)();
-        let event = event()?;
-        if let Some(event) = &event {
-            within_horizon(event, started.now_ms.div_euclid(1000))?;
-        }
-        (deps.capture.check)()
-            .or_else(|_| (deps.capture.request)())
-            .map_err(denied)?;
-        let now_s = u64::try_from(started.now_ms.div_euclid(1000)).unwrap_or(0);
-        let folder = folder::new_folder(&config.recordings_dir, deps.local_minute, now_s)
-            .map_err(|e| Refused::new("capture_failed", format!("{e:#}")))?;
-        // Before the WAV exists: launch recovery treats any WAV whose folder the state does not
-        // name as a leftover (#262).
-        *self.state() = State::Starting(Some(folder.clone()));
-        let opened = self.open_in(folder.clone(), language, started, event, config.ffmpeg_path);
-        if opened.is_err() {
-            let _ = fs::remove_dir_all(&folder);
-        }
-        opened
+        Ok(config)
     }
 
     fn open_in(
         &self,
         folder: PathBuf,
+        part: Option<Part>,
         language: Language,
         started: Clock,
         event: Option<CalendarEvent>,
         ffmpeg: PathBuf,
     ) -> Result<(Session, Receiver<Msg>), Refused> {
         let deps = &self.inner.deps;
-        let shared = Arc::new(Shared::default());
+        // A part's recorded time starts at the meeting's, so the cap and `elapsed_s` count it.
+        let shared = Arc::new(Shared {
+            frames: AtomicU64::new(part.as_ref().map_or(0, |p| p.base_frames)),
+            ..Shared::default()
+        });
         let (ctl, rx) = mpsc::sync_channel(4);
         let on_error = {
             let ctl = ctl.clone();
@@ -531,8 +646,15 @@ impl Recorder {
                 let _ = ctl.try_send(Msg::Stop(write_failure(kind)));
             })
         };
-        let sink = (deps.open_wav)(&folder.join(handoff::WAV))
-            .map_err(|e| Refused::new("capture_failed", format!("{e:#}")))?;
+        let wav = part
+            .as_ref()
+            .map_or_else(|| folder.join(handoff::WAV), |p| p.wav(&folder));
+        let sink =
+            (deps.open_wav)(&wav).map_err(|e| Refused::new("capture_failed", format!("{e:#}")))?;
+        if let Some(part) = &part {
+            fs::hard_link(&wav, &part.link)
+                .map_err(|e| Refused::new("capture_failed", format!("cannot write audio: {e}")))?;
+        }
         let writer = WavWriter::start(
             sink,
             deps.flush_every,
@@ -541,7 +663,9 @@ impl Recorder {
             on_error,
         )
         .map_err(|e| Refused::new("capture_failed", format!("cannot write audio: {e}")))?;
-        handoff::write_context(&folder, &started, event.clone());
+        if part.is_none() {
+            handoff::write_context(&folder, &started, event.clone());
+        }
         let cap_frames = deps.cap_s * u64::from(SAMPLE_RATE);
         let samples = samples_callback(shared.clone(), writer.sender(), cap_frames, ctl.clone());
         let stream = match (deps.capture.start)(samples, events_callback(ctl.clone())) {
@@ -565,6 +689,7 @@ impl Recorder {
             writer,
             stream,
             ctl,
+            part,
         };
         Ok((session, rx))
     }
@@ -635,6 +760,7 @@ impl Recorder {
             writer,
             stream,
             ctl,
+            part,
             ..
         } = *session;
         stream.stop();
@@ -643,7 +769,11 @@ impl Recorder {
             Ok(frames) => (frames, reason == Reason::DiskFull),
             Err(kind) => {
                 tracing::warn!("recorder: the WAV writer failed: {kind}");
-                let frames = wav::repair(&folder.join(handoff::WAV)).unwrap_or(0);
+                // A part's link is the same file, and still there if the folder was moved.
+                let wav = part
+                    .as_ref()
+                    .map_or_else(|| folder.join(handoff::WAV), |p| p.link.clone());
+                let frames = wav::repair(&wav).unwrap_or(0);
                 (
                     frames,
                     kind == ErrorKind::StorageFull || reason == Reason::DiskFull,
@@ -652,22 +782,147 @@ impl Recorder {
         };
         let recorder = self.clone();
         Some(thread::spawn(move || {
-            let saved = panic::catch_unwind(AssertUnwindSafe(|| {
-                handoff::ensure_context(&folder, &started, event);
-                if disk_full {
-                    Notice::retry(notice::DISK_FULL, &folder)
-                } else {
-                    let tools = recorder.tools(ffmpeg);
-                    handoff::finish_recording(&tools, &folder, language, frames, &reason.prefix())
-                }
+            let stopped = Stopped {
+                folder,
+                language,
+                started,
+                ffmpeg,
+                frames,
+                disk_full,
+                prefix: reason.prefix(),
+            };
+            let saved = panic::catch_unwind(AssertUnwindSafe(|| match &part {
+                None => recorder.save(&stopped, event),
+                Some(part) => recorder.save_part(&stopped, part),
             }));
             // Never stuck in `saving`: the WAV, if still there, can be retried.
-            let notice = saved
-                .unwrap_or_else(|_| Notice::retry("Saving failed unexpectedly; retry", &folder));
+            let (notice, last) = saved.unwrap_or_else(|_| {
+                let notice = Notice::retry("Saving failed unexpectedly; retry", &stopped.folder);
+                (notice, None)
+            });
             // Before `idle`, so a poll never sees `idle` without it.
-            recorder.remember_last(&folder, frames / u64::from(SAMPLE_RATE), language, 1);
+            if let Some(last) = last {
+                recorder.remember_last(&last.folder, last.recorded_s, language, last.parts);
+            }
             recorder.finish_saving(notice);
         }))
+    }
+
+    /// Saves a new recording into its folder; it is the last recording whatever the outcome.
+    fn save(&self, stopped: &Stopped, event: Option<CalendarEvent>) -> (Notice, Option<Saved>) {
+        let Stopped { folder, .. } = stopped;
+        handoff::ensure_context(folder, &stopped.started, event);
+        let notice = if stopped.disk_full {
+            Notice::retry(notice::DISK_FULL, folder)
+        } else {
+            let tools = self.tools(stopped.ffmpeg.clone());
+            handoff::finish_recording(
+                &tools,
+                folder,
+                stopped.language,
+                stopped.frames,
+                &stopped.prefix,
+            )
+        };
+        let saved = Saved {
+            folder: folder.clone(),
+            recorded_s: stopped.frames / u64::from(SAMPLE_RATE),
+            parts: 1,
+        };
+        (notice, Some(saved))
+    }
+
+    /// Saves a continued part into its meeting folder and hands the meeting off with
+    /// `--continue` (continue-recording FR-9). The meeting stays the last recording only once
+    /// the part is converted; a moved meeting is saved as a new one (D17).
+    fn save_part(&self, stopped: &Stopped, part: &Part) -> (Notice, Option<Saved>) {
+        let folder = &stopped.folder;
+        if !part.wav(folder).is_file() || !folder.join(handoff::M4A).is_file() {
+            return self.save_moved(stopped, part);
+        }
+        let total = part.base_frames + stopped.frames;
+        let notice = if stopped.disk_full {
+            Notice::retry(notice::DISK_FULL, folder)
+        } else {
+            let tools = Tools {
+                spawn: self.inner.deps.spawn_continue,
+                ..self.tools(stopped.ffmpeg.clone())
+            };
+            handoff::finish_part(
+                &tools,
+                folder,
+                part.n,
+                stopped.language,
+                total,
+                &stopped.prefix,
+            )
+        };
+        // The part's WAV is converted, or kept in the folder for a retry: the link is not needed.
+        let _ = fs::remove_file(&part.link);
+        let converted = folder.join(handoff::part_m4a(part.n)).is_file();
+        let saved = converted.then(|| Saved {
+            folder: folder.clone(),
+            recorded_s: total / u64::from(SAMPLE_RATE),
+            parts: part.n,
+        });
+        (notice, saved)
+    }
+
+    /// The meeting folder was moved, or its `recording.m4a` is gone, while the part recorded:
+    /// the part's link becomes a new meeting, saved as a Start's would be (D17). Nothing recorded
+    /// is lost; if the new meeting cannot be made, the link stays where it is.
+    fn save_moved(&self, stopped: &Stopped, part: &Part) -> (Notice, Option<Saved>) {
+        tracing::warn!("recorder: the continued meeting was moved; saving the part as a new one");
+        let name = stopped
+            .folder
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let failed = |e: anyhow::Error| {
+            let message = format!(
+                "Could not add to {name}: it was moved, and saving it as a new meeting failed: {e:#}"
+            );
+            (Notice::new(notice::Kind::Error, message), None)
+        };
+        let Some(recordings) = part.link.parent() else {
+            return failed(anyhow::anyhow!("the recordings folder is unknown"));
+        };
+        let now_s = u64::try_from(stopped.started.now_ms.div_euclid(1000)).unwrap_or(0);
+        let new = match folder::new_folder(recordings, self.inner.deps.local_minute, now_s) {
+            Ok(new) => new,
+            Err(e) => return failed(e),
+        };
+        // Held from here, as `Saving` held the moved folder, so recovery skips the new one.
+        if let State::Saving { folder, .. } = &mut *self.state() {
+            *folder = Some(new.clone());
+        }
+        // The copy left in a folder still at its path (`recording.m4a` deleted) is the same file.
+        let left = part.wav(&stopped.folder);
+        let same = same_file(&left, &part.link);
+        if let Err(e) = fs::rename(&part.link, new.join(handoff::WAV)) {
+            let _ = fs::remove_dir(&new);
+            return failed(anyhow::Error::from(e).context("cannot move the part's audio"));
+        }
+        if same {
+            let _ = fs::remove_file(&left);
+        }
+        let (notice, saved) = self.save(
+            &Stopped {
+                folder: new,
+                ..stopped.clone()
+            },
+            None,
+        );
+        let moved = Notice::new(
+            notice::Kind::Error,
+            format!("Could not add to {name}: it was moved; saved as a new meeting."),
+        );
+        // A hand-off that failed says what to do next; anything else becomes the moved notice.
+        let notice = if notice.kind == notice::Kind::Error {
+            notice
+        } else {
+            moved
+        };
+        (notice, saved)
     }
 
     fn tools(&self, ffmpeg: PathBuf) -> Tools {
@@ -752,8 +1007,77 @@ impl Session {
         self.stream.stop();
         let _ = self.ctl.try_send(Msg::Ended);
         let _ = self.writer.finish();
-        let _ = fs::remove_dir_all(&self.folder);
+        match &self.part {
+            // The meeting folder holds the earlier parts: only this part's files go.
+            Some(part) => part.discard(&self.folder),
+            None => {
+                let _ = fs::remove_dir_all(&self.folder);
+            }
+        }
     }
+}
+
+/// What a stopped session leaves for its save.
+#[derive(Clone)]
+struct Stopped {
+    folder: PathBuf,
+    language: Language,
+    started: Clock,
+    ffmpeg: PathBuf,
+    /// This session's frames (a part's alone).
+    frames: u64,
+    disk_full: bool,
+    prefix: String,
+}
+
+/// The last recording a save leaves (continue-recording FR-4): its meeting totals.
+struct Saved {
+    folder: PathBuf,
+    recorded_s: u64,
+    parts: u32,
+}
+
+/// The first part number from the stored `parts` + 1 (at least 2) whose WAV, m4a and link are
+/// all free, so nothing a part leaves behind is ever overwritten or removed.
+fn next_part(folder: &Path, recordings: &Path, last: &LastRecording) -> Part {
+    let name = folder
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mut n = last.parts.saturating_add(1).max(2);
+    loop {
+        let link = recordings.join(format!(".continuing-{name}-part-{n}.partial.wav"));
+        let taken = [
+            folder.join(handoff::part_wav(n)),
+            folder.join(handoff::part_m4a(n)),
+            link.clone(),
+        ]
+        .iter()
+        .any(|p| p.symlink_metadata().is_ok());
+        if !taken {
+            return Part {
+                n,
+                base_frames: last.recorded_s * u64::from(SAMPLE_RATE),
+                link,
+            };
+        }
+        n += 1;
+    }
+}
+
+/// Whether `a` and `b` name the same file (hard links of one inode).
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+        _ => false,
+    }
+}
+
+/// The capture check, then its request: Start's permission refusals.
+fn permitted(deps: &Deps) -> Result<(), Refused> {
+    (deps.capture.check)()
+        .or_else(|_| (deps.capture.request)())
+        .map_err(denied)
 }
 
 /// Waits for the session's first automatic stop, or for the session to end.
@@ -931,6 +1255,20 @@ pub async fn recorder_start<R: Runtime>(
     .await
 }
 
+/// Continues the last recording (continue-recording FR-6). Registered only in builds with
+/// `FEATURE_CONTINUE_RECORDING=1` (FR-14).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn recorder_continue<R: Runtime>(app: AppHandle<R>) -> Value {
+    blocking(app, |app| match app.recorder.continue_recording() {
+        Ok(folder) => reply::ok(json!({"folder": folder.display().to_string()})),
+        Err(r) => {
+            tracing::info!("recorder: continue refused ({})", r.code);
+            refused(r)
+        }
+    })
+    .await
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn recorder_pause<R: Runtime>(app: AppHandle<R>) -> Value {
     blocking(app, |app| match app.recorder.pause() {
@@ -978,8 +1316,11 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::capture::{Events, Samples};
-    use crate::recorder::convert::tests::{ffmpeg, probe};
-    use crate::recorder::handoff::tests::{clock, event, fake_spawn, spawns_under, tool};
+    use crate::recorder::continuable::tests::store_last;
+    use crate::recorder::convert::tests::{ffmpeg, probe, tone_wav};
+    use crate::recorder::handoff::tests::{
+        clock, continues_under, event, fake_continue_spawn, fake_spawn, spawns_under, tool,
+    };
     use crate::recorder::handoff::{CONTEXT, M4A, WAV};
     use crate::recorder::notice::Kind;
     use crate::recorder::wav::tests::temp;
@@ -1186,6 +1527,7 @@ pub(crate) mod tests {
             local_minute: minute,
             open_wav,
             spawn: fake_spawn,
+            spawn_continue: fake_continue_spawn,
             check_tool: meeting::spawn::check_tool,
             cap_s,
             flush_every: Duration::from_millis(20),
@@ -1231,7 +1573,8 @@ pub(crate) mod tests {
                 "folder": null,
                 "notice": null,
                 "start_error": null,
-                "continuable": null
+                "continuable": null,
+                "part": null
             })
         );
     }
@@ -1993,5 +2336,531 @@ pub(crate) mod tests {
         if let Some(zone) = &c.time_zone {
             assert!(meeting::context::time_zone_ok(zone), "{zone}");
         }
+    }
+
+    const EARLIER: &str = "meeting-2026-11-13_0500";
+
+    fn stored_last(rig: &Rig) -> LastRecording {
+        let raw = rig
+            .env()
+            .store()
+            .unwrap()
+            .setting("last_recording")
+            .unwrap();
+        serde_json::from_str(&raw.unwrap()).unwrap()
+    }
+
+    /// An earlier meeting (`recording.m4a` and `context.json`) stored as the last recording with
+    /// `recorded_s` and `parts`, in Bengali (Start in these tests is English).
+    fn earlier(rig: &Rig, recorded_s: u64, parts: u32) -> PathBuf {
+        let folder = rig.home.join("Recordings").join(EARLIER);
+        fs::create_dir_all(&folder).unwrap();
+        tone_wav(&folder.join(WAV), 1);
+        convert::to_m4a(&ffmpeg(), &folder.join(WAV), &folder.join(M4A)).unwrap();
+        fs::remove_file(folder.join(WAV)).unwrap();
+        handoff::write_context(&folder, &clock(), None);
+        store_last(
+            rig,
+            &LastRecording {
+                folder: folder.display().to_string(),
+                recorded_s,
+                language: Language::Bn,
+                stopped_at: clock().now_ms,
+                parts,
+            },
+        );
+        folder
+    }
+
+    fn link(rig: &Rig, n: u32) -> PathBuf {
+        rig.home
+            .join("Recordings")
+            .join(format!(".continuing-{EARLIER}-part-{n}.partial.wav"))
+    }
+
+    /// The folder's file names and contents: what a continue must leave as it was.
+    fn snapshot(folder: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<_> = fs::read_dir(folder)
+            .unwrap()
+            .map(|e| {
+                let e = e.unwrap();
+                (
+                    e.file_name().to_string_lossy().into_owned(),
+                    fs::read(e.path()).unwrap(),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    fn mode(path: &std::path::Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn continue_records_a_part_into_the_meeting_folder_and_hands_it_off() {
+        use std::os::unix::fs::MetadataExt;
+        let rig = rig("continue", ok_capture());
+        let folder = earlier(&rig, 42, 1);
+        let before = snapshot(&folder);
+        assert_eq!(rig.recorder.continue_recording().unwrap(), folder);
+        // No new meeting folder: the meeting and the part's link only.
+        assert_eq!(rig.leftovers(), 2);
+        let (wav, link) = (folder.join(handoff::part_wav(2)), link(&rig, 2));
+        assert_eq!((mode(&wav), mode(&link)), (0o600, 0o600));
+        let (w, l) = (fs::metadata(&wav).unwrap(), fs::metadata(&link).unwrap());
+        assert_eq!((w.dev(), w.ino()), (l.dev(), l.ino()));
+        for (name, bytes) in &before {
+            assert_eq!(&fs::read(folder.join(name)).unwrap(), bytes, "{name}");
+        }
+
+        let status = rig.recorder.status();
+        assert_eq!(
+            (status.state, status.part, status.elapsed_s, status.language),
+            ("recording", Some(2), 42, Language::Bn)
+        );
+        assert_eq!(status.folder.as_deref(), folder.to_str());
+        assert_eq!(status.continuable, None);
+        push(3 * SECOND);
+        assert_eq!(rig.recorder.status().elapsed_s, 45);
+        assert_eq!(rig.recorder.recording_elapsed_s(), Some(45));
+        rig.recorder.pause().unwrap();
+        push(5 * SECOND);
+        let paused = rig.recorder.status();
+        assert_eq!(
+            (paused.state, paused.elapsed_s, paused.part),
+            ("paused", 45, Some(2))
+        );
+        rig.recorder.resume().unwrap();
+
+        let status = rig.stop(Reason::User);
+        assert_eq!(status.notice, Some(Notice::new(Kind::Saved, notice::SAVED)));
+        assert_eq!(status.part, None);
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert!(!wav.exists());
+        assert!(!link.exists());
+        for (name, bytes) in &before {
+            assert_eq!(&fs::read(folder.join(name)).unwrap(), bytes, "{name}");
+        }
+        assert_eq!(
+            continues_under(&folder),
+            [(
+                rig.home.join("meeting"),
+                folder.join(M4A),
+                Some(Language::Bn)
+            )]
+        );
+        assert!(spawns_under(&folder).is_empty());
+        let last = stored_last(&rig);
+        assert_eq!(
+            (last.recorded_s, last.parts, last.language),
+            (45, 2, Language::Bn)
+        );
+        // The part's language is the one saved for the next start and for recovery (D9).
+        assert_eq!(rig.recorder.status().language, Language::Bn);
+    }
+
+    #[test]
+    fn continue_a_second_time_records_part_three() {
+        let rig = rig("continue-again", ok_capture());
+        let folder = earlier(&rig, 20, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(SECOND);
+        rig.stop(Reason::User);
+        assert_eq!(stored_last(&rig).parts, 2);
+        rig.recorder.continue_recording().unwrap();
+        let status = rig.recorder.status();
+        assert_eq!((status.part, status.elapsed_s), (Some(3), 21));
+        assert!(folder.join(handoff::part_wav(3)).is_file());
+        rig.stop(Reason::User);
+        assert_eq!(stored_last(&rig).parts, 3);
+    }
+
+    #[test]
+    fn continue_skips_a_part_number_already_used() {
+        for leftover in [handoff::part_wav(2), handoff::part_m4a(2)] {
+            let rig = rig(&format!("continue-taken-{leftover}"), ok_capture());
+            let folder = earlier(&rig, 20, 1);
+            fs::write(folder.join(&leftover), b"kept").unwrap();
+            rig.recorder.continue_recording().unwrap();
+            assert_eq!(rig.recorder.status().part, Some(3), "{leftover}");
+            rig.stop(Reason::User);
+            assert_eq!(fs::read(folder.join(&leftover)).unwrap(), b"kept");
+            assert!(folder.join(handoff::part_m4a(3)).is_file());
+            assert_eq!(stored_last(&rig).parts, 3);
+        }
+    }
+
+    #[test]
+    fn continue_a_new_start_and_idle_report_no_part() {
+        let rig = rig("continue-start", ok_capture());
+        assert_eq!(rig.recorder.status().part, None);
+        rig.start().unwrap();
+        assert_eq!(rig.recorder.status().part, None);
+        rig.stop(Reason::User);
+    }
+
+    #[test]
+    fn continue_stops_at_the_cap_on_the_meeting_total() {
+        let rig = rig("continue-cap", ok_capture());
+        let folder = earlier(&rig, 10_740, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(60 * SECOND);
+        let status = rig.wait_idle();
+        assert_eq!(
+            status.notice.unwrap().message,
+            "Stopped at 3 hours. Saved, sent for processing."
+        );
+        assert!(probe(&folder.join(handoff::part_m4a(2))).contains("Duration: 00:01:00"));
+        assert_eq!(continues_under(&folder).len(), 1);
+        assert_eq!(stored_last(&rig).recorded_s, 3 * 3600);
+    }
+
+    #[test]
+    fn continue_hands_off_once_the_meeting_total_reaches_ten_seconds() {
+        let rig = rig("continue-short", ok_capture());
+        let folder = earlier(&rig, 3, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(4 * SECOND);
+        assert_eq!(rig.stop(Reason::User).notice.unwrap().kind, Kind::TooShort);
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert!(continues_under(&folder).is_empty());
+
+        let rig = self::rig("continue-short-total", ok_capture());
+        let folder = earlier(&rig, 8, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(5 * SECOND);
+        assert_eq!(rig.stop(Reason::User).notice.unwrap().kind, Kind::Saved);
+        assert_eq!(continues_under(&folder).len(), 1);
+    }
+
+    #[test]
+    fn continue_with_nothing_to_continue_is_refused_and_creates_nothing() {
+        let nothing = Refused::new(
+            "nothing_to_continue",
+            "Nothing to continue: the last recording stopped more than 2 hours ago, or was moved.",
+        );
+        let rig = rig("continue-nothing", ok_capture());
+        assert_eq!(rig.recorder.continue_recording().unwrap_err(), nothing);
+        assert_eq!((rig.leftovers(), rig.state()), (0, "idle"));
+
+        let folder = earlier(&rig, 20, 1);
+        let before = snapshot(&folder);
+        let mut last = stored_last(&rig);
+        last.stopped_at -= 2 * 3600 * 1000 + 1;
+        store_last(&rig, &last);
+        assert_eq!(rig.recorder.continue_recording().unwrap_err(), nothing);
+        let mut last = stored_last(&rig);
+        last.stopped_at = clock().now_ms;
+        last.recorded_s = 3 * 3600;
+        store_last(&rig, &last);
+        assert_eq!(rig.recorder.continue_recording().unwrap_err(), nothing);
+        assert_eq!(snapshot(&folder), before);
+        assert_eq!(rig.leftovers(), 1);
+
+        fs::remove_file(folder.join(M4A)).unwrap();
+        earlier(&rig, 20, 1);
+        fs::remove_file(folder.join(M4A)).unwrap();
+        assert_eq!(rig.recorder.continue_recording().unwrap_err(), nothing);
+        earlier(&rig, 20, 1);
+        fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(rig.recorder.continue_recording().unwrap_err(), nothing);
+        assert_eq!((rig.leftovers(), rig.state()), (0, "idle"));
+    }
+
+    #[test]
+    fn continue_refuses_nothing_to_continue_before_any_permission() {
+        let rig = rig("continue-order", mic_denied_capture());
+        assert_eq!(
+            rig.recorder.continue_recording().unwrap_err().code,
+            "nothing_to_continue"
+        );
+        let folder = earlier(&rig, 20, 1);
+        let before = snapshot(&folder);
+        assert_eq!(
+            rig.recorder.continue_recording().unwrap_err(),
+            Refused::new(
+                "permission_mic",
+                "Allow Meeting in System Settings › Privacy & Security › Microphone"
+            )
+        );
+        assert_eq!(snapshot(&folder), before);
+        assert_eq!(rig.leftovers(), 1);
+        assert_eq!(rig.state(), "idle");
+    }
+
+    #[test]
+    fn continue_runs_starts_configuration_checks() {
+        let rig = rig("continue-config", ok_capture());
+        earlier(&rig, 20, 1);
+        write_config(&rig.env(), rig.home.join("no-ffmpeg"));
+        let refused = rig.recorder.continue_recording().unwrap_err();
+        assert_eq!(refused.code, "not_configured");
+        assert!(
+            refused.message.contains("meeting doctor"),
+            "{}",
+            refused.message
+        );
+        assert_eq!(rig.leftovers(), 1);
+    }
+
+    #[test]
+    fn continue_failures_never_touch_the_meeting() {
+        let cases: [(Start, &str); 3] = [
+            (start_audio_denied, "permission_audio"),
+            (start_mic_denied, "permission_mic"),
+            (start_broken, "capture_failed"),
+        ];
+        for (start, code) in cases {
+            let rig = rig(
+                &format!("continue-fail-{code}"),
+                capture(granted, granted, start),
+            );
+            let folder = earlier(&rig, 20, 1);
+            let before = snapshot(&folder);
+            assert_eq!(rig.recorder.continue_recording().unwrap_err().code, code);
+            assert_eq!(snapshot(&folder), before, "{code}");
+            assert_eq!(rig.leftovers(), 1, "{code}");
+            assert_eq!(rig.state(), "idle");
+        }
+    }
+
+    #[test]
+    fn continue_refuses_a_link_that_cannot_be_made_and_keeps_the_meeting() {
+        let rig = rig("continue-no-link", ok_capture());
+        let folder = earlier(&rig, 20, 1);
+        let before = snapshot(&folder);
+        let recordings = rig.home.join("Recordings");
+        fs::set_permissions(&recordings, fs::Permissions::from_mode(0o555)).unwrap();
+        let refused = rig.recorder.continue_recording();
+        fs::set_permissions(&recordings, fs::Permissions::from_mode(0o755)).unwrap();
+        let refused = refused.unwrap_err();
+        assert_eq!(refused.code, "capture_failed");
+        assert!(
+            refused.message.starts_with("cannot write audio: "),
+            "{}",
+            refused.message
+        );
+        assert_eq!(snapshot(&folder), before);
+        assert_eq!(rig.leftovers(), 1);
+        assert_eq!(rig.state(), "idle");
+    }
+
+    #[test]
+    fn continue_abandoned_removes_only_the_part() {
+        let rig = rig("continue-abandon", ok_capture());
+        let folder = earlier(&rig, 20, 1);
+        let before = snapshot(&folder);
+        let (session, _rx) = rig.recorder.open_part().unwrap();
+        assert!(folder.join(handoff::part_wav(2)).is_file());
+        session.abandon();
+        *rig.recorder.state() = State::Idle;
+        assert_eq!(snapshot(&folder), before);
+        assert_eq!(rig.leftovers(), 1);
+    }
+
+    #[test]
+    fn continue_and_start_never_record_together() {
+        let rig = rig("continue-busy", ok_capture());
+        earlier(&rig, 20, 1);
+        rig.recorder.continue_recording().unwrap();
+        assert_eq!(
+            rig.recorder.continue_recording().unwrap_err().code,
+            "already_recording"
+        );
+        assert_eq!(rig.start().unwrap_err().code, "already_recording");
+        rig.recorder.pause().unwrap();
+        assert_eq!(
+            rig.recorder.continue_recording().unwrap_err().code,
+            "already_recording"
+        );
+        rig.stop(Reason::User);
+
+        rig.start().unwrap();
+        assert_eq!(
+            rig.recorder.continue_recording().unwrap_err().code,
+            "already_recording"
+        );
+        rig.stop(Reason::User);
+        let saving = rig.recorder.begin_saving().unwrap();
+        assert_eq!(
+            rig.recorder.continue_recording().unwrap_err().code,
+            "already_recording"
+        );
+        drop(saving);
+    }
+
+    #[test]
+    fn continue_two_quick_calls_record_once() {
+        let rig = rig("continue-race", ok_capture());
+        earlier(&rig, 20, 1);
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let (recorder, other_gate) = (rig.recorder.clone(), gate.clone());
+        let other = thread::spawn(move || {
+            other_gate.wait();
+            recorder
+                .continue_recording()
+                .map(|_| ())
+                .map_err(|r| r.code)
+        });
+        gate.wait();
+        let here = rig
+            .recorder
+            .continue_recording()
+            .map(|_| ())
+            .map_err(|r| r.code);
+        let mut codes = [here, other.join().unwrap()];
+        codes.sort();
+        assert_eq!(codes, [Ok(()), Err("already_recording")]);
+        assert_eq!(rig.state(), "recording");
+        rig.stop(Reason::User);
+    }
+
+    #[test]
+    fn continue_conversion_failure_keeps_the_part_wav_and_the_meeting() {
+        let rig = rig("continue-ffmpeg", ok_capture());
+        let folder = earlier(&rig, 20, 1);
+        let m4a = fs::read(folder.join(M4A)).unwrap();
+        let broken = rig.home.join("ffmpeg");
+        fs::write(&broken, "#!/bin/sh\necho boom >&2\nexit 1\n").unwrap();
+        fs::set_permissions(&broken, fs::Permissions::from_mode(0o755)).unwrap();
+        write_config(&rig.env(), broken);
+        rig.recorder.continue_recording().unwrap();
+        push(SECOND);
+        let status = rig.stop(Reason::User);
+        assert_eq!(status.state, "idle");
+        assert_eq!(
+            status.notice,
+            Some(Notice::retry("ffmpeg failed: boom", &folder))
+        );
+        assert!(folder.join(handoff::part_wav(2)).is_file());
+        assert!(!link(&rig, 2).exists());
+        assert_eq!(fs::read(folder.join(M4A)).unwrap(), m4a);
+        assert!(continues_under(&folder).is_empty());
+        // The earlier meeting stays the last recording, unchanged.
+        let last = stored_last(&rig);
+        assert_eq!((last.recorded_s, last.parts), (20, 1));
+    }
+
+    #[test]
+    fn continue_spawn_failure_keeps_the_part_m4a() {
+        let rig = rig_from(
+            "continue-spawn",
+            Deps {
+                spawn_continue: handoff::tests::failing_spawn,
+                ..deps(ok_capture(), 3 * 3600, wav::open, || true)
+            },
+        );
+        let folder = earlier(&rig, 20, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(SECOND);
+        let notice = rig.stop(Reason::User).notice.unwrap();
+        assert_eq!(
+            notice.message,
+            "Saved, but processing could not be started: fork refused"
+        );
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+    }
+
+    #[test]
+    fn continue_disk_full_keeps_the_part_wav() {
+        let rig = rig("continue-disk-full", ok_capture());
+        let folder = earlier(&rig, 20, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(2 * SECOND);
+        let status = rig.stop(Reason::DiskFull);
+        assert_eq!(
+            status.notice,
+            Some(Notice::retry(notice::DISK_FULL, &folder))
+        );
+        assert!(folder.join(handoff::part_wav(2)).is_file());
+        assert!(!link(&rig, 2).exists());
+        assert!(continues_under(&folder).is_empty());
+    }
+
+    /// Asserts the part was saved as a new meeting, sent without `--continue`.
+    fn saved_as_new(rig: &Rig, status: Status) -> PathBuf {
+        assert_eq!(
+            status.notice,
+            Some(Notice::new(
+                Kind::Error,
+                format!("Could not add to {EARLIER}: it was moved; saved as a new meeting.")
+            ))
+        );
+        let new = rig.folder("");
+        assert!(new.join(M4A).is_file());
+        assert!(new.join(CONTEXT).is_file());
+        assert!(!new.join(WAV).exists());
+        assert!(probe(&new.join(M4A)).contains("Duration: 00:00:12"));
+        assert!(!link(rig, 2).exists());
+        assert_eq!(
+            spawns_under(&new),
+            [(rig.home.join("meeting"), new.join(M4A), Some(Language::Bn))]
+        );
+        assert!(continues_under(&rig.home).is_empty());
+        let last = stored_last(rig);
+        assert_eq!(
+            (last.folder.as_str(), last.recorded_s, last.parts),
+            (new.to_str().unwrap(), 12, 1)
+        );
+        new
+    }
+
+    #[test]
+    fn continue_saves_a_part_of_a_moved_meeting_as_a_new_one() {
+        let rig = rig("continue-moved", ok_capture());
+        let folder = earlier(&rig, 42, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(12 * SECOND);
+        let archive = rig.home.join("Recordings").join("Archive");
+        fs::create_dir_all(&archive).unwrap();
+        fs::rename(&folder, archive.join(EARLIER)).unwrap();
+        let saving = rig.recorder.stop(Reason::User).unwrap();
+        saving.join().unwrap();
+        saved_as_new(&rig, rig.recorder.status());
+        assert!(archive.join(EARLIER).join(M4A).is_file());
+    }
+
+    #[test]
+    fn continue_saves_a_part_as_a_new_meeting_when_the_recording_is_gone() {
+        let rig = rig("continue-m4a-gone", ok_capture());
+        let folder = earlier(&rig, 42, 1);
+        rig.recorder.continue_recording().unwrap();
+        push(12 * SECOND);
+        fs::remove_file(folder.join(M4A)).unwrap();
+        let status = rig.stop(Reason::User);
+        saved_as_new(&rig, status);
+        // The part's copy left in the old folder was the same file.
+        assert!(!folder.join(handoff::part_wav(2)).exists());
+        assert!(!folder.join(handoff::part_m4a(2)).exists());
+    }
+
+    #[test]
+    fn continue_holds_the_folder_from_launch_recovery() {
+        let rig = rig("continue-recover", ok_capture());
+        let folder = earlier(&rig, 20, 1);
+        rig.recorder.continue_recording().unwrap();
+        // The folder recovery skips: the meeting's, not a new one.
+        assert_eq!(rig.recorder.session_folder(), Some(folder.clone()));
+        push(SECOND);
+        let before = snapshot(&folder);
+        rig.recorder.recover_all();
+        assert_eq!(snapshot(&folder), before);
+        assert_eq!(rig.state(), "recording");
+        rig.stop(Reason::User);
+    }
+
+    #[test]
+    fn continue_flag_off_has_nothing_to_continue_and_no_part() {
+        let rig = rig_unflagged("continue-off");
+        let folder = earlier(&rig, 20, 1);
+        assert_eq!(
+            rig.recorder.continue_recording().unwrap_err().code,
+            "nothing_to_continue"
+        );
+        assert!(!folder.join(handoff::part_wav(2)).exists());
+        let status = serde_json::to_value(rig.recorder.status()).unwrap();
+        assert_eq!(status["part"], Value::Null);
     }
 }

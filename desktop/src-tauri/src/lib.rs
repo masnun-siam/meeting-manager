@@ -65,13 +65,13 @@ impl Mode {
     }
 }
 
-/// The builder for `mode`, without the single-instance plugin: `run` adds that, so tests can
-/// build several apps in one process.
-fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Builder<R> {
-    let builder = builder.setup(move |app| Ok(launch(app.handle(), mode)?));
-    match mode {
-        Mode::Off => builder,
-        Mode::On => notes::media::register(builder).invoke_handler(tauri::generate_handler![
+/// The command handler: every command of the PRD's API table, plus `extra` (commands that exist
+/// only in some builds). `generate_handler!` takes one static list, so each build's list is
+/// written out through this macro.
+macro_rules! handler {
+    ($($extra:ident),*) => {
+        tauri::generate_handler![
+            $(recorder::$extra,)*
             recorder::recorder_status,
             recorder::recorder_start,
             recorder::recorder_pause,
@@ -107,7 +107,21 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
             indicator::set_indicator_enabled,
             indicator::indicator_dismiss,
             indicator::window_open_main,
-        ]),
+        ]
+    };
+}
+
+/// The builder for `mode`, without the single-instance plugin: `run` adds that, so tests can
+/// build several apps in one process. `recorder_continue` exists only in a build with
+/// `FEATURE_CONTINUE_RECORDING=1` (continue-recording FR-14).
+fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Builder<R> {
+    let builder = builder.setup(move |app| Ok(launch(app.handle(), mode)?));
+    match mode {
+        Mode::Off => builder,
+        Mode::On if continue_enabled() => {
+            notes::media::register(builder).invoke_handler(handler!(recorder_continue))
+        }
+        Mode::On => notes::media::register(builder).invoke_handler(handler!()),
     }
 }
 
@@ -288,6 +302,9 @@ mod tests {
         "window_open_main",
     ];
 
+    /// Commands registered only in a build with `FEATURE_CONTINUE_RECORDING=1`.
+    const CONTINUE_COMMANDS: [&str; 1] = ["recorder_continue"];
+
     /// A started app on the mock runtime, its `Env` in a temp home removed on drop: invoking a
     /// command must never touch the real store, vault or recordings.
     struct Started {
@@ -407,7 +424,7 @@ mod tests {
             "/off.html"
         );
         assert!(app.try_state::<App>().is_none());
-        for command in COMMANDS {
+        for command in COMMANDS.into_iter().chain(CONTINUE_COMMANDS) {
             let error = invoke(&app, "off", command).unwrap_err();
             assert_eq!(error, format!("Command {command} not found"));
         }
@@ -428,6 +445,13 @@ mod tests {
             let reply = invoke(&app, "main", command);
             let not_found = Value::String(format!("Command {command} not found"));
             assert_ne!(reply.as_ref().err(), Some(&not_found), "{command}");
+        }
+        // Flag off, a continue command does not exist (continue-recording FR-14).
+        for command in CONTINUE_COMMANDS {
+            let reply = invoke(&app, "main", command);
+            let not_found = Value::String(format!("Command {command} not found"));
+            let registered = reply.as_ref().err() != Some(&not_found);
+            assert_eq!(registered, continue_enabled(), "{command}");
         }
         let unknown = invoke(&app, "main", "no_such_command").unwrap_err();
         assert_eq!(unknown, "Command no_such_command not found");
@@ -692,10 +716,12 @@ mod tests {
     #[test]
     fn the_ui_contract_names_the_same_commands() {
         let api = manifest_file("../src/api.ts");
-        for command in COMMANDS {
+        // The UI wraps every command whatever the flag; a flag-off build answers "not found".
+        let commands: Vec<_> = COMMANDS.into_iter().chain(CONTINUE_COMMANDS).collect();
+        for command in &commands {
             assert!(api.contains(&format!("'{command}'")), "{command}");
         }
-        assert_eq!(api.matches("call<").count() - 1, COMMANDS.len());
+        assert_eq!(api.matches("call<").count() - 1, commands.len());
     }
 
     #[test]
