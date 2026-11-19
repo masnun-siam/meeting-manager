@@ -15,7 +15,7 @@ use crate::config::{Config, check_recording};
 use crate::context_block::{self, Input};
 use crate::deepgram::Deepgram;
 use crate::jobs::{Job, JobStore, Stage, new_job_id, now_utc, write_atomic};
-use crate::lock::Lock;
+use crate::lock::{self, Lock};
 use crate::meta::{Meta, Run, Speaker, recorded_at_for};
 use crate::store::{self, EventLink, Row, RunResult, RunStart, Source, Status, Store};
 use crate::vault::{self, CalendarOutcome, Note};
@@ -38,6 +38,9 @@ pub struct Pipeline {
     pub store_path: PathBuf,
     /// `FEATURE_CONTINUE_RECORDING`: off, parts are never looked for.
     pub continue_recording: bool,
+    /// How long `--continue` waits for the earlier run after SIGTERM, and again after
+    /// SIGKILL.
+    pub stop_grace: Duration,
     /// The secret iCal address. Called only for a context with a meeting ID.
     pub calendar: fn() -> anyhow::Result<Option<String>>,
     pub calendar_policy: Policy,
@@ -217,12 +220,15 @@ impl State<'_> {
 
 impl Pipeline {
     /// Runs the pipeline. It does not notify; the caller does, so tests stay quiet.
+    /// `continuing` (`--continue`, only with `continue_recording`) first stops a run of this
+    /// recording still holding its lock and reuses the meeting's latest job id.
     pub fn run(
         &self,
         recording: &Path,
         retranscribe: bool,
         language: Option<Language>,
         job_id: Option<String>,
+        continuing: bool,
         out: &mut impl Write,
     ) -> Ending {
         let recording = match check_recording(&self.config.recordings_dir, recording) {
@@ -235,6 +241,18 @@ impl Pipeline {
             }
         };
         let recording = recording.as_path();
+        let continuing = continuing && self.continue_recording;
+        // Before `start_job`, so the earlier run cannot overwrite the queued job.
+        if continuing
+            && let Err(error) =
+                lock::stop_holder(&Lock::path_for(recording), recording, self.stop_grace)
+        {
+            return Ending::Failed {
+                stage: Stage::Queued,
+                error,
+            };
+        }
+        let job_id = job_id.or_else(|| continuing.then(|| self.latest_job_id(recording)).flatten());
         let job = match self.start_job(recording, job_id) {
             Ok(job) => job,
             Err(error) => {
@@ -270,6 +288,18 @@ impl Pipeline {
             .inspect_err(|e| tracing::warn!("store open failed: {}", store::error_kind(e)))
             .ok()
             .map(|store| Track { store, run: None })
+    }
+
+    /// The id of the newest job of `recording` (canonical), so a continuation keeps one row
+    /// per meeting.
+    fn latest_job_id(&self, recording: &Path) -> Option<String> {
+        self.jobs
+            .list(usize::MAX)
+            .inspect_err(|e| tracing::warn!("jobs list failed: {e:#}"))
+            .ok()?
+            .into_iter()
+            .find(|job| job.recording == recording)
+            .map(|job| job.job_id)
     }
 
     /// The host's queued job (keeping its `started_at`), or a new one.
@@ -811,6 +841,7 @@ mod tests {
             desktop: false,
             store_path: root.join("store/notes.sqlite"),
             continue_recording: false,
+            stop_grace: Duration::from_millis(300),
             calendar: stored_address,
             calendar_policy: Policy {
                 https_only: false,
@@ -840,6 +871,22 @@ mod tests {
                 false,
                 language,
                 job_id.map(String::from),
+                false,
+                &mut out,
+            );
+            (ending, String::from_utf8(out).unwrap())
+        }
+
+        /// `run` with `--continue`, the gate on.
+        fn run_continue(&mut self, job_id: Option<&str>) -> (Ending, String) {
+            self.pipeline.continue_recording = true;
+            let mut out = Vec::new();
+            let ending = self.pipeline.run(
+                &self.file("recording.webm"),
+                false,
+                Some(Language::En),
+                job_id.map(String::from),
+                true,
                 &mut out,
             );
             (ending, String::from_utf8(out).unwrap())
@@ -954,7 +1001,7 @@ mod tests {
         let mut out = Vec::new();
         let ending = env
             .pipeline
-            .run(&path, false, Some(Language::En), None, &mut out);
+            .run(&path, false, Some(Language::En), None, false, &mut out);
         assert_eq!(done(ending), "Standup");
 
         let folder = env.rec.join("meeting-2026-10-18_0930");
@@ -1155,6 +1202,150 @@ mod tests {
         assert!(!env.file("meta.json").exists());
     }
 
+    fn earlier_job(env: &Env, id: &str) -> Job {
+        let job = Job {
+            job_id: id.into(),
+            recording: env.file("recording.webm"),
+            title: Some("Standup".into()),
+            stage: Stage::Done,
+            error: None,
+            started_at: "2026-10-19T14:30:00Z".into(),
+            updated_at: "2026-10-19T14:40:00Z".into(),
+            summary_path: None,
+        };
+        env.pipeline.jobs.write(&job).unwrap();
+        job
+    }
+
+    fn sleeper() -> std::process::Child {
+        Command::new("/bin/sleep").arg("60").spawn().unwrap()
+    }
+
+    fn alive(pid: u32) -> bool {
+        Command::new("/bin/ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .is_ok_and(|o| o.status.success() && !o.stdout.starts_with(b"Z"))
+    }
+
+    #[test]
+    fn continue_reuses_the_latest_job_id() {
+        let mut env = setup("pipe-continue-reuse", vec![(200, EN)]);
+        let other = Job {
+            job_id: "other".into(),
+            recording: env.rec.join("elsewhere/recording.webm"),
+            started_at: "2026-10-20T09:00:00Z".into(),
+            ..earlier_job(&env, "other")
+        };
+        env.pipeline.jobs.write(&other).unwrap();
+        earlier_job(&env, "first");
+        done(env.run_continue(None).0);
+        let jobs = env.pipeline.jobs.list(10).unwrap();
+        let mine: Vec<_> = jobs.iter().filter(|j| j.job_id != "other").collect();
+        assert_eq!(mine.len(), 1, "{jobs:?}");
+        assert_eq!(mine[0].job_id, "first");
+        assert_eq!(mine[0].stage, Stage::Done);
+        assert_eq!(mine[0].started_at, "2026-10-19T14:30:00Z");
+        let runs = env.meta().runs;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].job_id, "first");
+    }
+
+    #[test]
+    fn continue_with_a_job_id_uses_it() {
+        let mut env = setup("pipe-continue-id", vec![(200, EN)]);
+        earlier_job(&env, "first");
+        done(env.run_continue(Some("given")).0);
+        let mut ids: Vec<_> = env
+            .pipeline
+            .jobs
+            .list(10)
+            .unwrap()
+            .into_iter()
+            .map(|j| j.job_id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["first", "given"]);
+    }
+
+    #[test]
+    fn continue_without_an_earlier_job_creates_one() {
+        let mut env = setup("pipe-continue-new", vec![(200, EN)]);
+        done(env.run_continue(None).0);
+        assert_eq!(env.job().stage, Stage::Done);
+    }
+
+    #[test]
+    fn continue_with_flag_off_never_signals_and_refuses_a_held_lock() {
+        let env = setup("pipe-continue-off", vec![]);
+        let mut sleep = sleeper();
+        fs::write(env.file("lock"), sleep.id().to_string()).unwrap();
+        earlier_job(&env, "first");
+        let mut out = Vec::new();
+        let ending = env.pipeline.run(
+            &env.file("recording.webm"),
+            false,
+            Some(Language::En),
+            None,
+            true,
+            &mut out,
+        );
+        let survived = alive(sleep.id());
+        sleep.kill().unwrap();
+        sleep.wait().unwrap();
+        let (stage, error) = failed(ending);
+        assert_eq!(stage, Stage::Queued);
+        assert!(error.contains("already processing"), "{error}");
+        assert!(survived);
+        assert_eq!(
+            fs::read_to_string(env.file("lock")).unwrap(),
+            sleep.id().to_string()
+        );
+        assert_eq!(env.pipeline.jobs.list(10).unwrap().len(), 2, "no reuse");
+    }
+
+    #[test]
+    fn continue_takes_over_a_stale_lock_and_runs() {
+        let mut env = setup("pipe-continue-stale", vec![(200, EN)]);
+        let mut sleep = sleeper();
+        fs::write(env.file("lock"), sleep.id().to_string()).unwrap();
+        let ending = env.run_continue(None).0;
+        let survived = alive(sleep.id());
+        sleep.kill().unwrap();
+        sleep.wait().unwrap();
+        assert_eq!(done(ending), "Standup");
+        assert!(survived, "an unrelated process was signalled");
+        assert!(!env.file("lock").exists());
+    }
+
+    #[test]
+    fn continue_stops_a_running_earlier_run_and_finishes() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::process::CommandExt;
+        let mut env = setup("pipe-continue-stop", vec![(200, EN)]);
+        let meeting = env.tools.join("meeting");
+        fs::write(&meeting, "#!/bin/sh\n/bin/sleep 60\n").unwrap();
+        fs::set_permissions(&meeting, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut earlier = Command::new(&meeting)
+            .arg("process")
+            .arg(env.file("recording.webm"))
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = earlier.id();
+        let reaper = std::thread::spawn(move || earlier.wait());
+        // Wait for the shell to start, so `ps` shows the stub's command line.
+        std::thread::sleep(Duration::from_millis(200));
+        fs::write(env.file("lock"), pid.to_string()).unwrap();
+        earlier_job(&env, "first");
+        let (ending, out) = env.run_continue(None);
+        assert_eq!(done(ending), "Standup");
+        assert!(out.contains("done: "), "{out}");
+        assert!(!reaper.join().unwrap().unwrap().success());
+        assert_eq!(env.job().job_id, "first");
+        assert!(!env.file("lock").exists());
+    }
+
     #[test]
     fn no_language_anywhere_fails_with_the_plan_error() {
         let env = setup("pipe-nolang", vec![]);
@@ -1183,7 +1374,7 @@ mod tests {
         let mut out = Vec::new();
         let ending = env
             .pipeline
-            .run(&flat, false, Some(Language::En), None, &mut out);
+            .run(&flat, false, Some(Language::En), None, false, &mut out);
         let (stage, error) = failed(ending);
         assert_eq!(stage, Stage::Queued);
         assert!(error.contains("is not in its own folder"), "{error}");
@@ -1202,6 +1393,7 @@ mod tests {
             false,
             Some(Language::En),
             None,
+            false,
             &mut out,
         );
         assert_eq!(done(ending), "Standup");
@@ -1550,7 +1742,7 @@ mod tests {
         let mut out = Vec::new();
         done(
             env.pipeline
-                .run(&path, false, Some(Language::En), None, &mut out),
+                .run(&path, false, Some(Language::En), None, false, &mut out),
         );
         let row = env.store().get_by_path(&path).unwrap().unwrap();
         assert_eq!(row.source, Source::Desktop);
@@ -1583,7 +1775,7 @@ mod tests {
         let (ending, during) = std::thread::scope(|scope| {
             let run = scope.spawn(|| {
                 let mut out = Vec::new();
-                pipeline.run(&recording, false, None, None, &mut out)
+                pipeline.run(&recording, false, None, None, false, &mut out)
             });
             let deadline = Instant::now() + Duration::from_secs(5);
             while !env.tools.join("stdin.txt").exists() && Instant::now() < deadline {
@@ -1696,7 +1888,7 @@ mod tests {
         let mut out = Vec::new();
         failed(
             env.pipeline
-                .run(&flat, false, Some(Language::En), None, &mut out),
+                .run(&flat, false, Some(Language::En), None, false, &mut out),
         );
         fs::remove_file(env.file("recording.webm")).unwrap();
         failed(env.run(Some(Language::En), None).0);

@@ -19,8 +19,33 @@ pub fn process_detached(
     language: Option<Language>,
     job_id: Option<&str>,
 ) -> io::Result<()> {
+    spawn(exe, recording, language, job_id, false)
+}
+
+/// As `process_detached`, with `--continue` right after the recording: the run stops an
+/// earlier run of the meeting and reuses its job id. Same shape as `process_detached`, so a
+/// caller can inject either.
+pub fn continue_detached(
+    exe: &Path,
+    recording: &Path,
+    language: Option<Language>,
+    job_id: Option<&str>,
+) -> io::Result<()> {
+    spawn(exe, recording, language, job_id, true)
+}
+
+fn spawn(
+    exe: &Path,
+    recording: &Path,
+    language: Option<Language>,
+    job_id: Option<&str>,
+    continuing: bool,
+) -> io::Result<()> {
     let mut command = Command::new(exe);
     command.arg("process").arg(recording);
+    if continuing {
+        command.arg("--continue");
+    }
     match language {
         Some(Language::Bn) => command.args(["--language", "bn"]),
         Some(Language::En) => command.args(["--language", "en"]),
@@ -95,10 +120,21 @@ echo $$ > "$d/pid"
         stdio: Vec<String>,
     }
 
+    type SpawnFn = fn(&Path, &Path, Option<Language>, Option<&str>) -> io::Result<()>;
+
     fn spawn_and_wait(name: &str, language: Option<Language>, job_id: Option<&str>) -> Seen {
+        spawn_with(process_detached, name, language, job_id)
+    }
+
+    fn spawn_with(
+        spawn: SpawnFn,
+        name: &str,
+        language: Option<Language>,
+        job_id: Option<&str>,
+    ) -> Seen {
         let dir = temp(name);
         let exe = stub(&dir);
-        process_detached(
+        spawn(
             &exe,
             Path::new("/r/my meeting/recording.m4a"),
             language,
@@ -155,6 +191,49 @@ echo $$ > "$d/pid"
     fn process_detached_with_a_missing_exe_is_an_error() {
         let dir = temp("missing");
         let result = process_detached(
+            &dir.join("nope"),
+            Path::new("/r/m/recording.m4a"),
+            None,
+            None,
+        );
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn continue_detached_passes_the_arguments_in_order() {
+        const REC: &str = "/r/my meeting/recording.m4a";
+        let seen = |name, language, job_id| spawn_with(continue_detached, name, language, job_id);
+        let all = seen("c-bn-id", Some(Language::Bn), Some("j-1"));
+        assert_eq!(
+            all.args,
+            [
+                "process",
+                REC,
+                "--continue",
+                "--language",
+                "bn",
+                "--job-id",
+                "j-1"
+            ]
+        );
+        assert_eq!(all.pgid, all.pid);
+        let null = fs::metadata("/dev/null").unwrap().rdev().to_string();
+        assert_eq!(all.stdio, [null.clone(), null.clone(), null]);
+        assert_eq!(
+            seen("c-en", Some(Language::En), None).args,
+            ["process", REC, "--continue", "--language", "en"]
+        );
+        assert_eq!(
+            seen("c-bare", None, None).args,
+            ["process", REC, "--continue"]
+        );
+    }
+
+    #[test]
+    fn continue_detached_with_a_missing_exe_is_an_error() {
+        let dir = temp("c-missing");
+        let result = continue_detached(
             &dir.join("nope"),
             Path::new("/r/m/recording.m4a"),
             None,
