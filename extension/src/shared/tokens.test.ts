@@ -104,6 +104,10 @@ describe('tokens.css', () => {
     expect(block?.[1]).toContain('transition: none !important');
   });
 
+  it('draws the keyboard focus ring from the focus-ring token', () => {
+    expect(css).toMatch(/:focus-visible\s*\{[^}]*outline: 2px solid var\(--focus-ring\);/);
+  });
+
   it('ends both font stacks with the system font', () => {
     const tokens = lightPalette();
     expect(tokens['font-body']).toMatch(/system-ui, sans-serif$/);

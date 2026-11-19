@@ -22,6 +22,14 @@ describe('Popup', () => {
     vi.unstubAllGlobals();
   });
 
+  it('shows the wordmark with its dot hidden from screen readers', () => {
+    render(<Popup />);
+
+    const wordmark = screen.getByText('meeting', { exact: false, selector: 'span' });
+    expect(wordmark).toHaveTextContent('meeting.');
+    expect(wordmark.querySelector('[aria-hidden="true"]')).toHaveTextContent('.');
+  });
+
   it('opens on the Record tab', () => {
     render(<Popup />);
 
