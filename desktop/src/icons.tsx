@@ -141,6 +141,13 @@ export const AlertIcon = (p: P) => (
   </Icon>
 );
 
+export const CloseIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M6.5 6.5l11 11" />
+    <path d="M17.5 6.5l-11 11" />
+  </Icon>
+);
+
 export const LockIcon = (p: P) => (
   <Icon {...p}>
     <rect x="5" y="10.5" width="14" height="10" rx="2" />

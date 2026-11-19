@@ -1,4 +1,6 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../api';
@@ -249,17 +251,18 @@ describe('RecordingBar', () => {
   describe('start error (quick-record FR-5)', () => {
     const MIC = 'Allow Meeting in System Settings › Privacy & Security › Microphone';
     const withError = () => statusReply({ start_error: { code: 'permission_mic', message: MIC } });
-    const dismiss = () => screen.getByRole('button', { name: 'Dismiss' });
+    const dismiss = () => within(screen.getByRole('alert')).getByRole('button', { name: 'Dismiss message' });
 
-    it('shows the message verbatim in an alert with Dismiss', async () => {
+    it('shows the message verbatim in an alert with its ×, and no Dismiss button', async () => {
       recorderStatus.mockResolvedValue(withError());
       setup();
 
       expect(await screen.findByRole('alert')).toHaveTextContent(MIC);
       expect(dismiss()).toBeEnabled();
+      expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
     });
 
-    it('Dismiss clears it and reads the status again at once', async () => {
+    it('× clears it and reads the status again at once', async () => {
       recorderStatus.mockResolvedValue(withError());
       vi.mocked(api.recorderDismissStartError).mockResolvedValue({ ok: true });
       const user = setup();
@@ -276,7 +279,7 @@ describe('RecordingBar', () => {
       expect(recorderStatus).toHaveBeenCalledTimes(polls + 1);
     });
 
-    it('a failed Dismiss keeps the alert and shows why in the message line', async () => {
+    it('a failed × keeps the alert and shows why in the message line', async () => {
       recorderStatus.mockResolvedValue(withError());
       vi.mocked(api.recorderDismissStartError).mockRejectedValue(new Error('ipc closed'));
       const user = setup();
@@ -303,7 +306,203 @@ describe('RecordingBar', () => {
       await waitFor(() => expect(start()).toBeEnabled());
 
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Dismiss message' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('dismiss messages (continue-recording FR-1, FR-3)', () => {
+    const saved = { kind: 'saved', message: 'Saved, sent for processing', folder: null } as const;
+    const failed = { kind: 'error', message: 'ffmpeg: invalid data', folder: '/r/meeting-1' } as const;
+    const MIC = 'Allow Meeting in System Settings › Privacy & Security › Microphone';
+    const closeButtons = () => screen.queryAllByRole('button', { name: 'Dismiss message' });
+    const closeOf = (text: string) => {
+      const line = screen.getByText(text).parentElement as HTMLElement;
+      return within(line).getByRole('button', { name: 'Dismiss message' });
+    };
+    const stopFails = (message: string) =>
+      vi.mocked(api.recorderStop).mockResolvedValue({ ok: false, code: 'not_recording', message });
+
+    it('every message line has a × named "Dismiss message"; the saving line does not', async () => {
+      recorderStatus.mockResolvedValue(
+        statusReply({ state: 'saving', notice: saved, start_error: { code: 'permission_mic', message: MIC } }),
+      );
+      setup();
+
+      await screen.findByText('Saved, sent for processing');
+      expect(closeOf(MIC)).toBeInTheDocument();
+      expect(closeOf('Saved, sent for processing')).toBeInTheDocument();
+      expect(closeButtons()).toHaveLength(2);
+      expect(within(screen.getByText('Saving the recording…')).queryByRole('button')).not.toBeInTheDocument();
+    });
+
+    it('notice × calls recorderDismissNotice, reads again, and a later poll does not bring it back', async () => {
+      recorderStatus.mockResolvedValue(statusReply({ notice: saved }));
+      const user = setup();
+      await screen.findByText('Saved, sent for processing');
+      const polls = recorderStatus.mock.calls.length;
+
+      recorderStatus.mockResolvedValue(statusReply());
+      await user.click(closeOf('Saved, sent for processing'));
+      await act(async () => {});
+
+      expect(api.recorderDismissNotice).toHaveBeenCalledOnce();
+      expect(recorderStatus).toHaveBeenCalledTimes(polls + 1);
+      expect(screen.queryByText('Saved, sent for processing')).not.toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 2));
+      expect(screen.queryByText('Saved, sent for processing')).not.toBeInTheDocument();
+      expect(api.recorderDismissStartError).not.toHaveBeenCalled();
+    });
+
+    it('an error notice has Retry and ×; × removes both', async () => {
+      recorderStatus.mockResolvedValue(statusReply({ notice: failed }));
+      const user = setup();
+      await screen.findByText('ffmpeg: invalid data');
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+
+      recorderStatus.mockResolvedValue(statusReply());
+      await user.click(closeOf('ffmpeg: invalid data'));
+      await act(async () => {});
+
+      expect(screen.queryByText('ffmpeg: invalid data')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(api.recorderRetry).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'an error reply',
+        () =>
+          vi.mocked(api.recorderDismissNotice).mockResolvedValue({ ok: false, code: 'internal', message: 'no lock' }),
+        'no lock',
+      ],
+      [
+        'a rejected call',
+        () => vi.mocked(api.recorderDismissNotice).mockRejectedValue(new Error('ipc closed')),
+        'Could not reach the Meeting app: ipc closed',
+      ],
+    ])('a failed notice × (%s) keeps the notice and shows why', async (_, fail, why) => {
+      fail();
+      recorderStatus.mockResolvedValue(statusReply({ notice: failed }));
+      const user = setup();
+      await screen.findByText('ffmpeg: invalid data');
+
+      await user.click(closeOf('ffmpeg: invalid data'));
+
+      expect(status()).toHaveTextContent(why);
+      expect(screen.getByText('ffmpeg: invalid data')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    });
+
+    it('closing the notice leaves the start error and its ×', async () => {
+      recorderStatus.mockResolvedValue(
+        statusReply({ notice: saved, start_error: { code: 'permission_mic', message: MIC } }),
+      );
+      const user = setup();
+      await screen.findByText('Saved, sent for processing');
+
+      recorderStatus.mockResolvedValue(statusReply({ start_error: { code: 'permission_mic', message: MIC } }));
+      await user.click(closeOf('Saved, sent for processing'));
+      await act(async () => {});
+
+      expect(screen.queryByText('Saved, sent for processing')).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(MIC);
+      expect(closeOf(MIC)).toBeInTheDocument();
+      expect(api.recorderDismissStartError).not.toHaveBeenCalled();
+    });
+
+    it('command error × hides it; a new failure with the same text shows it again', async () => {
+      recorderStatus.mockResolvedValue(statusReply({ state: 'recording' }));
+      stopFails('Nothing is recording');
+      const user = setup();
+
+      await user.click(await screen.findByRole('button', { name: 'Stop' }));
+      await user.click(closeOf('Nothing is recording'));
+      expect(status()).not.toHaveTextContent('Nothing is recording');
+
+      await user.click(screen.getByRole('button', { name: 'Stop' }));
+      expect(status()).toHaveTextContent('Nothing is recording');
+      expect(api.recorderStop).toHaveBeenCalledTimes(2);
+      expect(api.recorderDismissNotice).not.toHaveBeenCalled();
+      expect(api.recorderDismissStartError).not.toHaveBeenCalled();
+    });
+
+    it('connection error × hides it through the outage; it shows again after a good poll then a failure', async () => {
+      recorderStatus.mockResolvedValueOnce(statusReply()).mockRejectedValue(new Error('ipc closed'));
+      const user = setup();
+      const text = 'Could not reach the Meeting app: ipc closed';
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+      expect(status()).toHaveTextContent(text);
+
+      await user.click(closeOf(text));
+      expect(status()).not.toHaveTextContent(text);
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 2));
+      expect(status()).not.toHaveTextContent(text);
+
+      recorderStatus.mockResolvedValueOnce(statusReply()).mockRejectedValue(new Error('ipc closed'));
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+      expect(status()).toHaveTextContent(text);
+      expect(api.recorderDismissNotice).not.toHaveBeenCalled();
+      expect(api.recorderDismissStartError).not.toHaveBeenCalled();
+    });
+
+    it('keyboard: Tab reaches each ×, Enter and Space close; focus goes to the next × and then to Start', async () => {
+      recorderStatus.mockResolvedValue(
+        statusReply({ notice: saved, start_error: { code: 'permission_mic', message: MIC } }),
+      );
+      vi.mocked(api.recorderDismissStartError).mockResolvedValue({ ok: true });
+      const user = setup();
+      await screen.findByText('Saved, sent for processing');
+      await waitFor(() => expect(start()).toBeEnabled());
+
+      const first = closeOf(MIC);
+      while (document.activeElement !== first) await user.tab();
+      expect(first).toHaveAttribute('type', 'button');
+
+      recorderStatus.mockResolvedValue(statusReply({ notice: saved }));
+      await user.keyboard('{Enter}');
+      await act(async () => {});
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(closeOf('Saved, sent for processing')).toHaveFocus();
+
+      recorderStatus.mockResolvedValue(statusReply());
+      await user.keyboard(' ');
+      await act(async () => {});
+      expect(screen.queryByText('Saved, sent for processing')).not.toBeInTheDocument();
+      expect(start()).toHaveFocus();
+      expect(document.body).not.toHaveFocus();
+    });
+
+    it('while recording, the last × hands focus to Pause', async () => {
+      recorderStatus.mockResolvedValue(statusReply({ state: 'recording' }));
+      stopFails('Nothing is recording');
+      const user = setup();
+
+      await user.click(await screen.findByRole('button', { name: 'Stop' }));
+      await user.click(closeOf('Nothing is recording'));
+      expect(screen.getByRole('button', { name: 'Pause' })).toHaveFocus();
+    });
+
+    it('a failed notice × keeps focus on it', async () => {
+      vi.mocked(api.recorderDismissNotice).mockRejectedValue(new Error('ipc closed'));
+      recorderStatus.mockResolvedValue(statusReply({ notice: saved }));
+      const user = setup();
+      await screen.findByText('Saved, sent for processing');
+
+      const close = closeOf('Saved, sent for processing');
+      await user.click(close);
+      expect(close).toHaveFocus();
+    });
+
+    it('the × is at least 24 x 24 px and Start keeps its focus ring', () => {
+      const css = readFileSync(join(import.meta.dirname, 'RecordingBar.module.css'), 'utf8');
+      const rule = css.slice(css.indexOf('.dismiss {'), css.indexOf('}', css.indexOf('.dismiss {')));
+      expect(rule).toMatch(/min-width: 24px/);
+      expect(rule).toMatch(/min-height: 24px/);
+      expect(rule).not.toMatch(/outline: none/);
+      // Start's own shadow must not hide the focus ring a closed last line sends it.
+      expect(css).toMatch(/\.start:focus-visible \{\s*box-shadow: var\(--focus\);/);
     });
   });
 });

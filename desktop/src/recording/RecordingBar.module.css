@@ -124,6 +124,11 @@
   box-shadow: 0 1px 2px rgb(229 72 77 / 30%);
 }
 
+/* Its own shadow would hide the global focus ring, where FR-3 sends focus after the last ×. */
+.start:focus-visible {
+  box-shadow: var(--focus);
+}
+
 .messages:empty {
   display: none;
 }
@@ -147,18 +152,41 @@
   color: var(--record-text);
 }
 
-.startError {
+/* A message with its × at the end (continue-recording FR-1). */
+.message {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+  padding-block: 2px;
+  padding-right: 2px;
+}
+
+.message p {
+  flex: 1;
+  min-width: 0;
+  padding-block: 2px;
+  overflow-wrap: anywhere;
+}
+
+.startError {
   margin-top: var(--space-2);
 }
 
-.startError p {
-  min-width: 0;
-  overflow-wrap: anywhere;
+/* FR-3: icon-only, at least 24 x 24 px; the focus ring is the global :focus-visible one. */
+.dismiss {
+  flex: none;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: inherit;
+}
+
+.dismiss:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
 .info {
