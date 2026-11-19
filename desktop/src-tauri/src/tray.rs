@@ -296,9 +296,11 @@ fn tick<R: Runtime>(tray: Arc<Tray<R>>) {
     let spawned = thread::Builder::new()
         .name("tray-timer".into())
         .spawn(move || {
-            for second in 1u64.. {
+            let mut second: u64 = 0;
+            loop {
                 thread::sleep(Duration::from_secs(1));
-                if tray.continue_last.is_some() && second % CONTINUE_CHECK_EVERY_S == 0 {
+                second = second.wrapping_add(1);
+                if tray.continue_last.is_some() && second.is_multiple_of(CONTINUE_CHECK_EVERY_S) {
                     let shown = tray.continue_shown.load(Ordering::Relaxed);
                     if continue_stale(&tray.recorder.status(), shown) {
                         render(&tray);
