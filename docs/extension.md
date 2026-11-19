@@ -28,7 +28,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `offscreen` | `chrome.offscreen.createDocument` / `closeDocument` |
 | `downloads` | Saving `Meetings/<name>/recording.webm` in `save.ts` |
 | `nativeMessaging` | Talking to the Rust host, see [features/native-messaging.md](features/native-messaging.md) |
-| `storage` | `chrome.storage.session` (status) and `chrome.storage.local` (language) |
+| `storage` | `chrome.storage.session` (status) and `chrome.storage.local` (language, last recording) |
 
 ## Directory map
 
@@ -48,7 +48,8 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/popup/JobsTab.tsx`, `useJobs.ts` | Jobs UI | see [features/native-messaging.md](features/native-messaging.md) |
 | `src/permission/MicPermission.tsx` | Mic grant page | `MicPermission` |
 | `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock`, `MEET_CODE` |
-| `src/shared/flags.ts` | Build-time flag, defined in `vite.config.ts` | `meetingContextEnabled` |
+| `src/shared/flags.ts` | Build-time flags, defined in `vite.config.ts` from `FEATURE_MEETING_CONTEXT` and `FEATURE_CONTINUE_RECORDING` (`flagFromEnv`) | `meetingContextEnabled`, `continueRecordingEnabled` |
+| `src/shared/lastRecording.ts` | Last saved recording (flag on) and the pure can-continue rule | `canContinue`, `readLastRecording`, `writeLastRecording`, `clearLastRecording`, `lastRecordingExists`, `folderOf`, `CONTINUE_WINDOW_MS`, `LAST_RECORDING_KEY` |
 | `src/content/meet.ts` | Meet content script (flag-on build only): 1 s reads, 10 s batches, 60 s give-up, `context_hello` resume | `chrome.runtime.onMessage` listener |
 | `src/content/meetReader.ts` | Pure Meet page reads | `readRoster`, `readTitle`, `readSpeaking`, `diffSpeaking` |
 | `src/shared/messages.ts` | All cross-context types | `ContentCommand`, `ContentEvent`, `PopupCommand`, `OffscreenCommand`, `OffscreenEvent`, `RecorderStatus`, `Notice`, `RECORDER_STATUS_KEY` |
@@ -95,6 +96,7 @@ flowchart LR
 | `chrome.storage.session` | `RECORDER_STATUS_KEY` (`'recorder'`) | `RecorderStatus` (state, language, micIncluded, notice, tabId) | SW only |
 | `chrome.storage.session` | `MEETING_CONTEXT_KEY` (`'meeting_context'`), flag on only | `MeetingContextState`: tab identity, recording segments, title, participants, speaking intervals (recording-clock ms), `truncated`, FR-5 `capture` and `reloadHint`; written at Start, merged per batch, sent with `process`, cleared after hand-off | SW only |
 | `chrome.storage.local` | `language` | Last chosen `'bn'` or `'en'` | `RecordTab`; read by `recover.ts` |
+| `chrome.storage.local` | `LAST_RECORDING_KEY` (`'last_recording'`), `FEATURE_CONTINUE_RECORDING` only | `LastRecording`: `download_id`, `path`, `folder`, `ext`, `recorded_ms`, `language`, `stopped_at`, `stop_reason` (`null` when recovered), `parts`; survives a browser restart | Written by `save.ts` after a completed download (stops and recovery); removed by Start |
 | Origin-private file system | `recordings/<startedAt>.webm` | Chunks of an in-progress or unsaved recording | Offscreen (`appendChunk`); SW deletes |
 
 - Module variables in the SW are not state. Every handler calls `readStatus()` first.
