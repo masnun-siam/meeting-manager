@@ -1052,7 +1052,7 @@ fn next_part(folder: &Path, recordings: &Path, last: &LastRecording) -> Part {
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut n = last.parts.saturating_add(1).max(2);
     loop {
-        let link = recordings.join(format!(".continuing-{name}-part-{n}.partial.wav"));
+        let link = recordings.join(handoff::part_link(&name, n));
         let taken = [
             folder.join(handoff::part_wav(n)),
             folder.join(handoff::part_m4a(n)),
@@ -1072,7 +1072,7 @@ fn next_part(folder: &Path, recordings: &Path, last: &LastRecording) -> Part {
 }
 
 /// Whether `a` and `b` name the same file (hard links of one inode).
-fn same_file(a: &Path, b: &Path) -> bool {
+pub(super) fn same_file(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     match (fs::metadata(a), fs::metadata(b)) {
         (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
@@ -2887,11 +2887,25 @@ pub(crate) mod tests {
         // The folder recovery skips: the meeting's, not a new one.
         assert_eq!(rig.recorder.session_folder(), Some(folder.clone()));
         push(SECOND);
-        let before = snapshot(&folder);
+        // The part's WAV is still being written by the writer thread: its name is compared, not
+        // its bytes.
+        let settled = || {
+            let mut files = snapshot(&folder);
+            for (name, bytes) in &mut files {
+                if *name == handoff::part_wav(2) {
+                    bytes.clear();
+                }
+            }
+            files
+        };
+        let before = settled();
         rig.recorder.recover_all();
-        assert_eq!(snapshot(&folder), before);
+        assert_eq!(settled(), before);
         assert_eq!(rig.state(), "recording");
-        rig.stop(Reason::User);
+        let status = rig.stop(Reason::User);
+        // Saved as the part by the stop, not by recovery.
+        assert_eq!(status.notice.unwrap().kind, Kind::Saved);
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
     }
 
     #[test]

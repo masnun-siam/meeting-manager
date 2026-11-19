@@ -111,6 +111,12 @@ pub fn part_wav(n: u32) -> String {
     format!("recording-part-{n}.partial.wav")
 }
 
+/// The hard link of continued part `n`'s WAV, directly under the recordings folder, while the
+/// part of meeting folder `meeting` records (D17): `.continuing-<meeting>-part-<n>.partial.wav`.
+pub fn part_link(meeting: &str, n: u32) -> String {
+    format!(".continuing-{meeting}-part-{n}.partial.wav")
+}
+
 /// What continued part `n`'s WAV is converted to.
 pub fn part_m4a(n: u32) -> String {
     format!("recording-part-{n}.m4a")
@@ -141,19 +147,19 @@ pub fn finish_part(
     frames: u64,
     prefix: &str,
 ) -> Notice {
-    convert_and_hand_off(
-        tools,
-        folder,
-        &part_wav(n),
-        &part_m4a(n),
-        language,
-        frames,
-        prefix,
-    )
+    match convert_part(tools, folder, n, prefix) {
+        Ok(()) => hand_off(tools, folder, language, frames, prefix),
+        Err(notice) => notice,
+    }
 }
 
-/// Converts `folder/wav` to `folder/m4a`, deletes the WAV, and spawns the tool on the meeting's
-/// `recording.m4a` when `frames` reach `MIN_PROCESS_S`.
+/// Converts continued part `n`'s WAV to its m4a and deletes the WAV, without a hand-off: launch
+/// recovery converts every leftover part of a meeting, then hands it off once.
+pub fn convert_part(tools: &Tools, folder: &Path, n: u32, prefix: &str) -> Result<(), Notice> {
+    convert(tools, folder, &part_wav(n), &part_m4a(n), prefix)
+}
+
+/// Converts `folder/wav` to `folder/m4a`, deletes the WAV, and hands off.
 fn convert_and_hand_off(
     tools: &Tools,
     folder: &Path,
@@ -163,15 +169,36 @@ fn convert_and_hand_off(
     frames: u64,
     prefix: &str,
 ) -> Notice {
+    match convert(tools, folder, wav, m4a, prefix) {
+        Ok(()) => hand_off(tools, folder, language, frames, prefix),
+        Err(notice) => notice,
+    }
+}
+
+/// Converts `folder/wav` to `folder/m4a` and deletes the WAV. A failure keeps the WAV and is the
+/// notice naming the folder for a retry.
+fn convert(tools: &Tools, folder: &Path, wav: &str, m4a: &str, prefix: &str) -> Result<(), Notice> {
     let (wav, m4a) = (folder.join(wav), folder.join(m4a));
     if let Err(e) = convert::to_m4a(&tools.ffmpeg, &wav, &m4a) {
         tracing::warn!("recorder: conversion failed; the WAV is kept");
-        return Notice::retry(format!("{prefix}{e:#}"), folder);
+        return Err(Notice::retry(format!("{prefix}{e:#}"), folder));
     }
     if let Err(e) = fs::remove_file(&wav) {
         // The m4a exists, so nothing will convert this folder again.
         tracing::warn!("recorder: the WAV was not deleted: {}", e.kind());
     }
+    Ok(())
+}
+
+/// Spawns the tool on the meeting's `recording.m4a` when `frames` (the meeting's total) reach
+/// `MIN_PROCESS_S`; the notice says what happened.
+pub fn hand_off(
+    tools: &Tools,
+    folder: &Path,
+    language: Language,
+    frames: u64,
+    prefix: &str,
+) -> Notice {
     // A prefixed message is two sentences, so the second ends with a full stop too.
     let message = |text: &str| match prefix {
         "" => text.to_string(),

@@ -1,7 +1,11 @@
-//! Crash recovery on launch and `recorder_retry` (PRD desktop-app FR-7). A meeting folder directly
-//! inside `recordings_dir` that holds `recording.partial.wav` and no other `recording.<ext>` is a
-//! recording a crash, a failed conversion or a full disk left behind: its WAV is repaired from the
-//! file length, converted and handed off as a stopped recording is. Logs carry counts only.
+//! Crash recovery on launch and `recorder_retry` (PRD desktop-app FR-7, continue-recording
+//! FR-12). A meeting folder directly inside `recordings_dir` that holds `recording.partial.wav`
+//! and no other `recording.<ext>` is a recording a crash, a failed conversion or a full disk left
+//! behind: its WAV is repaired from the file length, converted and handed off as a stopped
+//! recording is. With continue recording built in, so is a continued part: a
+//! `recording-part-N.partial.wav` beside the meeting's `recording.m4a`, converted to its part and
+//! handed off with `--continue`; and a part's hard link left under `recordings_dir` is settled
+//! first. Logs carry counts only.
 
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
@@ -12,13 +16,23 @@ use std::time::UNIX_EPOCH;
 
 use meeting::Language;
 
-use super::handoff::{self, WAV};
+use super::handoff::{self, M4A, Tools, WAV};
 use super::notice::{Kind, Notice};
-use super::{Clock, Recorder, Refused, SAMPLE_RATE, State, lock, wav};
+use super::{Clock, Recorder, Refused, SAMPLE_RATE, State, folder, lock, same_file, wav};
 
 /// What a conversion killed mid-way leaves; never a recording.
 const PART: &str = "recording.m4a.part";
 const ARCHIVE: &str = "Archive";
+
+/// What a folder holds to recover.
+#[derive(Debug, PartialEq)]
+enum Leftover {
+    /// The first recording's WAV, and no other `recording.*`.
+    First,
+    /// The numbers of continued parts' WAVs beside `recording.m4a`, ascending, each without its
+    /// m4a.
+    Parts(Vec<u32>),
+}
 
 impl Recorder {
     /// Recovers every leftover recording, oldest first, then sets one notice (none when nothing
@@ -32,7 +46,11 @@ impl Recorder {
                 return;
             }
         };
-        let folders = candidates(&config.recordings_dir);
+        let parts = self.inner.deps.continue_enabled;
+        if parts {
+            self.settle_links(&config.recordings_dir);
+        }
+        let folders = candidates(&config.recordings_dir, parts);
         if folders.is_empty() {
             return;
         }
@@ -67,9 +85,22 @@ impl Recorder {
     fn recover_one(&self, folder: &Path, language: Language, ffmpeg: &Path) -> Option<Notice> {
         let _one = lock(&self.inner.converting);
         let starts = self.inner.next_id.load(Ordering::Relaxed);
-        if self.session_folder().as_deref() == Some(folder) || !leftover(folder) {
+        if self.session_folder().as_deref() == Some(folder) {
             return None;
         }
+        match leftover(folder, self.inner.deps.continue_enabled)? {
+            Leftover::First => self.recover_first(folder, language, ffmpeg, starts),
+            Leftover::Parts(parts) => self.recover_parts(folder, &parts, language, ffmpeg, starts),
+        }
+    }
+
+    fn recover_first(
+        &self,
+        folder: &Path,
+        language: Language,
+        ffmpeg: &Path,
+        starts: u64,
+    ) -> Option<Notice> {
         let wav = folder.join(WAV);
         let frames = match wav::repair(&wav) {
             Ok(0) => {
@@ -86,16 +117,160 @@ impl Recorder {
         handoff::ensure_context(folder, &self.started_at(&wav), None);
         let tools = self.tools(ffmpeg.to_path_buf());
         let notice = handoff::finish_recording(&tools, folder, language, frames, "");
-        // Counted from now, the recovery (FR-4). Never replaces a recording started meanwhile or
-        // still running: checked under the state lock, which a start takes before it clears the
-        // last recording. `Saving` without a folder is a retry's own state.
+        self.remember_recovered(starts, folder, frames / u64::from(SAMPLE_RATE), language, 1);
+        Some(notice)
+    }
+
+    /// Converts each part in ascending order, then hands the meeting off once with `--continue`
+    /// (FR-12). The meeting's `recording.m4a`, `context.json` and folder are never touched; a part
+    /// killed at its start (no audio) is deleted. A failure keeps that part's WAV and those after
+    /// it for a retry.
+    fn recover_parts(
+        &self,
+        folder: &Path,
+        parts: &[u32],
+        language: Language,
+        ffmpeg: &Path,
+        starts: u64,
+    ) -> Option<Notice> {
+        // The meeting's totals before these parts, known when it is still the last recording.
+        let earlier = self
+            .stored_last()
+            .filter(|last| Path::new(&last.folder) == folder);
+        let tools = Tools {
+            spawn: self.inner.deps.spawn_continue,
+            ..self.tools(ffmpeg.to_path_buf())
+        };
+        let rate = u64::from(SAMPLE_RATE);
+        // The meeting's totals once `frames` more are converted up to part `n`.
+        let totals = |frames: u64, n: u32| {
+            earlier.as_ref().map_or((frames / rate, n), |last| {
+                (last.recorded_s + frames / rate, last.parts.max(n))
+            })
+        };
+        let (mut frames, mut highest) = (0, None);
+        for &n in parts {
+            let wav = folder.join(handoff::part_wav(n));
+            let failed = match wav::repair(&wav) {
+                Ok(0) => {
+                    let _ = fs::remove_file(&wav);
+                    continue;
+                }
+                Ok(part) => match handoff::convert_part(&tools, folder, n, "") {
+                    Ok(()) => {
+                        frames += part;
+                        highest = Some(n);
+                        continue;
+                    }
+                    Err(notice) => notice,
+                },
+                Err(e) => {
+                    tracing::warn!("recorder: a leftover part could not be repaired; it is kept");
+                    Notice::retry(format!("{e:#}"), folder)
+                }
+            };
+            // Parts converted before the failure count in the meeting's totals, so the retry
+            // that converts the rest hands off the whole meeting with its right length.
+            if let Some(converted) = highest {
+                let (recorded_s, parts) = totals(frames, converted);
+                self.remember_recovered(starts, folder, recorded_s, language, parts);
+            }
+            return Some(failed);
+        }
+        let n = highest?;
+        let notice = match &earlier {
+            Some(last) => {
+                let total = last.recorded_s * rate + frames;
+                handoff::hand_off(&tools, folder, language, total, "")
+            }
+            // Another recording became the last one since: the earlier total is unknown, so the
+            // meeting is handed off whatever its length and the tool decides (a lost hand-off is
+            // worse than a too-short one).
+            None => handoff::hand_off(&tools, folder, language, u64::MAX, ""),
+        };
+        let (recorded_s, parts) = totals(frames, n);
+        self.remember_recovered(starts, folder, recorded_s, language, parts);
+        Some(notice)
+    }
+
+    /// Counted from now, the recovery (FR-4). Never replaces a recording started meanwhile or
+    /// still running: checked under the state lock, which a start takes before it clears the
+    /// last recording. `Saving` without a folder is a retry's own state.
+    fn remember_recovered(
+        &self,
+        starts: u64,
+        folder: &Path,
+        recorded_s: u64,
+        language: Language,
+        parts: u32,
+    ) {
         let state = self.state();
         let no_session = matches!(*state, State::Idle | State::Saving { folder: None, .. });
         if no_session && self.inner.next_id.load(Ordering::Relaxed) == starts {
-            self.remember_last(folder, frames / u64::from(SAMPLE_RATE), language, 1);
+            self.remember_last(folder, recorded_s, language, parts);
         }
-        drop(state);
-        Some(notice)
+    }
+
+    /// Settles each part link `.continuing-<meeting>-part-N.partial.wav` left directly under `dir`
+    /// (D17) before the folders are scanned, in name order. A link of the running session is
+    /// left alone; other hidden files and names that do not parse are ignored.
+    fn settle_links(&self, dir: &Path) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        let mut links: Vec<(PathBuf, String, u32)> = entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .filter_map(|e| {
+                let name = e.file_name();
+                let (meeting, n) = parse_link(name.to_str()?)?;
+                Some((e.path(), meeting.to_string(), n))
+            })
+            .collect();
+        links.sort();
+        for (link, meeting, n) in links {
+            self.settle_link(dir, &link, &meeting, n);
+        }
+    }
+
+    /// The part's WAV still in its meeting folder beside `recording.m4a`: the link goes and the
+    /// folder scan recovers the part. The part already converted: the link goes. Otherwise the
+    /// meeting was moved or its recording is gone: the link becomes a new meeting's WAV.
+    fn settle_link(&self, dir: &Path, link: &Path, meeting: &str, n: u32) {
+        let _one = lock(&self.inner.converting);
+        let folder = dir.join(meeting);
+        if self.session_folder().as_deref() == Some(folder.as_path()) {
+            return;
+        }
+        let left = folder.join(handoff::part_wav(n));
+        let same = same_file(&left, link);
+        let converted = folder.join(handoff::part_m4a(n)).is_file();
+        if (same && folder.join(M4A).is_file()) || (converted && !left.exists()) {
+            let _ = fs::remove_file(link);
+        } else {
+            self.link_to_new_meeting(dir, link, &left, same);
+        }
+    }
+
+    /// Moves `link` into a new meeting folder as its `recording.partial.wav`, for the folder scan
+    /// to recover as a new meeting (FR-12: today's recovery into a new folder). The same audio
+    /// left as `left` in a meeting folder without its recording goes, as a stop does it (D17).
+    /// On failure the link is kept for the next launch.
+    fn link_to_new_meeting(&self, dir: &Path, link: &Path, left: &Path, same: bool) {
+        let started = self.started_at(link);
+        let now_s = u64::try_from(started.now_ms.div_euclid(1000)).unwrap_or(0);
+        let Ok(new) = folder::new_folder(dir, self.inner.deps.local_minute, now_s) else {
+            tracing::warn!("recorder: a leftover part could not become a new meeting; it is kept");
+            return;
+        };
+        if fs::rename(link, new.join(WAV)).is_err() {
+            let _ = fs::remove_dir(&new);
+            tracing::warn!("recorder: a leftover part could not be moved; it is kept");
+            return;
+        }
+        if same {
+            let _ = fs::remove_file(left);
+        }
     }
 
     /// The folder of the recording that is starting, running or saving: never touched by
@@ -125,15 +300,17 @@ impl Recorder {
     }
 
     /// Retries a failed conversion (FR-7, D33). `folder` comes from a notice and is re-validated:
-    /// only a direct subfolder of `recordings_dir` with a leftover WAV is accepted. Answers at
-    /// once; the returned thread converts, hands off, sets the notice and returns to `idle`.
+    /// only a direct subfolder of `recordings_dir` with a leftover WAV (a part's included) is
+    /// accepted. Answers at once; the returned thread converts, hands off, sets the notice and
+    /// returns to `idle`.
     pub fn retry(&self, folder: &str) -> Result<JoinHandle<()>, Refused> {
         let config = self
             .inner
             .env
             .config()
             .map_err(|message| Refused::new("not_found", message))?;
-        let folder = retry_folder(&config.recordings_dir, Path::new(folder))
+        let parts = self.inner.deps.continue_enabled;
+        let folder = retry_folder(&config.recordings_dir, Path::new(folder), parts)
             .ok_or_else(|| Refused::new("not_found", "That recording is not there to retry"))?;
         let saving = self.begin_saving().ok_or_else(|| {
             Refused::new(
@@ -157,49 +334,117 @@ impl Recorder {
     }
 }
 
-/// Direct subfolders of `dir` holding the WAV, oldest first (the name is the start time).
-fn candidates(dir: &Path) -> Vec<PathBuf> {
+/// Direct subfolders of `dir` holding audio to recover, oldest first (the name is the start
+/// time). Part WAVs whose meeting has no `recording.m4a` are kept untouched and only counted.
+fn candidates(dir: &Path, parts: bool) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut folders: Vec<PathBuf> = entries
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && e.file_name() != ARCHIVE)
-        .map(|e| e.path())
-        .filter(|folder| folder.join(WAV).is_file())
-        .collect();
+    let (mut folders, mut kept) = (Vec::new(), 0);
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) || entry.file_name() == ARCHIVE {
+            continue;
+        }
+        let folder = entry.path();
+        if holds_audio(&folder, parts) {
+            folders.push(folder);
+        } else if parts {
+            kept += part_wavs(&folder).len();
+        }
+    }
+    if kept > 0 {
+        tracing::info!("recorder: recovery: {kept} parts kept, their meeting has no recording");
+    }
     folders.sort();
     folders
 }
 
-/// Whether `folder` holds the WAV and no other `recording.*`, after removing a stale `.part`.
-fn leftover(folder: &Path) -> bool {
+/// Whether `folder` holds the first recording's WAV, or (with `parts`) a part's WAV beside
+/// `recording.m4a`.
+fn holds_audio(folder: &Path, parts: bool) -> bool {
+    folder.join(WAV).is_file()
+        || (parts && folder.join(M4A).is_file() && !part_wavs(folder).is_empty())
+}
+
+/// What `folder` holds to recover, after removing stale `.part` files: the WAV with no other
+/// `recording.*`, else (with `parts`) the part WAVs beside `recording.m4a` that have no m4a.
+fn leftover(folder: &Path, parts: bool) -> Option<Leftover> {
     let _ = fs::remove_file(folder.join(PART));
-    let Ok(entries) = fs::read_dir(folder) else {
-        return false;
-    };
-    let mut wav = false;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name == WAV {
-            wav = true;
-        } else if name.starts_with("recording.") {
-            return false;
-        }
+    let names: Vec<String> = fs::read_dir(folder)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let others = names
+        .iter()
+        .any(|n| n != WAV && n.starts_with("recording."));
+    if names.iter().any(|n| n == WAV) && !others {
+        return Some(Leftover::First);
     }
-    wav
+    if !parts || !folder.join(M4A).is_file() {
+        return None;
+    }
+    let left: Vec<u32> = part_wavs(folder)
+        .into_iter()
+        .filter(|&n| {
+            let m4a = handoff::part_m4a(n);
+            let _ = fs::remove_file(folder.join(format!("{m4a}.part")));
+            !folder.join(m4a).exists()
+        })
+        .collect();
+    (!left.is_empty()).then_some(Leftover::Parts(left))
+}
+
+/// The numbers of the `recording-part-N.partial.wav` files in `folder`, ascending.
+fn part_wavs(folder: &Path) -> Vec<u32> {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let mut parts: Vec<u32> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| {
+            let name = e.file_name();
+            let n = name
+                .to_str()?
+                .strip_prefix("recording-part-")?
+                .strip_suffix(".partial.wav")?;
+            part_number(n)
+        })
+        .collect();
+    parts.sort_unstable();
+    parts
+}
+
+/// The meeting folder name and part number of a part link's file name
+/// (`handoff::part_link`); the last `-part-` splits them.
+fn parse_link(name: &str) -> Option<(&str, u32)> {
+    let rest = name
+        .strip_prefix(".continuing-")?
+        .strip_suffix(".partial.wav")?;
+    let (meeting, n) = rest.rsplit_once("-part-")?;
+    let n = part_number(n)?;
+    (!matches!(meeting, "" | "." | "..")).then_some((meeting, n))
+}
+
+/// A part number: digits only, 2 or more (part 1 is `recording.m4a`).
+fn part_number(digits: &str) -> Option<u32> {
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|&n| n >= 2)
 }
 
 /// `recordings_dir/<name>` when `folder` is a direct subfolder of `recordings_dir` (not
-/// `Archive`) holding the WAV. Canonicalising resolves `..` and symlinks before the check; the
-/// answer is in the configured form, as the recorder's own notices name folders.
-fn retry_folder(recordings_dir: &Path, folder: &Path) -> Option<PathBuf> {
+/// `Archive`) holding audio to recover (`holds_audio`). Canonicalising resolves `..` and symlinks
+/// before the check; the answer is in the configured form, as the recorder's own notices name
+/// folders.
+fn retry_folder(recordings_dir: &Path, folder: &Path, parts: bool) -> Option<PathBuf> {
     let dir = recordings_dir.canonicalize().ok()?;
     let canonical = folder.canonicalize().ok()?;
     let name = canonical.file_name().filter(|n| *n != ARCHIVE)?;
     let direct = canonical.parent() == Some(dir.as_path());
-    (direct && canonical.join(WAV).is_file()).then(|| recordings_dir.join(name))
+    (direct && holds_audio(&canonical, parts)).then(|| recordings_dir.join(name))
 }
 
 /// The one notice for a recovery run.
@@ -230,10 +475,13 @@ mod tests {
 
     use super::*;
     use crate::recorder::Reason;
+    use crate::recorder::continuable::LastRecording;
+    use crate::recorder::continuable::tests::store_last;
+    use crate::recorder::convert;
     use crate::recorder::convert::tests::{ffmpeg, probe, tone_wav};
-    use crate::recorder::handoff::tests::{clock, spawns_under};
-    use crate::recorder::handoff::{CONTEXT, M4A};
-    use crate::recorder::tests::{Rig, SECOND, ok_capture, push, rig, write_config};
+    use crate::recorder::handoff::CONTEXT;
+    use crate::recorder::handoff::tests::{clock, continues_under, spawns_under};
+    use crate::recorder::tests::{Rig, SECOND, ok_capture, push, rig, rig_unflagged, write_config};
     use crate::recorder::wav::{Chunk, WavWriter};
 
     fn recordings(rig: &Rig) -> PathBuf {
@@ -392,7 +640,7 @@ mod tests {
         ] {
             leftover_in(&rig, name, 1);
         }
-        let found: Vec<_> = candidates(&recordings(&rig))
+        let found: Vec<_> = candidates(&recordings(&rig), true)
             .iter()
             .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
@@ -551,7 +799,7 @@ mod tests {
         let refused = rig.start().unwrap_err();
         assert_eq!(refused.code, "capture_failed");
         assert_eq!(rig.state(), "idle");
-        assert!(candidates(&recordings(&rig)).is_empty());
+        assert!(candidates(&recordings(&rig), true).is_empty());
     }
 
     #[test]
@@ -837,5 +1085,492 @@ mod tests {
         assert_eq!(offered(&rig), None);
         wait_retry(rig.recorder.retry(folder.to_str().unwrap()).unwrap());
         assert_eq!(offered(&rig).as_deref(), folder.to_str());
+    }
+
+    // Continued parts (continue-recording FR-12).
+
+    const MEETING: &str = "meeting-2026-11-13_0500";
+
+    /// A meeting folder with `recording.m4a` and `context.json`, stored as the last recording
+    /// with `recorded_s` (1 part, Bengali).
+    fn meeting_in(rig: &Rig, recorded_s: u64) -> PathBuf {
+        let folder = recordings(rig).join(MEETING);
+        fs::create_dir_all(&folder).unwrap();
+        tone_wav(&folder.join(WAV), 1);
+        convert::to_m4a(&ffmpeg(), &folder.join(WAV), &folder.join(M4A)).unwrap();
+        fs::remove_file(folder.join(WAV)).unwrap();
+        handoff::write_context(&folder, &clock(), None);
+        store_last(
+            rig,
+            &LastRecording {
+                folder: folder.display().to_string(),
+                recorded_s,
+                language: Language::Bn,
+                stopped_at: clock().now_ms - 60_000,
+                parts: 1,
+            },
+        );
+        folder
+    }
+
+    fn part_link(rig: &Rig, meeting: &str, n: u32) -> PathBuf {
+        recordings(rig).join(handoff::part_link(meeting, n))
+    }
+
+    /// The names directly under the recordings folder, sorted.
+    fn entries(rig: &Rig) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(recordings(rig))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn bytes(path: &Path) -> Vec<u8> {
+        fs::read(path).unwrap()
+    }
+
+    fn stored(rig: &Rig) -> LastRecording {
+        rig.recorder.stored_last().expect("a last recording")
+    }
+
+    #[test]
+    fn a_killed_part_is_converted_into_its_meeting_and_handed_off_with_continue() {
+        let rig = rig("recover-part-killed", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        let (m4a, context) = (bytes(&folder.join(M4A)), bytes(&folder.join(CONTEXT)));
+        killed_wav(&folder.join(handoff::part_wav(2)), 12);
+        // The language last started with, as for a first recording.
+        rig.env()
+            .store()
+            .unwrap()
+            .set_setting("language", "en")
+            .unwrap();
+        rig.recorder.recover_all();
+
+        let duration = duration_s(&folder.join(handoff::part_m4a(2)));
+        assert!((duration - 12.0).abs() <= 1.0, "{duration}");
+        assert!(!folder.join(handoff::part_wav(2)).exists());
+        assert_eq!(bytes(&folder.join(M4A)), m4a);
+        assert_eq!(bytes(&folder.join(CONTEXT)), context);
+        assert_eq!(entries(&rig), [MEETING]);
+        assert_eq!(
+            continues_under(&folder),
+            [(
+                rig.home.join("meeting"),
+                folder.join(M4A),
+                Some(Language::En)
+            )]
+        );
+        assert!(spawns_under(&folder).is_empty());
+        assert_eq!(
+            rig.recorder.status().notice,
+            Some(Notice::new(Kind::Recovered, "Recovered 1 recording"))
+        );
+        assert_eq!(
+            stored(&rig),
+            LastRecording {
+                folder: folder.display().to_string(),
+                recorded_s: 32,
+                language: Language::En,
+                stopped_at: clock().now_ms,
+                parts: 2,
+            }
+        );
+        assert_eq!(
+            rig.recorder.status().continuable.map(|c| c.folder),
+            folder.to_str().map(String::from)
+        );
+    }
+
+    #[test]
+    fn two_parts_are_both_converted_with_one_hand_off() {
+        let rig = rig("recover-part-two", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        killed_wav(&folder.join(handoff::part_wav(3)), 2);
+        killed_wav(&folder.join(handoff::part_wav(2)), 3);
+        rig.recorder.recover_all();
+        for n in [2, 3] {
+            assert!(folder.join(handoff::part_m4a(n)).is_file(), "{n}");
+            assert!(!folder.join(handoff::part_wav(n)).exists(), "{n}");
+        }
+        assert_eq!(continues_under(&folder).len(), 1);
+        let last = stored(&rig);
+        assert_eq!((last.recorded_s, last.parts), (25, 3));
+        assert_eq!(
+            rig.recorder.status().notice.unwrap().message,
+            "Recovered 1 recording"
+        );
+    }
+
+    #[test]
+    fn part_wavs_are_listed_in_ascending_number() {
+        let dir = crate::recorder::wav::tests::temp("recover-part-order");
+        for name in [
+            "recording-part-10.partial.wav",
+            "recording-part-2.partial.wav",
+            "recording-part-3.partial.wav",
+            "recording-part-1.partial.wav",
+            "recording-part-x.partial.wav",
+            "recording-part-4.m4a",
+        ] {
+            fs::write(dir.join(name), b"").unwrap();
+        }
+        assert_eq!(part_wavs(&dir), [2, 3, 10]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_part_without_audio_is_deleted_and_the_meeting_kept() {
+        let rig = rig("recover-part-empty", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        let before = stored(&rig);
+        killed_wav(&folder.join(handoff::part_wav(2)), 0);
+        rig.recorder.recover_all();
+        assert!(!folder.join(handoff::part_wav(2)).exists());
+        assert!(folder.join(M4A).is_file());
+        assert!(folder.join(CONTEXT).is_file());
+        assert!(continues_under(&rig.home).is_empty());
+        assert_eq!(rig.recorder.status().notice, None);
+        assert_eq!(stored(&rig), before);
+    }
+
+    #[test]
+    fn a_meeting_under_ten_seconds_in_total_is_kept_but_not_handed_off() {
+        let rig = rig("recover-part-short", ok_capture());
+        let folder = meeting_in(&rig, 5);
+        killed_wav(&folder.join(handoff::part_wav(2)), 3);
+        rig.recorder.recover_all();
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert!(continues_under(&rig.home).is_empty());
+        assert_eq!(
+            rig.recorder.status().notice.unwrap().message,
+            "Recovered 1 recording"
+        );
+        assert_eq!(stored(&rig).recorded_s, 8);
+    }
+
+    #[test]
+    fn a_part_whose_earlier_total_is_unknown_is_handed_off_anyway() {
+        let rig = rig("recover-part-unknown", ok_capture());
+        let folder = meeting_in(&rig, 600);
+        // A later Start replaced the last recording.
+        let other = leftover_in(&rig, "meeting-later", 1);
+        fs::rename(other.join(WAV), other.join(M4A)).unwrap();
+        store_last(
+            &rig,
+            &LastRecording {
+                folder: other.display().to_string(),
+                recorded_s: 1,
+                language: Language::Bn,
+                stopped_at: clock().now_ms,
+                parts: 1,
+            },
+        );
+        killed_wav(&folder.join(handoff::part_wav(2)), 1);
+        rig.recorder.recover_all();
+        assert_eq!(continues_under(&folder).len(), 1);
+        let last = stored(&rig);
+        assert_eq!(
+            (last.folder.as_str(), last.recorded_s, last.parts),
+            (folder.to_str().unwrap(), 1, 2)
+        );
+    }
+
+    #[test]
+    fn a_link_beside_its_part_is_deleted_and_the_part_recovered_once() {
+        let rig = rig("recover-link-beside", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        let wav = folder.join(handoff::part_wav(2));
+        killed_wav(&wav, 12);
+        let link = part_link(&rig, MEETING, 2);
+        fs::hard_link(&wav, &link).unwrap();
+        rig.recorder.recover_all();
+        assert!(!link.exists());
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert_eq!(continues_under(&rig.home).len(), 1);
+        assert!(spawns_under(&rig.home).is_empty());
+        assert_eq!(entries(&rig), [MEETING]);
+        assert_eq!(
+            rig.recorder.status().notice.unwrap().message,
+            "Recovered 1 recording"
+        );
+    }
+
+    /// Asserts the link was recovered as a new meeting, handed off without `--continue`.
+    fn recovered_as_new(rig: &Rig, link: &Path) -> PathBuf {
+        assert!(!link.exists());
+        let new = recordings(rig).join("meeting-2026-11-13_0600");
+        assert!(new.join(M4A).is_file());
+        assert!(new.join(CONTEXT).is_file());
+        assert!(!new.join(WAV).exists());
+        let duration = duration_s(&new.join(M4A));
+        assert!((duration - 12.0).abs() <= 1.0, "{duration}");
+        assert_eq!(
+            spawns_under(&new),
+            [(rig.home.join("meeting"), new.join(M4A), Some(Language::Bn))]
+        );
+        assert!(continues_under(&rig.home).is_empty());
+        assert_eq!(
+            rig.recorder.status().notice.unwrap().message,
+            "Recovered 1 recording"
+        );
+        new
+    }
+
+    #[test]
+    fn a_link_whose_meeting_is_gone_becomes_a_new_meeting() {
+        let rig = rig("recover-link-gone", ok_capture());
+        fs::create_dir_all(recordings(&rig)).unwrap();
+        let link = part_link(&rig, MEETING, 2);
+        killed_wav(&link, 12);
+        rig.recorder.recover_all();
+        recovered_as_new(&rig, &link);
+        assert_eq!(entries(&rig), ["meeting-2026-11-13_0600"]);
+    }
+
+    #[test]
+    fn a_link_whose_meeting_was_archived_becomes_a_new_meeting() {
+        let rig = rig("recover-link-archived", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        let wav = folder.join(handoff::part_wav(2));
+        killed_wav(&wav, 12);
+        let link = part_link(&rig, MEETING, 2);
+        fs::hard_link(&wav, &link).unwrap();
+        let archived = recordings(&rig).join(ARCHIVE).join(MEETING);
+        fs::create_dir_all(archived.parent().unwrap()).unwrap();
+        fs::rename(&folder, &archived).unwrap();
+        rig.recorder.recover_all();
+        recovered_as_new(&rig, &link);
+        // The archived copy is not looked at.
+        assert!(archived.join(handoff::part_wav(2)).is_file());
+        assert!(!archived.join(handoff::part_m4a(2)).exists());
+    }
+
+    #[test]
+    fn a_link_whose_meeting_lost_its_recording_becomes_a_new_meeting() {
+        let rig = rig("recover-link-no-m4a", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        let wav = folder.join(handoff::part_wav(2));
+        killed_wav(&wav, 12);
+        let link = part_link(&rig, MEETING, 2);
+        fs::hard_link(&wav, &link).unwrap();
+        fs::remove_file(folder.join(M4A)).unwrap();
+        rig.recorder.recover_all();
+        recovered_as_new(&rig, &link);
+        // The copy left in the folder was the same audio, as a stop does it.
+        assert!(!wav.exists());
+        assert!(folder.join(CONTEXT).is_file());
+    }
+
+    #[test]
+    fn a_link_of_a_saved_part_is_deleted_and_nothing_sent() {
+        let rig = rig("recover-link-saved", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        fs::write(folder.join(handoff::part_m4a(2)), b"saved").unwrap();
+        let link = part_link(&rig, MEETING, 2);
+        killed_wav(&link, 12);
+        rig.recorder.recover_all();
+        assert!(!link.exists());
+        assert_eq!(bytes(&folder.join(handoff::part_m4a(2))), b"saved");
+        assert_eq!(entries(&rig), [MEETING]);
+        assert!(continues_under(&rig.home).is_empty());
+        assert!(spawns_under(&rig.home).is_empty());
+        assert_eq!(rig.recorder.status().notice, None);
+    }
+
+    #[test]
+    fn other_hidden_files_and_unparsed_links_are_left_alone() {
+        let rig = rig("recover-link-other", ok_capture());
+        fs::create_dir_all(recordings(&rig)).unwrap();
+        let names = [
+            ".DS_Store",
+            ".continuing-meeting-a-part-1.partial.wav",
+            ".continuing-meeting-a-part-x.partial.wav",
+            ".continuing-meeting-a-part-2.wav",
+            ".continuing--part-2.partial.wav",
+            ".continuing-..-part-2.partial.wav",
+            ".other-meeting-a-part-2.partial.wav",
+        ];
+        for name in names {
+            killed_wav(&recordings(&rig).join(name), 1);
+        }
+        rig.recorder.recover_all();
+        let mut expected: Vec<_> = names.iter().map(|n| n.to_string()).collect();
+        expected.sort();
+        assert_eq!(entries(&rig), expected);
+        assert_eq!(rig.recorder.status().notice, None);
+        assert_eq!(
+            parse_link(".continuing-a-part-3-part-12.partial.wav"),
+            Some(("a-part-3", 12))
+        );
+    }
+
+    #[test]
+    fn a_continuing_session_keeps_its_link_and_part() {
+        let rig = rig("recover-link-live", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        assert_eq!(rig.recorder.continue_recording().unwrap(), folder);
+        push(SECOND);
+        rig.recorder.recover_all();
+        assert!(part_link(&rig, MEETING, 2).is_file());
+        assert!(folder.join(handoff::part_wav(2)).is_file());
+        assert!(!folder.join(handoff::part_m4a(2)).exists());
+        assert_eq!(rig.state(), "recording");
+        rig.stop(Reason::User);
+        assert!(!part_link(&rig, MEETING, 2).exists());
+        assert_eq!(continues_under(&folder).len(), 1);
+    }
+
+    #[test]
+    fn a_failed_part_conversion_is_kept_reported_and_retried() {
+        let rig = rig("recover-part-ffmpeg", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        let m4a = bytes(&folder.join(M4A));
+        killed_wav(&folder.join(handoff::part_wav(2)), 12);
+        write_config(&rig.env(), broken_ffmpeg(&rig));
+        rig.recorder.recover_all();
+        let notice = rig.recorder.status().notice.unwrap();
+        assert_eq!(
+            notice,
+            Notice::retry(
+                "Recovered 0 recordings. Could not convert 1: ffmpeg failed: boom",
+                &folder
+            )
+        );
+        assert!(folder.join(handoff::part_wav(2)).is_file());
+        assert!(!folder.join(handoff::part_m4a(2)).exists());
+        assert_eq!(bytes(&folder.join(M4A)), m4a);
+        assert!(continues_under(&folder).is_empty());
+        assert_eq!(stored(&rig).parts, 1);
+
+        // The notice's Retry converts it and hands it off.
+        write_config(&rig.env(), ffmpeg());
+        wait_retry(
+            rig.recorder
+                .retry(notice.folder.as_deref().unwrap())
+                .unwrap(),
+        );
+        assert_eq!(rig.recorder.status().notice.unwrap().kind, Kind::Saved);
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert!(!folder.join(handoff::part_wav(2)).exists());
+        assert_eq!(continues_under(&folder).len(), 1);
+        assert_eq!(stored(&rig).parts, 2);
+        assert_eq!(
+            rig.recorder
+                .retry(folder.to_str().unwrap())
+                .unwrap_err()
+                .code,
+            "not_found"
+        );
+    }
+
+    #[test]
+    fn parts_converted_before_a_failure_count_in_the_retry() {
+        let rig = rig("recover-part-later-fails", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        killed_wav(&folder.join(handoff::part_wav(2)), 3);
+        fs::write(folder.join(handoff::part_wav(3)), b"short").unwrap();
+        rig.recorder.recover_all();
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert_eq!(bytes(&folder.join(handoff::part_wav(3))), b"short");
+        assert_eq!(rig.recorder.status().notice.unwrap().kind, Kind::Error);
+        assert!(continues_under(&folder).is_empty());
+        let last = stored(&rig);
+        assert_eq!((last.recorded_s, last.parts), (23, 2));
+
+        // A good part 3 now: the retry hands off the whole meeting, counted once.
+        fs::remove_file(folder.join(handoff::part_wav(3))).unwrap();
+        killed_wav(&folder.join(handoff::part_wav(3)), 4);
+        wait_retry(rig.recorder.retry(folder.to_str().unwrap()).unwrap());
+        assert_eq!(continues_under(&folder).len(), 1);
+        let last = stored(&rig);
+        assert_eq!((last.recorded_s, last.parts), (27, 3));
+    }
+
+    #[test]
+    fn only_part_wavs_beside_the_meeting_recording_are_recovered() {
+        let rig = rig("recover-part-skip", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        // A conversion killed mid-way: its `.part` goes, the WAV is converted again.
+        tone_wav(&folder.join(handoff::part_wav(2)), 1);
+        fs::write(folder.join("recording-part-2.m4a.part"), b"half").unwrap();
+        // Already converted: not recovered again.
+        tone_wav(&folder.join(handoff::part_wav(3)), 1);
+        fs::write(folder.join(handoff::part_m4a(3)), b"saved").unwrap();
+        // No `recording.m4a` beside it.
+        let lone = recordings(&rig).join("meeting-lone");
+        fs::create_dir_all(&lone).unwrap();
+        tone_wav(&lone.join(handoff::part_wav(2)), 1);
+        // In the archive, and behind a symlink.
+        let archived = recordings(&rig).join(ARCHIVE).join("meeting-old");
+        fs::create_dir_all(&archived).unwrap();
+        tone_wav(&archived.join(WAV), 1);
+        fs::rename(archived.join(WAV), archived.join(M4A)).unwrap();
+        tone_wav(&archived.join(handoff::part_wav(2)), 1);
+        let outside = rig.home.join("elsewhere");
+        fs::create_dir_all(&outside).unwrap();
+        fs::copy(archived.join(M4A), outside.join(M4A)).unwrap();
+        tone_wav(&outside.join(handoff::part_wav(2)), 1);
+        symlink(&outside, recordings(&rig).join("meeting-link")).unwrap();
+
+        rig.recorder.recover_all();
+        assert!(!folder.join("recording-part-2.m4a.part").exists());
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert!(folder.join(handoff::part_wav(3)).is_file());
+        assert_eq!(bytes(&folder.join(handoff::part_m4a(3))), b"saved");
+        assert_eq!(fs::read_dir(&lone).unwrap().count(), 1);
+        assert!(lone.join(handoff::part_wav(2)).is_file());
+        assert!(archived.join(handoff::part_wav(2)).is_file());
+        assert!(!archived.join(handoff::part_m4a(2)).exists());
+        assert!(outside.join(handoff::part_wav(2)).is_file());
+        assert!(!outside.join(handoff::part_m4a(2)).exists());
+        assert_eq!(continues_under(&rig.home).len(), 1);
+        assert_eq!(
+            rig.recorder.status().notice.unwrap().message,
+            "Recovered 1 recording"
+        );
+    }
+
+    #[test]
+    fn a_continue_starting_while_recovery_scans_is_never_recovered() {
+        let rig = racing_rig("recover-part-starting", start_racing_recovery);
+        let folder = meeting_in(&rig, 20);
+        assert_eq!(rig.recorder.continue_recording().unwrap(), folder);
+        assert!(folder.join(handoff::part_wav(2)).is_file());
+        assert!(part_link(&rig, MEETING, 2).is_file());
+        push(12 * SECOND);
+        let status = rig.stop(Reason::User);
+        assert_eq!(status.notice.unwrap().kind, Kind::Saved);
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert_eq!(continues_under(&folder).len(), 1);
+    }
+
+    #[test]
+    fn flag_off_recovery_ignores_parts_and_links() {
+        let rig = rig_unflagged("recover-part-off");
+        let folder = meeting_in(&rig, 20);
+        killed_wav(&folder.join(handoff::part_wav(2)), 12);
+        let link = part_link(&rig, "meeting-gone", 2);
+        killed_wav(&link, 12);
+        rig.recorder.recover_all();
+        assert!(folder.join(handoff::part_wav(2)).is_file());
+        assert!(!folder.join(handoff::part_m4a(2)).exists());
+        assert!(link.is_file());
+        assert_eq!(
+            entries(&rig),
+            [link.file_name().unwrap().to_str().unwrap(), MEETING]
+        );
+        assert!(continues_under(&rig.home).is_empty());
+        assert!(spawns_under(&rig.home).is_empty());
+        assert_eq!(rig.recorder.status().notice, None);
+        assert_eq!(
+            rig.recorder
+                .retry(folder.to_str().unwrap())
+                .unwrap_err()
+                .code,
+            "not_found"
+        );
     }
 }
