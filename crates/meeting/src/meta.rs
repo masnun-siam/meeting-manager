@@ -24,6 +24,9 @@ pub struct Meta {
     /// temp file and the deletion of the parts, so a crashed join can be finished or redone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub joining_parts: Vec<String>,
+    /// With `joining_parts`: the joined file's size, the proof that it replaced the recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joining_size: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -134,6 +137,7 @@ mod tests {
             runs: vec![],
             parts_joined: 0,
             joining_parts: vec![],
+            joining_size: None,
         }
     }
 
@@ -162,6 +166,7 @@ mod tests {
         let map = json.as_object_mut().unwrap();
         assert!(map.remove("parts_joined").is_some());
         assert!(!map.contains_key("joining_parts"), "absent when empty");
+        assert!(!map.contains_key("joining_size"), "absent when none");
         let meta: Meta = serde_json::from_value(json).unwrap();
         assert_eq!((meta.parts_joined, meta.joining_parts.len()), (0, 0));
     }
@@ -174,6 +179,7 @@ mod tests {
         let mut meta = sample();
         meta.parts_joined = 3;
         meta.joining_parts = vec!["recording-part-4.webm".into()];
+        meta.joining_size = Some(12_345);
         meta.save(&path).unwrap();
         let loaded = Meta::load(&path).unwrap();
         fs::remove_dir_all(&dir).unwrap();

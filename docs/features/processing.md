@@ -79,7 +79,7 @@ All sit in the recording's folder (`Paths::new` in `pipeline.rs`), named like `m
 | File | Written by | Lifetime |
 |---|---|---|
 | `lock` | `Lock::acquire` | Holds the PID; removed on drop. A lock from a dead PID is taken over. |
-| `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`), `parts_joined` (0 when absent), and `joining_parts` only while a join is in flight. |
+| `meta.json` | `Meta::save` | Kept. Language, `recorded_at`, `duration_s`, title, speakers, run history (`runs`), `parts_joined` (0 when absent), and `joining_parts` with `joining_size` only while a join is in flight. |
 | `recording-part-<N>.<ext>` | the extension or the desktop app (continue recording) | Only with the continue flag on: joined onto the recording and deleted, see [Joining parts](#joining-parts). |
 | `audio.ogg` | `extract::extract` (via `.part`, renamed on success) | Mono, 16 kHz, Opus 32 kbps. Deleted on success. |
 | `deepgram.json` | `write_atomic` | Raw Deepgram response. Deleted on success. |
@@ -162,22 +162,22 @@ Continue recording (PRD `docs/prds/continue-recording.md` FR-10, FR-11, FR-14). 
 
 - Under the lock, before the plan, `Pipeline::join_parts` lists `recording-part-<N>.<ext>` in the folder (`join::parts_of`; `join::part_number` is the one parser: N >= 2, digits, no leading zero, the recording's extension). Look-alikes (`recording-part-1.webm`, `recording-part-2.webm.part`, ...) are ignored. With no part and no journal nothing changes and no `joining` stage is shown.
 - With parts the job enters `joining`; `join::join` checks each part opens in ffmpeg, then joins `recording.<ext>` and the parts in ascending N with the concat demuxer by stream copy (`webm` as `-f webm`, `m4a` as `-f ipod`; other formats are refused) into `recording.<ext>.part`, through the list file `recording.<ext>.join.txt`.
-- A join forces re-transcription (`retranscribe || joined > 0`), so a Retry without a language still transcribes the whole recording again; the same note and store row are updated, keeping edits as any rerun.
-- Refused, with nothing changed: a part in another format (both names in the error), a part that is not a regular file (a symlink), a part ffmpeg cannot open, ffmpeg missing. The job fails at `joining`; running again tries again. Without a stored language or `--language`, a run with parts fails at `queued`.
+- A join forces re-transcription: `transcript.md` and `deepgram.json` are deleted as soon as the join returns, and the plan gets `retranscribe || joined > 0`, so a Retry without a language still transcribes the whole recording again; the same note and store row are updated, keeping edits as any rerun.
+- Refused, with nothing changed: a part in another format (both names in the error), a part that is not a regular file (a symlink), a part ffmpeg cannot open (the error ends with the part's name), ffmpeg missing. Each part is opened by ffmpeg before the concat, because the concat demuxer skips a part it cannot open and still exits 0 (`-xerror` is not used: it fails valid m4a joins on AAC's non-monotonic DTS). A part whose streams differ from the recording's (say audio only after audio and video) is not detected; both surfaces record one layout. The job fails at `joining`; running again tries again. Without a stored language or `--language`, a run with parts fails at `queued`.
 - Only the part count and seconds are logged.
 
-The journal (`meta.json` `joining_parts`) makes a crash at any point safe:
+The journal (`meta.json` `joining_parts` and `joining_size`) makes a crash at any point safe:
 
 1. Write `recording.<ext>.part`, give it the recording's permission bits, fsync it.
-2. Save `joining_parts` (the part names) to `meta.json`.
-3. Rename the temp file over `recording.<ext>`.
+2. Save `joining_parts` (the part names) and `joining_size` (the temp file's size) to `meta.json`.
+3. Rename the temp file over `recording.<ext>`, fsync the folder.
 4. Remove the list file, delete the parts in ascending N.
-5. Clear `joining_parts` and add the count to `parts_joined`, in one save.
+5. Clear the journal and add the count to `parts_joined`, in one save. A failure in recovery leaves the journal in place for the next run.
 
 | A run finds | Crash was | It does |
 |---|---|---|
-| `joining_parts` and the temp file | before the rename: the original is intact | removes the temp file, the list file and the journal, then joins afresh |
-| `joining_parts`, no temp file | after the rename | deletes the listed parts (only names that are parts of this recording), clears the journal, counts them in `parts_joined`, and re-transcribes; nothing is joined twice |
+| `joining_parts` and the temp file, or a recording whose size is not `joining_size` | before the rename: the original is intact (the temp file may have been removed by something else) | removes the temp file, the list file and the journal, then joins afresh |
+| `joining_parts`, no temp file, the recording has `joining_size` | after the rename | deletes the listed parts (only names that are parts of this recording), clears the journal, counts them in `parts_joined`, and re-transcribes; nothing is joined twice |
 | a temp file and no journal | before step 2 | overwrites the temp file in a fresh join |
 
 ## Importing a recording

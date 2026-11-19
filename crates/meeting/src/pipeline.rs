@@ -417,6 +417,12 @@ impl Pipeline {
         st.meta = Some(meta);
         st.enter(Stage::Joining)?;
         let joined = join::join(&self.config.ffmpeg_path, &p.recording, st.meta())?;
+        if joined > 0 {
+            // At once, not at the plan: once the journal is cleared nothing else says the
+            // transcript covers only the first part, and a run stopped here would reuse it.
+            remove(&p.transcript)?;
+            remove(&p.raw)?;
+        }
         Ok((st.meta.take(), joined))
     }
 
@@ -676,6 +682,7 @@ fn new_meta(recording: &Path, language: Language) -> anyhow::Result<Meta> {
         runs: vec![],
         parts_joined: 0,
         joining_parts: vec![],
+        joining_size: None,
     })
 }
 

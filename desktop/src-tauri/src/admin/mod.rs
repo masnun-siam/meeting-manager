@@ -515,6 +515,7 @@ mod tests {
             runs,
             parts_joined: 0,
             joining_parts: vec![],
+            joining_size: None,
         }
         .save(&Meta::path_for(recording))
         .unwrap();

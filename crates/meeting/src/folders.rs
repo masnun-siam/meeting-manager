@@ -352,6 +352,7 @@ mod tests {
             runs: vec![],
             parts_joined: 0,
             joining_parts: vec![],
+            joining_size: None,
         }
     }
 

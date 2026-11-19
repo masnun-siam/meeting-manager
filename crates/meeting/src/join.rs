@@ -78,12 +78,13 @@ pub fn join(ffmpeg: &Path, recording: &Path, meta: &mut Meta) -> anyhow::Result<
         return Ok(recovered);
     }
     let names: Vec<String> = parts.iter().map(|p| file_name(p)).collect();
-    let written = write_joined(ffmpeg, recording, &names, &temp, &list).and_then(|()| {
+    let written = write_joined(ffmpeg, recording, &names, &temp, &list).and_then(|size| {
         meta.joining_parts = names.clone();
+        meta.joining_size = Some(size);
         save(meta, recording)
     });
     if let Err(e) = written {
-        meta.joining_parts.clear();
+        clear_journal(meta);
         let _ = fs::remove_file(&temp);
         let _ = fs::remove_file(&list);
         return Err(e);
@@ -91,11 +92,12 @@ pub fn join(ffmpeg: &Path, recording: &Path, meta: &mut Meta) -> anyhow::Result<
     // The journal is on disk: from here a crash is finished by `recover`.
     fs::rename(&temp, recording)
         .with_context(|| format!("cannot replace {}", recording.display()))?;
+    sync_folder(recording)?;
     remove(&list)?;
     for part in &parts {
         remove(part)?;
     }
-    meta.joining_parts.clear();
+    clear_journal(meta);
     meta.parts_joined += parts.len() as u32;
     save(meta, recording)?;
     tracing::info!(
@@ -106,30 +108,36 @@ pub fn join(ffmpeg: &Path, recording: &Path, meta: &mut Meta) -> anyhow::Result<
     Ok(recovered + parts.len())
 }
 
-/// Finishes or undoes a join a crash interrupted, by the journal. With the temp file still
-/// there the rename never happened: the original is intact, so the temp file goes and the
-/// join is redone. Without it the rename happened: the listed parts are already in the
-/// recording, so they are deleted, never joined again. Returns the parts finished this way.
+/// Finishes or undoes a join a crash interrupted, by the journal. The rename happened only
+/// when the temp file is gone and the recording has the joined file's size: then the listed
+/// parts are already in the recording, so they are deleted, never joined again. Otherwise
+/// the original is intact (something else may have removed the temp file), so the temp file
+/// goes and the join is redone. The journal is cleared only in the save that ends this, so a
+/// failure on the way leaves it for the next run. Returns the parts finished this way.
 fn recover(recording: &Path, meta: &mut Meta, temp: &Path, list: &Path) -> anyhow::Result<usize> {
     if meta.joining_parts.is_empty() {
         return Ok(0);
     }
-    let names = std::mem::take(&mut meta.joining_parts);
-    if temp.exists() {
+    let size = fs::metadata(recording).map(|m| m.len()).ok();
+    let renamed = !temp.exists() && meta.joining_size.is_some() && meta.joining_size == size;
+    if !renamed {
         remove(temp)?;
         remove(list)?;
+        clear_journal(meta);
         save(meta, recording)?;
         return Ok(0);
     }
     let ext = ext_of(recording)?;
     // A name from the file is trusted only as a part of this recording.
-    let listed: Vec<&String> = (names.iter())
+    let listed: Vec<String> = (meta.joining_parts.iter())
         .filter(|name| part_number(name, ext).is_some())
+        .cloned()
         .collect();
     remove(list)?;
     for name in &listed {
         remove(&recording.with_file_name(name))?;
     }
+    clear_journal(meta);
     meta.parts_joined += listed.len() as u32;
     save(meta, recording)?;
     tracing::info!(parts = listed.len(), "interrupted join finished");
@@ -137,14 +145,14 @@ fn recover(recording: &Path, meta: &mut Meta, temp: &Path, list: &Path) -> anyho
 }
 
 /// Writes the joined recording to `temp`, complete and on disk, with the original's
-/// permission bits.
+/// permission bits, and returns its size.
 fn write_joined(
     ffmpeg: &Path,
     recording: &Path,
     parts: &[String],
     temp: &Path,
     list: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u64> {
     let ext = ext_of(recording)?;
     let muxer = match ext {
         "webm" => "webm",
@@ -161,14 +169,18 @@ fn write_joined(
     // non-monotonic DTS.
     let folder = recording.parent().context("the recording has no folder")?;
     for part in parts {
-        ffmpeg_run(ffmpeg, |c| {
+        let about = format!(" ({part})");
+        ffmpeg_run(ffmpeg, &about, |c| {
             c.arg("-i")
                 .arg(folder.join(part))
                 .args(["-t", "0", "-map", "0", "-c", "copy", "-f", "null", "-"])
         })?;
     }
+    // Removed first, so a link left in their place is never written through.
+    remove(temp)?;
+    remove(list)?;
     fs::write(list, lines).with_context(|| format!("cannot write {}", list.display()))?;
-    ffmpeg_run(ffmpeg, |c| {
+    ffmpeg_run(ffmpeg, "", |c| {
         c.args(["-y", "-f", "concat", "-i"])
             .arg(list)
             // The `.part` extension doesn't tell ffmpeg the container.
@@ -179,14 +191,30 @@ fn write_joined(
         .with_context(|| format!("cannot read {}", recording.display()))?
         .permissions();
     fs::set_permissions(temp, mode).with_context(|| format!("cannot write {}", temp.display()))?;
-    File::open(temp)
-        .and_then(|f| f.sync_all())
-        .with_context(|| format!("cannot write {}", temp.display()))
+    let file = File::open(temp).with_context(|| format!("cannot read {}", temp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("cannot write {}", temp.display()))?;
+    Ok(file.metadata()?.len())
 }
 
-/// Runs ffmpeg quietly with `args`; errors as `extract::extract` reports them.
+/// Makes the rename durable before the parts it replaces are deleted.
+fn sync_folder(recording: &Path) -> anyhow::Result<()> {
+    let folder = recording.parent().context("the recording has no folder")?;
+    File::open(folder)
+        .and_then(|f| f.sync_all())
+        .with_context(|| format!("cannot sync {}", folder.display()))
+}
+
+fn clear_journal(meta: &mut Meta) {
+    meta.joining_parts.clear();
+    meta.joining_size = None;
+}
+
+/// Runs ffmpeg quietly with `args`; errors as `extract::extract` reports them, a failure
+/// followed by `about`.
 fn ffmpeg_run(
     ffmpeg: &Path,
+    about: &str,
     args: impl FnOnce(&mut Command) -> &mut Command,
 ) -> anyhow::Result<()> {
     let mut command = Command::new(ffmpeg);
@@ -201,7 +229,7 @@ fn ffmpeg_run(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let last = stderr.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("");
-        bail!("ffmpeg failed: {}", last.trim());
+        bail!("ffmpeg failed: {}{about}", last.trim());
     }
     Ok(())
 }
@@ -307,6 +335,7 @@ mod tests {
             runs: vec![],
             parts_joined: 0,
             joining_parts: vec![],
+            joining_size: None,
         }
     }
 
@@ -443,6 +472,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.starts_with("ffmpeg failed: "), "{err}");
+        assert!(err.ends_with("(recording-part-2.webm)"), "{err}");
         assert!(!err.contains('\n'));
         assert_untouched(&f, "recording-part-2.webm");
         assert_eq!(m, meta(&f.recording));
@@ -528,6 +558,7 @@ mod tests {
             let mut m = meta(&f.recording);
             if marked {
                 m.joining_parts = vec!["recording-part-2.webm".into()];
+                m.joining_size = Some(1);
                 m.save(&f.dir.join("meta.json")).unwrap();
             }
             assert_eq!(join(&ffmpeg(), &f.recording, &mut m).unwrap(), 1);
@@ -538,40 +569,72 @@ mod tests {
         }
     }
 
+    /// A journal for `names` as a crash right after the rename leaves it: the recording is
+    /// the joined file and has the journal's size.
+    fn journal_after_rename(f: &Folder, names: &[&str]) -> Meta {
+        let mut m = meta(&f.recording);
+        m.joining_parts = names.iter().map(|n| n.to_string()).collect();
+        m.joining_size = Some(fs::metadata(&f.recording).unwrap().len());
+        m.save(&f.dir.join("meta.json")).unwrap();
+        m
+    }
+
     #[test]
     fn a_crash_after_the_rename_deletes_the_parts_without_joining_them_again() {
         let f = Folder::new("crash-2", WEBM, "webm");
         f.add("recording-part-2.webm", WEBM);
         join(&ffmpeg(), &f.recording, &mut meta(&f.recording)).unwrap();
         let joined = duration(&f.recording);
-        // The state a crash between the rename and the deletion leaves.
         f.add("recording-part-2.webm", WEBM);
-        let mut m = meta(&f.recording);
-        m.joining_parts = vec!["recording-part-2.webm".into()];
-        m.save(&f.dir.join("meta.json")).unwrap();
+        let mut m = journal_after_rename(&f, &["recording-part-2.webm"]);
 
         assert_eq!(join(&ffmpeg(), &f.recording, &mut m).unwrap(), 1);
         assert_eq!(duration(&f.recording), joined);
         assert!(about(joined, 6.0));
         assert_eq!(f.names(), ["meta.json", "recording.webm"]);
         assert_eq!((m.parts_joined, m.joining_parts.len()), (1, 0));
+        assert_eq!(m.joining_size, None);
         assert_eq!(f.saved(), Some(m));
+    }
+
+    #[test]
+    fn a_failed_delete_in_recovery_keeps_the_journal() {
+        let f = Folder::new("crash-2-stuck", WEBM, "webm");
+        // A directory under the part's name cannot be removed as a file.
+        fs::create_dir(f.dir.join("recording-part-2.webm")).unwrap();
+        let mut m = journal_after_rename(&f, &["recording-part-2.webm"]);
+        let journal = m.clone();
+        let err = join(&ffmpeg(), &f.recording, &mut m).unwrap_err();
+        assert!(err.to_string().contains("cannot remove"), "{err}");
+        assert_eq!(m, journal, "the caller saves this on failure");
+        assert_eq!(f.saved(), Some(journal));
+    }
+
+    #[test]
+    fn a_journal_without_the_joined_size_joins_afresh() {
+        // The temp file is gone but the recording is still the original: the rename never
+        // happened, so the part was never joined and must not be deleted unjoined.
+        let f = Folder::new("crash-1-no-temp", WEBM, "webm");
+        f.add("recording-part-2.webm", WEBM);
+        let mut m = journal_after_rename(&f, &["recording-part-2.webm"]);
+        m.joining_size = Some(1);
+        assert_eq!(join(&ffmpeg(), &f.recording, &mut m).unwrap(), 1);
+        assert!(about(duration(&f.recording), 6.0));
+        assert_eq!(f.names(), ["meta.json", "recording.webm"]);
+        assert_eq!((m.parts_joined, m.joining_parts.len()), (1, 0));
     }
 
     #[test]
     fn a_journal_name_that_is_not_a_part_is_never_deleted() {
         let f = Folder::new("journal", WEBM, "webm");
         fs::write(f.root.join("x"), "x").unwrap();
-        let mut m = meta(&f.recording);
-        m.joining_parts = [
+        let names = [
             "../x",
             "meta.json",
             "recording.webm",
             "recording-part-2.m4a",
-        ]
-        .map(String::from)
-        .to_vec();
-        m.save(&f.dir.join("meta.json")).unwrap();
+        ];
+        let mut m = journal_after_rename(&f, &names);
         assert_eq!(join(&ffmpeg(), &f.recording, &mut m).unwrap(), 0);
         assert!(f.root.join("x").exists());
         assert_eq!(f.names(), ["meta.json", "recording.webm"]);
