@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LAST_RECORDING_KEY } from '../shared/lastRecording';
 import {
   type ContextUpdate,
   MEETING_CONTEXT_KEY,
@@ -16,8 +17,11 @@ import {
 } from './recordingControl';
 import { saveRecording } from './save';
 
-const flag = vi.hoisted(() => ({ on: false }));
-vi.mock('../shared/flags', () => ({ meetingContextEnabled: () => flag.on }));
+const flag = vi.hoisted(() => ({ on: false, continueOn: false }));
+vi.mock('../shared/flags', () => ({
+  meetingContextEnabled: () => flag.on,
+  continueRecordingEnabled: () => flag.continueOn,
+}));
 
 vi.mock('./save', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./save')>()),
@@ -30,6 +34,8 @@ const TAB = 7;
 const EXTENSION = 'ext-id';
 
 let stored: Record<string, unknown>;
+let local: Record<string, unknown>;
+let failLocalRemove = false;
 let hasDocument: boolean;
 let permission: PermissionState;
 let failContextWrite = false;
@@ -53,9 +59,12 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(T0);
   stored = {};
+  local = {};
+  failLocalRemove = false;
   hasDocument = false;
   permission = 'granted';
   flag.on = false;
+  flag.continueOn = false;
   failContextWrite = false;
   for (const mock of [
     setBadgeText,
@@ -87,6 +96,12 @@ beforeEach(() => {
         },
         remove: async (key: string) => {
           delete stored[key];
+        },
+      },
+      local: {
+        remove: async (key: string) => {
+          if (failLocalRemove) throw new Error('quota');
+          delete local[key];
         },
       },
     },
@@ -141,6 +156,31 @@ describe('start', () => {
       language: 'en',
       startedAt: T0,
     });
+  });
+
+  it('removes the last recording with the flag on', async () => {
+    flag.continueOn = true;
+    local[LAST_RECORDING_KEY] = { download_id: 1 };
+    await startRecording();
+    expect(local[LAST_RECORDING_KEY]).toBeUndefined();
+    expect(status().state.phase).toBe('recording');
+  });
+
+  it('keeps the last recording with the flag off', async () => {
+    local[LAST_RECORDING_KEY] = { download_id: 1 };
+    await startRecording();
+    expect(local[LAST_RECORDING_KEY]).toEqual({ download_id: 1 });
+  });
+
+  it('still records when removing the last recording fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    flag.continueOn = true;
+    failLocalRemove = true;
+    await startRecording();
+    expect(status().state.phase).toBe('recording');
+    expect(sent()).toContain('offscreen_start');
+    expect(error).toHaveBeenCalledWith('Could not clear the last recording');
+    error.mockRestore();
   });
 
   it('reuses an existing offscreen document', async () => {
@@ -425,6 +465,17 @@ describe('running recording', () => {
     );
     expect(status().notice).toEqual({ kind: 'saved' });
     expect(status().state.phase).toBe('idle');
+  });
+
+  it('asks the save to remember the recording with its stop', async () => {
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    vi.setSystemTime(T0 + 30_000);
+    await handlePopupCommand({ type: 'stop' });
+    vi.setSystemTime(T0 + 31_000);
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    expect(saveRecording).toHaveBeenLastCalledWith(
+      expect.objectContaining({ remember: { recordedMs: 30_000, stoppedAt: T0 + 31_000, stopReason: 'user' } }),
+    );
   });
 
   it('still reaches idle with an error notice when saving throws', async () => {

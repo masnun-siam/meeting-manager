@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { LAST_RECORDING_KEY } from '../shared/lastRecording';
 import { sendNative } from '../shared/nativeClient';
 import { nextFreeName, recordingName, saveRecording, takenNames } from './save';
 
 vi.mock('../shared/nativeClient', () => ({ sendNative: vi.fn() }));
+const flag = vi.hoisted(() => ({ continueOn: false }));
+vi.mock('../shared/flags', () => ({ continueRecordingEnabled: () => flag.continueOn }));
 const removeEntry = vi.fn();
 vi.mock('../shared/recordingFile', () => ({ deleteRecordingFile: (...a: unknown[]) => removeEntry(...a) }));
 
@@ -13,6 +16,7 @@ let listener: (delta: unknown) => void;
 const download = vi.fn();
 const search = vi.fn();
 const sendMessage = vi.fn();
+const localSet = vi.fn();
 
 /** `download` resolves with id 5, then Chrome reports `delta` for it. */
 function finishWith(delta: Record<string, unknown>) {
@@ -23,12 +27,14 @@ function finishWith(delta: Record<string, unknown>) {
 }
 
 beforeEach(() => {
-  for (const m of [download, search, sendMessage, removeEntry, vi.mocked(sendNative)]) m.mockReset();
+  for (const m of [download, search, sendMessage, removeEntry, localSet, vi.mocked(sendNative)]) m.mockReset();
+  flag.continueOn = false;
   sendMessage.mockResolvedValue({ url: 'blob:x' });
   removeEntry.mockResolvedValue(undefined);
   search.mockResolvedValue([{ filename: '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm' }]);
   vi.stubGlobal('chrome', {
     runtime: { sendMessage },
+    storage: { local: { set: localSet } },
     downloads: {
       download,
       search,
@@ -154,5 +160,63 @@ describe('saveRecording', () => {
     sendMessage.mockResolvedValue({ error: 'gone' });
     expect(await saveRecording(opts)).toMatchObject({ kind: 'error' });
     expect(download).not.toHaveBeenCalled();
+  });
+});
+
+describe('saveRecording remembers the last recording', () => {
+  const PATH = '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm';
+  const remember = { recordedMs: 5_000, stoppedAt: STARTED + 5_000, stopReason: 'user' as const };
+
+  beforeEach(() => {
+    flag.continueOn = true;
+  });
+
+  it('stores it after a complete download, even when too short to process', async () => {
+    finishWith({ state: { current: 'complete' } });
+    expect(await saveRecording({ ...opts, process: false, remember })).toEqual({ kind: 'too_short' });
+    expect(localSet).toHaveBeenCalledWith({
+      [LAST_RECORDING_KEY]: {
+        download_id: 5,
+        path: PATH,
+        folder: 'meeting-2026-10-19_1430',
+        ext: 'webm',
+        recorded_ms: 5_000,
+        language: 'en',
+        stopped_at: STARTED + 5_000,
+        stop_reason: 'user',
+        parts: 1,
+      },
+    });
+    expect(localSet.mock.invocationCallOrder[0]).toBeLessThan(removeEntry.mock.invocationCallOrder[0]);
+  });
+
+  it('stores nothing when the download is interrupted', async () => {
+    finishWith({ state: { current: 'interrupted' }, error: { current: 'FILE_NO_SPACE' } });
+    await saveRecording({ ...opts, remember });
+    expect(localSet).not.toHaveBeenCalled();
+  });
+
+  it('stores nothing with the flag off', async () => {
+    flag.continueOn = false;
+    finishWith({ state: { current: 'complete' } });
+    await saveRecording({ ...opts, process: false, remember });
+    expect(localSet).not.toHaveBeenCalled();
+  });
+
+  it('stores nothing without remember', async () => {
+    finishWith({ state: { current: 'complete' } });
+    await saveRecording({ ...opts, process: false });
+    expect(localSet).not.toHaveBeenCalled();
+  });
+
+  it('still saves and processes when the write fails, logging a fixed text', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    finishWith({ state: { current: 'complete' } });
+    localSet.mockRejectedValue(new Error(`quota ${PATH}`));
+    vi.mocked(sendNative).mockResolvedValue({ ok: true, job_id: 'j1' });
+    expect(await saveRecording({ ...opts, remember })).toEqual({ kind: 'saved' });
+    expect(error).toHaveBeenCalledWith('Could not store the last recording');
+    expect(sendNative).toHaveBeenCalled();
+    error.mockRestore();
   });
 });

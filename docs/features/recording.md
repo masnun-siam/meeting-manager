@@ -50,6 +50,7 @@ sequenceDiagram
   O-->>SW: blob URL
   SW->>D: download Meetings/name/recording.webm
   D-->>SW: complete, absolute path
+  SW->>SW: flag on: storage.local last_recording
   SW->>FS: deleteRecordingFile
   SW->>T: sendNative process {path, language, context?} (only if >= 10 s)
   T-->>SW: reply
@@ -67,6 +68,7 @@ Rules:
 - The temp file is deleted only after the download completes. A failed delete is ignored.
 - A save error keeps the temp file. It is retried by recovery at the next browser start.
 - If the status already holds an `error` notice, the save result does not overwrite it.
+- Last recording (`FEATURE_CONTINUE_RECORDING=1` only): after the download completes, and before the temp file is deleted, `saveRecording` writes `last_recording` to `chrome.storage.local` (`shared/lastRecording.ts`): download id, absolute path, folder name, recorded time, language, `stopped_at` (when `offscreenStopped` ran), stop reason, `parts: 1`. Short recordings are remembered too; a failed download writes nothing. Start removes it right after the status turns `recording`, so only the newest recording can be continued. A failed write or removal is logged with a fixed text and never fails the save or Start. `canContinue` (pure) allows a continuation while idle, within 2 h of `stopped_at` (inclusive), with the saved file still in Chrome's download history (`lastRecordingExists`) and under 3 h recorded. Flag off: nothing is read, written or removed.
 
 ## Stop reasons
 
@@ -131,6 +133,7 @@ flowchart TD
 2. Delete empty files.
 3. Create an offscreen document with reason `BLOBS`.
 4. For each file: name `<recordingName>-recovered` (`recoveredName`, plus `nextFreeName`), then `saveRecording` with `process: true` and the last language from `storage.local` (`bn` if unset).
+   Flag on, a saved leftover becomes `last_recording` with `stopped_at` = the recovery time, `stop_reason: null` and `recorded_ms` estimated as the file's last write minus its start (paused time included), capped at 3 h (`estimatedRecordedMs`).
 5. Show each result as a `Notice` in the status. Close the offscreen document only if the status is still `idle`.
 
 ## Errors and notices

@@ -51,4 +51,12 @@ describe('manifest', () => {
     expect(flagFromEnv({ FEATURE_MEETING_CONTEXT: '1' })).toBe(true);
     for (const v of [undefined, '', '0', 'true']) expect(flagFromEnv({ FEATURE_MEETING_CONTEXT: v })).toBe(false);
   });
+
+  it('reads a named flag as exactly 1', () => {
+    const name = 'FEATURE_CONTINUE_RECORDING';
+    expect(flagFromEnv({ FEATURE_CONTINUE_RECORDING: '1' }, name)).toBe(true);
+    for (const v of [undefined, '', '0', 'true'])
+      expect(flagFromEnv({ FEATURE_CONTINUE_RECORDING: v }, name)).toBe(false);
+    expect(flagFromEnv({ FEATURE_MEETING_CONTEXT: '1' }, name)).toBe(false);
+  });
 });
