@@ -495,12 +495,14 @@ describe('RecordingBar', () => {
       expect(close).toHaveFocus();
     });
 
-    it('the × is at least 24 x 24 px', () => {
+    it('the × is at least 24 x 24 px and Start keeps its focus ring', () => {
       const css = readFileSync(join(import.meta.dirname, 'RecordingBar.module.css'), 'utf8');
       const rule = css.slice(css.indexOf('.dismiss {'), css.indexOf('}', css.indexOf('.dismiss {')));
       expect(rule).toMatch(/min-width: 24px/);
       expect(rule).toMatch(/min-height: 24px/);
       expect(rule).not.toMatch(/outline: none/);
+      // Start's own shadow must not hide the focus ring a closed last line sends it.
+      expect(css).toMatch(/\.start:focus-visible \{\s*box-shadow: var\(--focus\);/);
     });
   });
 });

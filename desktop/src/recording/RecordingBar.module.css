@@ -124,6 +124,11 @@
   box-shadow: 0 1px 2px rgb(229 72 77 / 30%);
 }
 
+/* Its own shadow would hide the global focus ring, where FR-3 sends focus after the last ×. */
+.start:focus-visible {
+  box-shadow: var(--focus);
+}
+
 .messages:empty {
   display: none;
 }
