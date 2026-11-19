@@ -82,6 +82,12 @@ pub fn desktop_enabled() -> bool {
     flag_gate(option_env!("FEATURE_DESKTOP_APP"))
 }
 
+/// Whether the tool was built with `FEATURE_CONTINUE_RECORDING=1`; read at build time, as
+/// the other flags.
+pub fn continue_enabled() -> bool {
+    flag_gate(option_env!("FEATURE_CONTINUE_RECORDING"))
+}
+
 /// The CLI for this build. Clap cannot remove a derived subcommand, so with the gate off
 /// `set-calendar` is hidden here and refused in `run`.
 fn cli(context: bool) -> clap::Command {
@@ -305,6 +311,7 @@ fn process(
         context: context_enabled(),
         desktop: desktop_enabled(),
         store_path: store::default_path(&config::home()?),
+        continue_recording: continue_enabled(),
         calendar: secret::calendar_address,
         calendar_policy: Policy::REAL,
     };
@@ -337,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn both_flags_go_through_the_gate() {
+    fn every_flag_goes_through_the_gate() {
         assert_eq!(
             context_enabled(),
             flag_gate(option_env!("FEATURE_MEETING_CONTEXT"))
@@ -345,6 +352,10 @@ mod tests {
         assert_eq!(
             desktop_enabled(),
             flag_gate(option_env!("FEATURE_DESKTOP_APP"))
+        );
+        assert_eq!(
+            continue_enabled(),
+            flag_gate(option_env!("FEATURE_CONTINUE_RECORDING"))
         );
     }
 

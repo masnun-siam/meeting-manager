@@ -350,6 +350,8 @@ mod tests {
             title: None,
             speakers: vec![],
             runs: vec![],
+            parts_joined: 0,
+            joining_parts: vec![],
         }
     }
 

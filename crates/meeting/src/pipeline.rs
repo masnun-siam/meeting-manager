@@ -19,7 +19,7 @@ use crate::lock::Lock;
 use crate::meta::{Meta, Run, Speaker, recorded_at_for};
 use crate::store::{self, EventLink, Row, RunResult, RunStart, Source, Status, Store};
 use crate::vault::{self, CalendarOutcome, Note};
-use crate::{context, extract, ical, plan, summarise, summary_md, transcript};
+use crate::{context, extract, ical, join, plan, summarise, summary_md, transcript};
 
 const NO_SPEECH: &str = "No speech detected";
 
@@ -36,6 +36,8 @@ pub struct Pipeline {
     pub desktop: bool,
     /// The notes database; opened only when `desktop`.
     pub store_path: PathBuf,
+    /// `FEATURE_CONTINUE_RECORDING`: off, parts are never looked for.
+    pub continue_recording: bool,
     /// The secret iCal address. Called only for a context with a meeting ID.
     pub calendar: fn() -> anyhow::Result<Option<String>>,
     pub calendar_policy: Policy,
@@ -312,6 +314,11 @@ impl Pipeline {
         if let Some(track) = &mut st.track {
             track.run = start_tracking(&track.store, &p, stored.as_ref(), ctx.as_ref(), language);
         }
+        let (stored, joined) = if self.continue_recording {
+            self.join_parts(st, &p, stored, language)?
+        } else {
+            (stored, 0)
+        };
         let files = plan::Files {
             webm: modified(&p.recording),
             audio: modified(&p.audio),
@@ -321,20 +328,14 @@ impl Pipeline {
         let plan = plan::plan(
             &files,
             stored.as_ref().map(|m| m.language),
-            retranscribe,
+            // The joined recording is transcribed whole again, even on a Retry without a
+            // language (FR-10): the old transcript covers only the first part.
+            retranscribe || joined > 0,
             language,
         )?;
         let mut meta = match stored {
             Some(meta) => meta,
-            None => Meta {
-                recording: p.recording.clone(),
-                language: plan.language,
-                recorded_at: recorded_at_for(&p.recording)?,
-                duration_s: None,
-                title: None,
-                speakers: vec![],
-                runs: vec![],
-            },
+            None => new_meta(&p.recording, plan.language)?,
         };
         meta.language = plan.language;
         st.meta = Some(meta);
@@ -385,6 +386,38 @@ impl Pipeline {
         remove(&p.raw)?;
         st.finish(&title, summary)?;
         Ok(title)
+    }
+
+    /// Joins the recording's parts under the lock, before the plan, and returns the stored
+    /// meta (created when there was none) and how many parts were joined. Without parts or an
+    /// interrupted join it changes nothing, not even the job's stages.
+    fn join_parts(
+        &self,
+        st: &mut State,
+        p: &Paths,
+        stored: Option<Meta>,
+        language: Option<Language>,
+    ) -> anyhow::Result<(Option<Meta>, usize)> {
+        let interrupted = stored.as_ref().is_some_and(|m| !m.joining_parts.is_empty());
+        // A listing error (a part in another format) fails the job at `joining` below.
+        let no_parts = join::parts_of(&p.recording).is_ok_and(|parts| parts.is_empty());
+        if no_parts && !interrupted {
+            return Ok((stored, 0));
+        }
+        let meta = match stored {
+            Some(meta) => meta,
+            None => {
+                let Some(language) = language else {
+                    anyhow::bail!("no language stored for this recording; pass --language bn|en");
+                };
+                new_meta(&p.recording, language)?
+            }
+        };
+        // In the state while joining, so a failure is recorded in `meta.json` too.
+        st.meta = Some(meta);
+        st.enter(Stage::Joining)?;
+        let joined = join::join(&self.config.ffmpeg_path, &p.recording, st.meta())?;
+        Ok((st.meta.take(), joined))
     }
 
     /// `context.json`, read once per run. With the desktop flag off its `calendar_event` is
@@ -632,6 +665,20 @@ fn meeting_of(event: &context::CalendarEvent) -> Meeting {
     }
 }
 
+fn new_meta(recording: &Path, language: Language) -> anyhow::Result<Meta> {
+    Ok(Meta {
+        recording: recording.into(),
+        language,
+        recorded_at: recorded_at_for(recording)?,
+        duration_s: None,
+        title: None,
+        speakers: vec![],
+        runs: vec![],
+        parts_joined: 0,
+        joining_parts: vec![],
+    })
+}
+
 fn modified(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|m| m.modified()).ok()
 }
@@ -756,6 +803,7 @@ mod tests {
             context: false,
             desktop: false,
             store_path: root.join("store/notes.sqlite"),
+            continue_recording: false,
             calendar: stored_address,
             calendar_policy: Policy {
                 https_only: false,
@@ -1959,5 +2007,135 @@ mod tests {
         );
         assert!(stdin.contains("partial: calendar_event\n"), "{stdin}");
         assert!(!stdin.contains("Plans & goals"), "{stdin}");
+    }
+
+    impl Env {
+        /// Turns `FEATURE_CONTINUE_RECORDING` on and puts a copy of the fixture as part 2.
+        fn with_part(&mut self) {
+            self.pipeline.continue_recording = true;
+            fs::copy(FIXTURE, self.file("recording-part-2.webm")).unwrap();
+        }
+    }
+
+    #[test]
+    fn with_the_flag_off_a_join_part_is_left_alone() {
+        let mut env = setup("pipe-join-off", vec![(200, EN)]);
+        env.with_part();
+        env.pipeline.continue_recording = false;
+        let (ending, out) = env.run(Some(Language::En), None);
+        done(ending);
+        assert!(!out.contains("joining"), "{out}");
+        assert!(env.names().contains(&"recording-part-2.webm".into()));
+        assert_eq!(
+            fs::read(env.file("recording.webm")).unwrap(),
+            fs::read(FIXTURE).unwrap()
+        );
+        assert_eq!(env.meta().parts_joined, 0);
+    }
+
+    #[test]
+    fn a_join_comes_before_extracting_and_the_run_ends_done() {
+        let mut env = setup("pipe-join-on", vec![(200, EN)]);
+        env.with_part();
+        let (ending, out) = env.run(Some(Language::En), None);
+        done(ending);
+        assert!(
+            out.starts_with("joining\nextracting\ntranscribing\n"),
+            "{out}"
+        );
+        assert_eq!(
+            env.names(),
+            ["meta.json", "recording.webm", "summary.md", "transcript.md"]
+        );
+        let meta = env.meta();
+        assert_eq!((meta.parts_joined, meta.joining_parts.len()), (1, 0));
+        assert_eq!(meta.runs.len(), 1);
+        assert_eq!(env.job().stage, Stage::Done);
+    }
+
+    #[test]
+    fn a_done_meeting_with_a_new_part_is_joined_and_transcribed_again() {
+        let mut env = setup("pipe-join-rerun", vec![(200, EN), (200, EN)]);
+        done(env.run(Some(Language::En), None).0);
+        assert_eq!(env.requests().len(), 1);
+
+        env.with_part();
+        // A Retry sends no language: the join still forces a new transcript.
+        let (ending, out) = env.run(None, None);
+        done(ending);
+        assert_eq!(env.requests().len(), 1);
+        assert!(
+            out.starts_with("joining\nextracting\ntranscribing\n"),
+            "{out}"
+        );
+        assert_eq!(env.meta().parts_joined, 1);
+        assert_eq!(env.notes(), 1);
+    }
+
+    #[test]
+    fn a_join_rerun_keeps_edits_and_my_notes() {
+        let mut env = setup("pipe-join-edits", vec![(200, EN), (200, EN)]);
+        env.with_desktop();
+        done(env.run(Some(Language::En), None).0);
+        let id = env.row().id;
+        let store = env.store();
+        store.edit(id, Edit::Title("My title".into())).unwrap();
+        store.edit(id, Edit::MyNotes("keep".into())).unwrap();
+        drop(store);
+
+        env.with_part();
+        assert_eq!(done(env.run(None, None).0), "My title");
+        let row = env.row();
+        assert_eq!(row.id, id);
+        assert_eq!(row.status, Status::Done);
+        assert_eq!(row.my_notes, "keep");
+        assert_eq!(env.notes(), 1);
+        assert!(env.note().ends_with("\n\n## My notes\n\nkeep\n"));
+    }
+
+    #[test]
+    fn a_failed_join_keeps_everything_and_a_retry_joins_it() {
+        let mut env = setup("pipe-join-fail", vec![(200, EN)]);
+        env.with_desktop();
+        env.with_part();
+        fs::write(env.file("recording-part-2.webm"), "not a video").unwrap();
+        let (stage, error) = failed(env.run(Some(Language::En), None).0);
+        assert_eq!(stage, Stage::Joining);
+        assert!(!error.contains('\n'), "{error}");
+        assert_failed(&env, Stage::Joining, "ffmpeg failed: ");
+        assert!(
+            env.job()
+                .error
+                .unwrap()
+                .starts_with("joining: ffmpeg failed: ")
+        );
+        assert_eq!(
+            env.names(),
+            ["meta.json", "recording-part-2.webm", "recording.webm"]
+        );
+        assert_eq!(
+            fs::read(env.file("recording.webm")).unwrap(),
+            fs::read(FIXTURE).unwrap()
+        );
+        assert_eq!(env.meta().parts_joined, 0);
+        assert!(env.requests().is_empty());
+        let row = env.row();
+        assert_eq!(row.status, Status::Failed);
+        assert_eq!(row.failed_stage.as_deref(), Some("joining"));
+
+        fs::copy(FIXTURE, env.file("recording-part-2.webm")).unwrap();
+        done(env.run(None, None).0);
+        assert_eq!(env.meta().parts_joined, 1);
+        assert!(!env.names().contains(&"recording-part-2.webm".into()));
+    }
+
+    #[test]
+    fn a_join_without_a_language_fails_before_joining() {
+        let mut env = setup("pipe-join-language", vec![]);
+        env.with_part();
+        let (stage, error) = failed(env.run(None, None).0);
+        assert_eq!(stage, Stage::Queued);
+        assert!(error.contains("pass --language"), "{error}");
+        assert!(env.names().contains(&"recording-part-2.webm".into()));
     }
 }
