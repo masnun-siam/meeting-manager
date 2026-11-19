@@ -412,6 +412,7 @@ None formally defined. Informally: every Slack and WhatsApp call recorded for tw
 - 2026-11-16 **D48 The extension is not updated by the app, and a failed update keeps the current version.** The native-messaging protocol is unchanged (D8), so an older extension keeps working; failures show in Settings and retry at the next launch; no downgrade. Decided by: Siam, "Extension out; keep current on failure (Recommended)".
 - 2026-11-16 **D49 Update UI: Settings shows the version, "Check for updates" and an "Install updates automatically" checkbox; installs only while the recorder is idle.** Smaller rules proposed by Claude for the owner's review: the checkbox is off by default; automatic checks at launch and every 6 hours; release notes from the tag message; the `meeting` swap runs on every launch before anything can start a job. Team proposal, no source, for the rules after the first sentence. Decided by: Siam, "Toggle + manual button (Recommended)".
 - 2026-11-16 **D50 Release-only bundle settings live in `desktop/src-tauri/tauri.release.conf.json`, merged only by the release workflow (`tauri build --config`).** It holds the bundled `meeting` binary (`bundle.resources`) and `bundle.createUpdaterArtifacts`, so local builds and the Rust gate need neither the signing key nor a prebuilt `meeting`. A local build has no bundled tool and FR-27 skips the swap. Decided by: Siam during issue refinement, "Release overlay file (Recommended)".
+- 2026-11-16 **D51 Both crates declare `rust-version = "1.90"`, and `tauri-build` moves to 2.7.x.** The declared 1.87 did not build (let-chains need 1.88). It also held `tauri-build` on 2.6.3, which with Rust ≥ 1.100's build-dir layout copies the bundled `meeting` onto the wrong directory, so `release.yml` had to pin Rust 1.99.1. With 1.90, `tauri-build` 2.7 fixes that and the pin goes away. A CI job on 1.90 keeps the minimum true. Decided by: Siam during refinement of #177, "1.90 + tauri-build 2.7 (Recommended)".
 
 ## Open questions
 
@@ -427,6 +428,7 @@ None.
 - 2026-11-14: D43 added while filing #164 from #147 (summary links open through `note_open_link`; `on_navigation` guard; API table row). Affects #147, #164.
 - 2026-11-16: Updates added: FR-24 to FR-27, D44 to D49, epic E2; D12's "no auto-update" replaced (signing unchanged); Non-goals, Data, API, Backend, Edge cases, Threats, Testing and Rollout updated. E1 issues are not affected. Approved by Siam; epic #169.
 - 2026-11-16: D50 added during issue refinement of #169 (release-only overlay config; Backend and Rollout updated). Affects #171, #173.
+- 2026-11-16: D51 added during refinement of #177 (minimum Rust 1.90, tauri-build 2.7, release pin removed). Affects #177, #171.
 
 ## Related
 
