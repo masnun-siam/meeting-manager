@@ -675,6 +675,26 @@ mod tests {
     }
 
     #[test]
+    fn dismissing_an_error_notice_keeps_the_wav_for_recovery() {
+        let rig = rig("dismiss-error-notice", ok_capture());
+        write_config(&rig.env(), broken_ffmpeg(&rig));
+        let folder = rig.start().unwrap();
+        push(11 * SECOND);
+        let notice = rig.stop(Reason::User).notice.unwrap();
+        assert_eq!(notice, Notice::retry("ffmpeg failed: boom", &folder));
+        rig.recorder.dismiss_notice();
+        // Cleared whole: no `folder` is left for the window to retry.
+        assert_eq!(rig.recorder.status().notice, None);
+        assert!(folder.join(WAV).is_file());
+
+        // The next launch's recovery still converts the kept WAV.
+        write_config(&rig.env(), ffmpeg());
+        rig.recorder.recover_all();
+        assert!(folder.join(M4A).is_file());
+        assert!(!folder.join(WAV).exists());
+    }
+
+    #[test]
     fn retry_after_a_full_disk_converts_the_kept_wav() {
         let rig = rig("retry-disk", ok_capture());
         let folder = rig.start().unwrap();

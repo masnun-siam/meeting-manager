@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RECORDER_STATUS_KEY, type RecorderStatus } from '../shared/messages';
-import { recoveredName, recoverLeftovers } from './recover';
+import { RECORDING_CAP_MS } from '../shared/recordingState';
+import { estimatedRecordedMs, recoveredName, recoverLeftovers } from './recover';
 import { saveRecording } from './save';
 
 vi.mock('./save', async (importOriginal) => ({
@@ -12,6 +13,7 @@ vi.mock('./save', async (importOriginal) => ({
 let stored: Record<string, unknown>;
 let local: Record<string, unknown>;
 let files: Map<string, number>;
+let modified: Map<string, number>;
 let hasDocument: boolean;
 const createDocument = vi.fn();
 const closeDocument = vi.fn();
@@ -24,6 +26,7 @@ beforeEach(() => {
   local = {};
   hasDocument = false;
   files = new Map();
+  modified = new Map();
   vi.mocked(saveRecording).mockClear();
   createDocument.mockReset().mockImplementation(async () => {
     hasDocument = true;
@@ -33,7 +36,8 @@ beforeEach(() => {
   });
   const dir = {
     async *entries() {
-      for (const [name, size] of files) yield [name, { kind: 'file', getFile: async () => ({ size }) }];
+      for (const [name, size] of files)
+        yield [name, { kind: 'file', getFile: async () => ({ size, lastModified: modified.get(name) ?? 0 }) }];
     },
     removeEntry: async (name: string) => void files.delete(name),
   };
@@ -57,7 +61,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('recoveredName', () => {
   it('uses the local time of the start', () => {
@@ -65,7 +72,31 @@ describe('recoveredName', () => {
   });
 });
 
+describe('estimatedRecordedMs', () => {
+  it('is the time to the last write, never negative and never above the cap', () => {
+    expect(estimatedRecordedMs(1000, 61_000)).toBe(60_000);
+    expect(estimatedRecordedMs(1000, 500)).toBe(0);
+    expect(estimatedRecordedMs(0, RECORDING_CAP_MS + 1)).toBe(RECORDING_CAP_MS);
+  });
+});
+
 describe('recoverLeftovers', () => {
+  it('asks the save to remember it as stopped at the recovery time, with no stop reason', async () => {
+    const NOW = new Date('2026-11-20T10:00:00Z').getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    files.set('1000.webm', 5);
+    modified.set('1000.webm', 1000 + 90_000);
+    await recoverLeftovers();
+
+    expect(saveRecording).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startedAt: 1000,
+        remember: { recordedMs: 90_000, stoppedAt: NOW, stopReason: null },
+      }),
+    );
+  });
+
   it('saves each leftover in order with the stored language, then closes the offscreen document', async () => {
     local.language = 'en';
     files.set('1000.webm', 5);

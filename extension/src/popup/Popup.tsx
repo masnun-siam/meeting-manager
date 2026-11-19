@@ -15,23 +15,31 @@ export function Popup() {
 
   return (
     <main className={styles.popup}>
-      <div role="tablist" className={styles.tablist}>
-        {TABS.map(({ id, label }) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            id={`tab-${id}`}
-            aria-selected={selected === id}
-            aria-controls={selected === id ? `panel-${id}` : undefined}
-            className={styles.tab}
-            onClick={() => setSelected(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div role="tabpanel" id={`panel-${selected}`} aria-labelledby={`tab-${selected}`} className={styles.panel}>
+      <header className={styles.header}>
+        <span className={styles.wordmark}>
+          meeting
+          <span aria-hidden="true" className={styles.dot}>
+            .
+          </span>
+        </span>
+        <div role="tablist" className={styles.tablist}>
+          {TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`tab-${id}`}
+              aria-selected={selected === id}
+              aria-controls={selected === id ? `panel-${id}` : undefined}
+              className={styles.tab}
+              onClick={() => setSelected(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </header>
+      <div role="tabpanel" id={`panel-${selected}`} aria-labelledby={`tab-${selected}`}>
         {selected === 'record' ? <RecordTab /> : <JobsTab />}
       </div>
     </main>

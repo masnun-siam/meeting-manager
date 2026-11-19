@@ -74,6 +74,7 @@ const cases: Case[] = [
   ['updateInstall', () => api.updateInstall(), 'update_install', undefined],
   ['setAutoUpdate', () => api.setAutoUpdate({ enabled: true }), 'set_auto_update', { enabled: true }],
   ['recorderDismissStartError', () => api.recorderDismissStartError(), 'recorder_dismiss_start_error', undefined],
+  ['recorderDismissNotice', () => api.recorderDismissNotice(), 'recorder_dismiss_notice', undefined],
   ['indicatorSettings', () => api.indicatorSettings(), 'indicator_settings', undefined],
   [
     'setIndicatorEnabled',
@@ -94,7 +95,7 @@ describe('api', () => {
     const commands = new Set(cases.map(([name]) => name.split(' ')[0]));
     const exported = Object.keys(api).filter((name) => name !== 'recordingUrl');
     expect([...commands].sort()).toEqual(exported.sort());
-    expect(commands.size).toBe(34);
+    expect(commands.size).toBe(35);
   });
 
   it('builds the recording URL the player loads, without invoking anything', () => {
