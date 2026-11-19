@@ -6,7 +6,7 @@ import { useMeetingContext } from './useMeetingContext';
 import { useRecorderStatus } from './useRecorderStatus';
 
 const LANGUAGES: { value: Language; label: string }[] = [
-  { value: 'bn', label: 'Bengali' },
+  { value: 'bn', label: 'বাংলা' },
   { value: 'en', label: 'English' },
 ];
 
@@ -32,9 +32,10 @@ function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-function formatElapsed(ms: number): string {
+/** `H:MM:SS`, e.g. `0:04:01`. */
+export function formatElapsed(ms: number): string {
   const total = Math.floor(ms / 1000);
-  return `${pad(Math.floor(total / 3600))}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
+  return `${Math.floor(total / 3600)}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
 }
 
 function noticeText(notice: Notice): string {
@@ -48,24 +49,26 @@ function noticeText(notice: Notice): string {
   }
 }
 
+type Tone = 'info' | 'problem';
+
 interface Line {
   text: string;
-  problem: boolean;
+  tone: Tone;
 }
 
 function messageLines(status: RecorderStatus | null, sendError: string | null): Line[] {
   const lines: Line[] = [];
-  if (sendError) lines.push({ text: sendError, problem: true });
+  if (sendError) lines.push({ text: sendError, tone: 'problem' });
   if (status?.notice) {
     lines.push({
       text: noticeText(status.notice),
-      problem: status.notice.kind === 'setup' || status.notice.kind === 'error',
+      tone: status.notice.kind === 'setup' || status.notice.kind === 'error' ? 'problem' : 'info',
     });
   }
-  if (status?.micIncluded === false) lines.push({ text: MIC_WARNING, problem: false });
+  if (status?.micIncluded === false) lines.push({ text: MIC_WARNING, tone: 'info' });
   if (status?.state.phase === 'idle' && status.state.lastStop) {
     const stop = STOP_MESSAGES[status.state.lastStop];
-    if (stop) lines.push({ text: stop, problem: false });
+    if (stop) lines.push({ text: stop, tone: 'info' });
   }
   return lines;
 }
@@ -115,6 +118,10 @@ function useStoredLanguage(): [Language, (language: Language) => void] {
   return [language, setLanguage];
 }
 
+function Message({ text, tone }: Line) {
+  return <p className={tone === 'problem' ? styles.problem : styles.info}>{text}</p>;
+}
+
 export function RecordTab() {
   const status = useRecorderStatus();
   const context = useMeetingContext();
@@ -146,54 +153,68 @@ export function RecordTab() {
   const running = phase === 'recording' || phase === 'paused';
   const line = running && context ? contextLine(context) : null;
 
+  const shownLanguage = phase === 'idle' ? language : (status?.language ?? language);
+
   return (
     <div className={styles.tab}>
-      <label className={styles.row}>
-        Language
-        <select
-          value={phase === 'idle' ? language : (status?.language ?? language)}
-          disabled={phase !== 'idle'}
-          onChange={(event) => isLanguage(event.target.value) && setLanguage(event.target.value)}
-        >
-          {LANGUAGES.map(({ value, label }) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {phase === 'recording' || phase === 'paused' ? (
-        <p role="timer" aria-label="Recorded time" className={styles.timer}>
-          <span className={phase === 'recording' ? styles.rec : undefined}>
-            {phase === 'recording' ? '● REC' : 'II Paused'}
-          </span>{' '}
-          {formatElapsed(elapsedMs(state, now))}
-        </p>
-      ) : null}
-      {phase === 'saving' ? <p>Saving…</p> : null}
-
-      <div className={styles.row}>
+      <div className={styles.stage}>
+        {running ? (
+          <>
+            <p className={phase === 'recording' ? styles.rec : styles.paused}>
+              {phase === 'recording' ? 'REC' : 'Paused'}
+            </p>
+            <p role="timer" aria-label="Recorded time" className={styles.timer}>
+              {formatElapsed(elapsedMs(state, now))}
+            </p>
+          </>
+        ) : null}
         {phase === 'idle' ? (
-          <button type="button" onClick={() => send({ type: 'start', language })}>
-            Start
-          </button>
+          <p aria-hidden="true" className={`${styles.timer} ${styles.dim}`}>
+            {formatElapsed(0)}
+          </p>
         ) : null}
-        {phase === 'recording' ? (
-          <button type="button" onClick={() => send({ type: 'pause' })}>
-            Pause
-          </button>
+        {phase === 'saving' ? <p className={styles.saving}>Saving…</p> : null}
+
+        {phase === 'idle' ? (
+          <button
+            type="button"
+            aria-label="Start recording"
+            className={styles.record}
+            onClick={() => send({ type: 'start', language })}
+          />
         ) : null}
-        {phase === 'paused' ? (
-          <button type="button" onClick={() => send({ type: 'resume' })}>
-            Resume
-          </button>
+        {running ? (
+          <div className={styles.actions}>
+            {phase === 'recording' ? (
+              <button type="button" className={styles.secondary} onClick={() => send({ type: 'pause' })}>
+                Pause
+              </button>
+            ) : (
+              <button type="button" className={styles.secondary} onClick={() => send({ type: 'resume' })}>
+                Resume
+              </button>
+            )}
+            <button type="button" className={styles.stop} onClick={() => send({ type: 'stop' })}>
+              Stop & save
+            </button>
+          </div>
         ) : null}
-        {phase === 'recording' || phase === 'paused' ? (
-          <button type="button" onClick={() => send({ type: 'stop' })}>
-            Stop & save
-          </button>
-        ) : null}
+
+        <div role="radiogroup" aria-label="Language" className={styles.language}>
+          {LANGUAGES.map(({ value, label }) => (
+            <label key={value} className={styles.choice} lang={value}>
+              <input
+                type="radio"
+                name="language"
+                value={value}
+                checked={shownLanguage === value}
+                disabled={phase !== 'idle'}
+                onChange={() => setLanguage(value)}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
       </div>
 
       <div role="status" className={styles.messages}>
@@ -203,10 +224,8 @@ export function RecordTab() {
             <span className={styles.srOnly}>{line.announce}</span>
           </>
         ) : null}
-        {lines.map(({ text, problem }) => (
-          <p key={text} className={problem ? styles.problem : undefined}>
-            {text}
-          </p>
+        {lines.map((message) => (
+          <Message key={message.text} {...message} />
         ))}
       </div>
     </div>

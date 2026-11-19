@@ -48,6 +48,8 @@ const PAIRS: [string, string, number][] = [
   ['text', 'surface-raised', TEXT],
   ['text-muted', 'surface', TEXT],
   ['text-muted', 'surface-raised', TEXT],
+  // The idle timer: large (44px) text, so 3:1.
+  ['text-dim', 'surface', LARGE_OR_UI],
   ['accent-text', 'surface', TEXT],
   ['on-accent', 'accent', TEXT],
   ['record-text', 'surface', TEXT],
