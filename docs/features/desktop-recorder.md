@@ -170,7 +170,7 @@ Built in `tray::setup` on the main thread (skipped with a warning otherwise, so 
 - First line, disabled, only when there is something to say: the recorder's start error (the FR-2 permission texts word for word, `not_configured`, `capture_failed`), else an `error` or `setup` notice. The window's Dismiss clears the start error here too, and `recorder_dismiss_notice` the notice. "A recording is already running" is never shown: not idle is not a start error.
 - Continue last recording (continue-recording FR-6, FR-14): only in a build with `FEATURE_CONTINUE_RECORDING=1` (`menu_ids` lists it directly under Start recording; without the flag it is not in the menu). Enabled only when idle and `recorder_status.continuable` is not `null` (`MenuState.continue_enabled`); a click runs `Recorder::continue_ad_hoc()` on a thread, and a refusal becomes the start error on the first line.
 - Start recording: `Recorder::start_ad_hoc(None)` on a thread. Open Meeting: shows and focuses the `main` window. Quit: `app.exit(0)`, so the quit logic above decides.
-- Every recorder change re-renders through `on_change`; a timer thread refreshes only the title while recording.
+- Every recorder change re-renders through `on_change`; a timer thread refreshes the title each second while recording and, with the flag, re-renders every 30 s when the Continue item no longer matches `continuable` (`continue_stale`: the 2 hours passed or the folder was moved, with no recorder change).
 
 ## Links (`link.rs`)
 

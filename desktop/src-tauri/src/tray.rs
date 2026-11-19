@@ -4,6 +4,7 @@
 //! so a main thread blocked in `quit` cannot deadlock a render.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -96,6 +97,11 @@ fn menu_ids(continue_enabled: bool) -> Vec<&'static str> {
     ids
 }
 
+/// Whether the Continue item, shown enabled or not as `shown`, no longer matches `status`.
+fn continue_stale(status: &Status, shown: bool) -> bool {
+    menu_state(status, None).continue_enabled != shown
+}
+
 /// `H:MM:SS`.
 pub fn clock(secs: u64) -> String {
     format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
@@ -110,6 +116,8 @@ struct Tray<R: Runtime> {
     start: MenuItem<R>,
     /// `None` in a build without `FEATURE_CONTINUE_RECORDING`.
     continue_last: Option<MenuItem<R>>,
+    /// Whether `continue_last` was last shown enabled.
+    continue_shown: AtomicBool,
     pause: MenuItem<R>,
     stop: MenuItem<R>,
 }
@@ -185,6 +193,7 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Tray<R>> {
         notice,
         start,
         continue_last,
+        continue_shown: AtomicBool::new(false),
         pause,
         stop,
     })
@@ -240,7 +249,11 @@ impl<R: Runtime> Tray<R> {
             .and_then(|()| self.icon.set_title(state.title.as_deref()))
             .and_then(|()| self.start.set_enabled(state.start_enabled))
             .and_then(|()| match &self.continue_last {
-                Some(item) => item.set_enabled(state.continue_enabled),
+                Some(item) => {
+                    self.continue_shown
+                        .store(state.continue_enabled, Ordering::Relaxed);
+                    item.set_enabled(state.continue_enabled)
+                }
                 None => Ok(()),
             })
             .and_then(|()| self.pause.set_text(state.pause_label))
@@ -273,13 +286,24 @@ fn render<R: Runtime>(tray: &Arc<Tray<R>>) {
     }
 }
 
-/// Refreshes the title each second while recording; nothing else changes on its own.
+/// How often an idle menu re-checks whether the last recording can still be continued.
+const CONTINUE_CHECK_EVERY_S: u64 = 30;
+
+/// Refreshes the title each second while recording. While idle, re-checks the Continue item every
+/// `CONTINUE_CHECK_EVERY_S`: it stops being offered with no recorder change (the 2 hours pass, the
+/// folder is moved).
 fn tick<R: Runtime>(tray: Arc<Tray<R>>) {
     let spawned = thread::Builder::new()
         .name("tray-timer".into())
         .spawn(move || {
-            loop {
+            for second in 1u64.. {
                 thread::sleep(Duration::from_secs(1));
+                if tray.continue_last.is_some() && second % CONTINUE_CHECK_EVERY_S == 0 {
+                    let shown = tray.continue_shown.load(Ordering::Relaxed);
+                    if continue_stale(&tray.recorder.status(), shown) {
+                        render(&tray);
+                    }
+                }
                 if tray.recorder.recording_elapsed_s().is_some() {
                     let queued = tray.clone();
                     let _ = tray.app.run_on_main_thread(move || {
@@ -450,6 +474,18 @@ mod tests {
         // A refused continue is the menu's first line, as a refused start.
         let state = menu_state(&status("idle", 0, None), Some("Nothing to continue: …"));
         assert_eq!(state.notice.as_deref(), Some("Nothing to continue: …"));
+    }
+
+    #[test]
+    fn an_offer_that_ran_out_makes_the_continue_item_stale() {
+        let mut offered = status("idle", 0, None);
+        offered.continuable = Some(continuable());
+        let gone = status("idle", 0, None);
+        assert!(continue_stale(&gone, true));
+        assert!(continue_stale(&offered, false));
+        assert!(!continue_stale(&offered, true));
+        assert!(!continue_stale(&gone, false));
+        assert!(!continue_stale(&status("recording", 5, None), false));
     }
 
     #[test]
