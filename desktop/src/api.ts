@@ -22,6 +22,8 @@ export type RecorderStatus = {
    * built with `FEATURE_CONTINUE_RECORDING`. `stopped_at` is Unix epoch milliseconds.
    */
   continuable: { folder: string; name: string; recorded_s: number; stopped_at: number } | null;
+  /** The part number while a continued part records (continue-recording FR-8), else `null`. */
+  part: number | null;
 };
 export type RecorderStartError =
   | 'permission_mic'
@@ -31,6 +33,14 @@ export type RecorderStartError =
   | 'event_too_far'
   | 'unknown_event'
   | 'calendar_denied'
+  | 'capture_failed';
+/** `recorder_continue` exists only in builds with `FEATURE_CONTINUE_RECORDING` (continue-recording FR-14). */
+export type RecorderContinueError =
+  | 'nothing_to_continue'
+  | 'already_recording'
+  | 'not_configured'
+  | 'permission_mic'
+  | 'permission_audio'
   | 'capture_failed';
 export type RecorderControlError = 'not_recording';
 export type RecorderRetryError = 'not_found' | 'already_recording';
@@ -199,6 +209,7 @@ async function call<T, Code extends string = string>(
 export const recorderStatus = () => call<RecorderStatus>('recorder_status');
 export const recorderStart = (req: { language: Language; event_occurrence_id: string | null }) =>
   call<{ folder: string }, RecorderStartError>('recorder_start', req);
+export const recorderContinue = () => call<{ folder: string }, RecorderContinueError>('recorder_continue');
 export const recorderPause = () => call<{ state: RecorderState }, RecorderControlError>('recorder_pause');
 export const recorderResume = () => call<{ state: RecorderState }, RecorderControlError>('recorder_resume');
 export const recorderStop = () => call<{ state: RecorderState }, RecorderControlError>('recorder_stop');

@@ -112,6 +112,15 @@ impl Recorder {
     /// What can be continued now, for an idle recorder: `None` unless the flag is on and the last
     /// recording passes `offer`. One store read and one file check.
     pub(super) fn continuable(&self) -> Option<Continuable> {
+        self.offered().map(|(_, offered)| offered)
+    }
+
+    /// The stored last recording, re-checked by `offer` now: what `recorder_continue` continues.
+    pub(super) fn last_continuable(&self) -> Option<LastRecording> {
+        self.offered().map(|(last, _)| last)
+    }
+
+    fn offered(&self) -> Option<(LastRecording, Continuable)> {
         if !self.inner.deps.continue_enabled {
             return None;
         }
@@ -129,12 +138,13 @@ impl Recorder {
         let last = parse(&raw)?;
         let exists = Path::new(&last.folder).join(M4A).is_file();
         let deps = &self.inner.deps;
-        offer(&last, (deps.clock)().now_ms, deps.cap_s, exists)
+        let offered = offer(&last, (deps.clock)().now_ms, deps.cap_s, exists)?;
+        Some((last, offered))
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
     use std::path::PathBuf;
 
@@ -211,7 +221,7 @@ mod tests {
         rig.env().store().unwrap().setting(KEY).unwrap()
     }
 
-    fn store_last(rig: &Rig, last: &LastRecording) {
+    pub(crate) fn store_last(rig: &Rig, last: &LastRecording) {
         let raw = serde_json::to_string(last).unwrap();
         rig.env().store().unwrap().set_setting(KEY, &raw).unwrap();
     }

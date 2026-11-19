@@ -263,6 +263,7 @@ mod tests {
             notice,
             start_error: None,
             continuable: None,
+            part: None,
         }
     }
 

@@ -106,6 +106,16 @@ fn write_private(path: &Path, ctx: &Context) -> anyhow::Result<()> {
     fs::rename(&tmp, path).with_context(|| format!("cannot write {}", path.display()))
 }
 
+/// The WAV continued part `n` records into (continue-recording FR-9).
+pub fn part_wav(n: u32) -> String {
+    format!("recording-part-{n}.partial.wav")
+}
+
+/// What continued part `n`'s WAV is converted to.
+pub fn part_m4a(n: u32) -> String {
+    format!("recording-part-{n}.m4a")
+}
+
 /// Converts the folder's WAV to `recording.m4a`, deletes the WAV, and spawns `meeting process`
 /// when at least `MIN_PROCESS_S` were recorded. `prefix` says why the recording stopped. Returns
 /// the notice to show; a failed conversion keeps the WAV and names the folder for a retry.
@@ -116,7 +126,44 @@ pub fn finish_recording(
     frames: u64,
     prefix: &str,
 ) -> Notice {
-    let (wav, m4a) = (folder.join(WAV), folder.join(M4A));
+    convert_and_hand_off(tools, folder, WAV, M4A, language, frames, prefix)
+}
+
+/// `finish_recording` for continued part `n` (continue-recording FR-9): converts
+/// `recording-part-N.partial.wav` to `recording-part-N.m4a` and hands off the meeting's
+/// `recording.m4a` through `tools.spawn` (`--continue`). `frames` is the meeting's total, so the
+/// 10 s rule counts every part.
+pub fn finish_part(
+    tools: &Tools,
+    folder: &Path,
+    n: u32,
+    language: Language,
+    frames: u64,
+    prefix: &str,
+) -> Notice {
+    convert_and_hand_off(
+        tools,
+        folder,
+        &part_wav(n),
+        &part_m4a(n),
+        language,
+        frames,
+        prefix,
+    )
+}
+
+/// Converts `folder/wav` to `folder/m4a`, deletes the WAV, and spawns the tool on the meeting's
+/// `recording.m4a` when `frames` reach `MIN_PROCESS_S`.
+fn convert_and_hand_off(
+    tools: &Tools,
+    folder: &Path,
+    wav: &str,
+    m4a: &str,
+    language: Language,
+    frames: u64,
+    prefix: &str,
+) -> Notice {
+    let (wav, m4a) = (folder.join(wav), folder.join(m4a));
     if let Err(e) = convert::to_m4a(&tools.ffmpeg, &wav, &m4a) {
         tracing::warn!("recorder: conversion failed; the WAV is kept");
         return Notice::retry(format!("{prefix}{e:#}"), folder);
@@ -137,7 +184,7 @@ pub fn finish_recording(
     let Some(exe) = usable_tool(tools) else {
         return Notice::new(Kind::Setup, message(notice::SETUP));
     };
-    match (tools.spawn)(exe, &m4a, Some(language), None) {
+    match (tools.spawn)(exe, &folder.join(M4A), Some(language), None) {
         Ok(()) => {
             tracing::info!("recorder: sent for processing");
             Notice::new(Kind::Saved, message(notice::SAVED))
@@ -192,6 +239,34 @@ pub(crate) mod tests {
             .unwrap()
             .push((exe.into(), recording.into(), language));
         Ok(())
+    }
+
+    /// Every fake `--continue` spawn, kept apart from `SPAWNS` so a test tells the two apart.
+    static CONTINUES: Mutex<Vec<Call>> = Mutex::new(Vec::new());
+
+    /// `meeting::spawn::continue_detached`'s fake: records the call, as `fake_spawn` does.
+    pub(crate) fn fake_continue_spawn(
+        exe: &Path,
+        recording: &Path,
+        language: Option<Language>,
+        job: Option<&str>,
+    ) -> io::Result<()> {
+        assert_eq!(job, None, "the desktop passes no job id");
+        CONTINUES
+            .lock()
+            .unwrap()
+            .push((exe.into(), recording.into(), language));
+        Ok(())
+    }
+
+    /// The `--continue` spawns of recordings under `dir`.
+    pub(crate) fn continues_under(dir: &Path) -> Vec<Call> {
+        let calls = CONTINUES.lock().unwrap();
+        calls
+            .iter()
+            .filter(|(_, recording, _)| recording.starts_with(dir))
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn failing_spawn(
@@ -387,6 +462,91 @@ pub(crate) mod tests {
             notice.message,
             "Stopped at 3 hours. Saved, sent for processing."
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A meeting folder holding `recording.m4a` and continued part `n`'s WAV of `secs` seconds.
+    fn folder_with_part(dir: &Path, n: u32, secs: usize) -> PathBuf {
+        let folder = folder_with_wav(dir, 1);
+        convert::to_m4a(&ffmpeg(), &folder.join(WAV), &folder.join(M4A)).unwrap();
+        fs::remove_file(folder.join(WAV)).unwrap();
+        tone_wav(&folder.join(part_wav(n)), secs);
+        folder
+    }
+
+    #[test]
+    fn part_names_follow_the_meeting_folder_contract() {
+        assert_eq!(part_wav(2), "recording-part-2.partial.wav");
+        assert_eq!(part_m4a(13), "recording-part-13.m4a");
+    }
+
+    #[test]
+    fn a_part_is_converted_and_the_meeting_handed_off_with_continue() {
+        let dir = temp("handoff-part");
+        let folder = folder_with_part(&dir, 2, 1);
+        let earlier = fs::read(folder.join(M4A)).unwrap();
+        let tools = tools(&dir, fake_continue_spawn);
+        let notice = finish_part(&tools, &folder, 2, Language::En, 480_000, "");
+        assert_eq!(notice, Notice::new(Kind::Saved, notice::SAVED));
+        assert!(folder.join(part_m4a(2)).is_file());
+        assert!(!folder.join(part_wav(2)).exists());
+        assert_eq!(fs::read(folder.join(M4A)).unwrap(), earlier);
+        assert_eq!(
+            continues_under(&dir),
+            [(
+                tools.meeting_path.clone().unwrap(),
+                folder.join(M4A),
+                Some(Language::En)
+            )]
+        );
+        assert!(spawns_under(&dir).is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_part_under_the_ten_second_total_is_kept_but_not_handed_off() {
+        let dir = temp("handoff-part-short");
+        let folder = folder_with_part(&dir, 3, 1);
+        let notice = finish_part(
+            &tools(&dir, fake_continue_spawn),
+            &folder,
+            3,
+            Language::Bn,
+            479_999,
+            "",
+        );
+        assert_eq!(notice.kind, Kind::TooShort);
+        assert!(folder.join(part_m4a(3)).is_file());
+        assert!(!folder.join(part_wav(3)).exists());
+        assert!(continues_under(&dir).is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_part_whose_conversion_fails_keeps_its_wav_and_the_meeting() {
+        let dir = temp("handoff-part-ffmpeg");
+        let folder = folder_with_part(&dir, 2, 1);
+        fs::write(folder.join(part_wav(2)), b"corrupt").unwrap();
+        let earlier = fs::read(folder.join(M4A)).unwrap();
+        let notice = finish_part(
+            &tools(&dir, fake_continue_spawn),
+            &folder,
+            2,
+            Language::Bn,
+            480_000,
+            "",
+        );
+        assert_eq!(notice.kind, Kind::Error);
+        assert!(
+            notice.message.starts_with("ffmpeg failed: "),
+            "{}",
+            notice.message
+        );
+        assert_eq!(notice.folder.as_deref(), Some(folder.to_str().unwrap()));
+        assert!(folder.join(part_wav(2)).is_file());
+        assert!(!folder.join(part_m4a(2)).exists());
+        assert_eq!(fs::read(folder.join(M4A)).unwrap(), earlier);
+        assert!(continues_under(&dir).is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 

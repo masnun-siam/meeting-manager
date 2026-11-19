@@ -424,6 +424,7 @@ pub(crate) mod tests {
             notice: notice.map(|kind| Notice::new(kind, "m")),
             start_error: None,
             continuable: None,
+            part: None,
         }
     }
 
