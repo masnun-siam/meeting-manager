@@ -373,7 +373,7 @@ describe('RecordingBar', () => {
       [
         'an error reply',
         () =>
-          vi.mocked(api.recorderDismissNotice).mockResolvedValue({ ok: false, code: 'x', message: 'no lock' } as never),
+          vi.mocked(api.recorderDismissNotice).mockResolvedValue({ ok: false, code: 'internal', message: 'no lock' }),
         'no lock',
       ],
       [
