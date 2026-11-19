@@ -40,7 +40,8 @@ export function Pill() {
   const notice = status?.notice ?? null;
 
   // The outcome is the notice of the first idle status after this page saw a session; an older notice
-  // (one already there when the page loaded) is never shown. A new session replaces the outcome.
+  // (one already there when the page loaded) is never shown. A new session replaces the outcome, and a
+  // notice cleared while idle clears it.
   useEffect(() => {
     if (state !== 'idle') {
       sawSession.current = true;
@@ -48,6 +49,9 @@ export function Pill() {
     } else if (sawSession.current && notice) {
       sawSession.current = false;
       setOutcome(notice);
+    } else if (!notice) {
+      // Continue-recording FR-1: the notice was dismissed in the main window; Rust already hid this window.
+      setOutcome(null);
     }
   }, [state, notice]);
 
