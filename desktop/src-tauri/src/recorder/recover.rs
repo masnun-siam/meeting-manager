@@ -89,12 +89,14 @@ impl Recorder {
         ))
     }
 
-    /// The folder of the recording that is running or saving: never touched by recovery.
+    /// The folder of the recording that is starting, running or saving: never touched by
+    /// recovery.
     fn session_folder(&self) -> Option<PathBuf> {
         match &*self.state() {
+            State::Starting(folder) => folder.clone(),
             State::Active(s) => Some(s.folder.clone()),
             State::Saving { folder, .. } => folder.clone(),
-            State::Idle | State::Starting => None,
+            State::Idle => None,
         }
     }
 
@@ -471,6 +473,69 @@ mod tests {
         assert!(old.join(M4A).is_file());
         assert_eq!(rig.state(), "recording");
         rig.stop(Reason::User);
+    }
+
+    thread_local! {
+        /// The recorder a racing capture runs recovery on.
+        static RACING: std::cell::RefCell<Option<Recorder>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn recover_racing() {
+        RACING.with(|r| r.borrow().as_ref().expect("set by the test").recover_all());
+    }
+
+    /// Runs recovery once the WAV exists while the state is still `Starting`, as a link start
+    /// at launch does (#262), then starts the capture.
+    fn start_racing_recovery(
+        samples: crate::capture::Samples,
+        events: crate::capture::Events,
+    ) -> anyhow::Result<crate::capture::Stream> {
+        recover_racing();
+        (ok_capture().start)(samples, events)
+    }
+
+    fn start_racing_recovery_broken(
+        _: crate::capture::Samples,
+        _: crate::capture::Events,
+    ) -> anyhow::Result<crate::capture::Stream> {
+        recover_racing();
+        Err(anyhow::anyhow!("broken"))
+    }
+
+    fn racing_rig(
+        name: &str,
+        start: fn(
+            crate::capture::Samples,
+            crate::capture::Events,
+        ) -> anyhow::Result<crate::capture::Stream>,
+    ) -> Rig {
+        let mut capture = ok_capture();
+        capture.start = start;
+        let rig = rig(name, capture);
+        RACING.with(|r| *r.borrow_mut() = Some(rig.recorder.clone()));
+        rig
+    }
+
+    #[test]
+    fn a_starting_recording_is_never_recovered() {
+        let rig = racing_rig("recover-starting", start_racing_recovery);
+        let old = leftover_in(&rig, "meeting-old", 1);
+        let folder = rig.start().unwrap();
+        assert!(folder.join(WAV).is_file());
+        assert!(old.join(M4A).is_file());
+        push(40 * SECOND);
+        let status = rig.stop(Reason::User);
+        assert_eq!(status.notice.unwrap().kind, Kind::Saved);
+        assert!(folder.join(M4A).is_file());
+    }
+
+    #[test]
+    fn a_failed_start_leaves_nothing_for_recovery() {
+        let rig = racing_rig("recover-starting-failed", start_racing_recovery_broken);
+        let refused = rig.start().unwrap_err();
+        assert_eq!(refused.code, "capture_failed");
+        assert_eq!(rig.state(), "idle");
+        assert!(candidates(&recordings(&rig)).is_empty());
     }
 
     #[test]
