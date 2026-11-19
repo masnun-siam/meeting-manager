@@ -2887,11 +2887,25 @@ pub(crate) mod tests {
         // The folder recovery skips: the meeting's, not a new one.
         assert_eq!(rig.recorder.session_folder(), Some(folder.clone()));
         push(SECOND);
-        let before = snapshot(&folder);
+        // The part's WAV is still being written by the writer thread: its name is compared, not
+        // its bytes.
+        let settled = || {
+            let mut files = snapshot(&folder);
+            for (name, bytes) in &mut files {
+                if *name == handoff::part_wav(2) {
+                    bytes.clear();
+                }
+            }
+            files
+        };
+        let before = settled();
         rig.recorder.recover_all();
-        assert_eq!(snapshot(&folder), before);
+        assert_eq!(settled(), before);
         assert_eq!(rig.state(), "recording");
-        rig.stop(Reason::User);
+        let status = rig.stop(Reason::User);
+        // Saved as the part by the stop, not by recovery.
+        assert_eq!(status.notice.unwrap().kind, Kind::Saved);
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
     }
 
     #[test]
