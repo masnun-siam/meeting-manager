@@ -11,7 +11,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | Built | Window | Registered |
 |---|---|---|
 | Off (default) | label `off`, page `off.html` ("Built without FEATURE_DESKTOP_APP"), no capability | Nothing: no state, no command, no plugin, no hook |
-| On | label `main`, page `index.html` | The single-instance and updater plugins, the `App` state, the 34 commands, the launch hooks |
+| On | label `main`, page `index.html` | The single-instance and updater plugins, the `App` state, the 35 commands, the launch hooks |
 
 ## Rust side (`desktop/src-tauri/src`)
 
@@ -21,7 +21,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 | `lib.rs` | `run()`, the flag, `configure` (setup and command registration), `launch` (state, tool swap, window, hooks), the `App` state `{env, recorder, calendar, notes, admin, updater}`. `launch_in` takes the `Env` and `Updater` constructors, so its tests start the app in a temp home with an updater whose checks fail (`updater::tests::unplugged`) and an invoked command never touches the real store, vault, recordings or update server. The issues that fill a module do not edit it |
 | `env.rs` | `Env { home, store_path, jobs }`; `config()` reloads `config.toml` on every call and returns the error as a string; `store()` opens the notes store and keeps `anyhow::Error`, so `store::OpenError` can be downcast. `Env::at(home)` is the constructor tests use |
 | `reply.rs` | `ok(fields)`, `err(code, message)`: the reply shape of every command |
-| `recorder/` | `Recorder` ([features/desktop-recorder.md](features/desktop-recorder.md)): WAV writer, folder, conversion, hand-off, notices; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry`, `recorder_dismiss_start_error`; `Recorder::start_ad_hoc` (the menu bar's and links' Start, which keeps a refusal as the start error); hooks `on_launch` (crash recovery), `on_sleep` (will-sleep observer), `on_exit_requested` (`Recorder::quit`; `false` keeps the app running) |
+| `recorder/` | `Recorder` ([features/desktop-recorder.md](features/desktop-recorder.md)): WAV writer, folder, conversion, hand-off, notices; `recorder_status`, `recorder_start`, `recorder_pause`, `recorder_resume`, `recorder_stop`, `recorder_retry`, `recorder_dismiss_start_error`, `recorder_dismiss_notice`; `Recorder::start_ad_hoc` (the menu bar's and links' Start, which keeps a refusal as the start error); hooks `on_launch` (crash recovery), `on_sleep` (will-sleep observer), `on_exit_requested` (`Recorder::quit`; `false` keeps the app running) |
 | `calendar/` | `Calendar` (EventKit, [features/desktop-calendar.md](features/desktop-calendar.md)); `calendar_status`, `calendar_events`, `calendar_event`, `calendars`, `set_hidden_calendars`; hook `on_launch`; `Calendar::event_for_context` for `context.json` |
 | `notes/mod.rs` | `Notes { open, spawn, pasteboard, trash }` (fn pointers; real: `native::open_with_system`, `spawn::process_detached`, `copy::write_pasteboard`, `trash::move_to_trash`); `notes_list`, `note_get`, `note_update`, `note_rerun`, `note_open`, `note_copy`, `speaker_suggestions`, `note_delete_recording`, each a thin wrapper over a `pub fn` taking `&Env` (`note_delete_recording` is `async`, run off the main thread through `admin::blocking`) |
 | `notes/trash.rs` | `move_to_trash(path)`: `NSFileManager` `trashItemAtURL` (objc2-foundation `NSFileManager`, `NSURL`), so Finder's Put Back works; not `/usr/bin/trash`, which needs macOS 15. The error carries the system's reason |
@@ -52,7 +52,7 @@ The PRD's API table (Technical design › API) is the contract. Every command is
 
 - `desktop/src/api.ts` has one typed function per command, the request and reply types, and each command's error codes as a string-literal union. Argument keys are snake_case, exactly the Rust argument names. A reply without a boolean `ok` throws `Invalid reply from the Meeting app`; an error reply is returned, not thrown. `recordingUrl(id)` is the one export that is not a command: it builds `recording://localhost/<id>`, the URL the player loads a recording from (note-view-upgrades D9).
 - `desktop/src/api.mock.ts`: `mockApi(overrides)` for component tests (`vi.mock('./api', async () => (await import('./api.mock')).mockApi())`).
-- A test in `lib.rs` checks that `api.ts` names the same 34 commands. A new command changes the contract: PRD first.
+- A test in `lib.rs` checks that `api.ts` names the same 35 commands. A new command changes the contract: PRD first.
 
 ## Capture boundary (`capture/mod.rs`)
 

@@ -569,6 +569,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_notice_cleared_while_the_outcome_shows_hides_the_pill() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::recorder::Reason;
+        use crate::recorder::tests::{SECOND, ok_capture, push, rig};
+
+        let rig = rig("indicator-dismiss-notice", ok_capture());
+        let seen = Arc::new(Mutex::new((Seen::default(), Hidden)));
+        let (recorder, last) = (rig.recorder.clone(), seen.clone());
+        // As the indicator's listener: decide on every announced change.
+        rig.recorder.on_change(move || {
+            let mut last = last.lock().unwrap();
+            *last = decide(last.0, &recorder.status(), true);
+        });
+        rig.start().unwrap();
+        push(11 * SECOND);
+        rig.stop(Reason::User);
+        assert_eq!(seen.lock().unwrap().1, Outcome);
+        rig.recorder.dismiss_notice();
+        assert_eq!(seen.lock().unwrap().1, Hidden);
+    }
+
+    #[test]
     fn dismiss_is_a_no_op_while_a_session_runs() {
         let live = Seen {
             phase: Phase::Live,
