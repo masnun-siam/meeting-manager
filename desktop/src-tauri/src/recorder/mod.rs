@@ -401,6 +401,9 @@ impl Recorder {
         // Cleared before the session is visible, so a fast automatic stop's notice survives.
         *lock(&self.inner.notice) = None;
         *lock(&self.inner.start_error) = None;
+        // The new recording is the last one from here (continue-recording FR-4); cleared before
+        // it is visible too, so a fast automatic stop's `remember_last` is never overwritten.
+        self.clear_last();
         *state = State::Active(Box::new(session));
         // Spawned with the lock held, so a stop queued before it ran finds the session active.
         let weak = Arc::downgrade(&self.inner);
@@ -421,7 +424,6 @@ impl Recorder {
         drop(state);
         tracing::info!("recorder: started");
         self.save_language(language);
-        self.clear_last();
         self.changed();
         Ok(folder)
     }
