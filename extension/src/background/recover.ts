@@ -2,12 +2,15 @@
 
 import type { Language, Notice } from '../shared/messages';
 import { RECORDINGS_DIR } from '../shared/recordingFile';
+import { RECORDING_CAP_MS } from '../shared/recordingState';
 import { closeOffscreen, ensureOffscreen, readStatus, writeStatus } from './recordingControl';
 import { nextFreeName, recordingName, saveRecording, takenNames } from './save';
 
 export function recoveredName(startedAt: number): string {
   return `${recordingName(startedAt)}-recovered`;
 }
+
+type Leftover = { startedAt: number; lastModified: number };
 
 async function leftovers(): Promise<{ startedAt: number; file: File }[]> {
   const root = await navigator.storage.getDirectory();
@@ -29,7 +32,12 @@ async function showNotice(notice: Notice): Promise<void> {
   await writeStatus({ ...(await readStatus()), notice });
 }
 
-async function recoverOne(startedAt: number, language: Language): Promise<Notice> {
+/** A leftover has no stored duration: the time to its last write, paused time included, capped at 3 h. */
+export function estimatedRecordedMs(startedAt: number, lastModified: number): number {
+  return Math.min(RECORDING_CAP_MS, Math.max(0, lastModified - startedAt));
+}
+
+async function recoverOne({ startedAt, lastModified }: Leftover, language: Language): Promise<Notice> {
   try {
     const base = recoveredName(startedAt);
     return await saveRecording({
@@ -37,6 +45,12 @@ async function recoverOne(startedAt: number, language: Language): Promise<Notice
       name: nextFreeName(base, await takenNames(base)),
       language,
       process: true,
+      // Counted from the recovery, not the original stop; no stop button ended it.
+      remember: {
+        recordedMs: estimatedRecordedMs(startedAt, lastModified),
+        stoppedAt: Date.now(),
+        stopReason: null,
+      },
     });
   } catch (error) {
     return {
@@ -53,16 +67,16 @@ export async function recoverLeftovers(): Promise<void> {
   const candidates = (await leftovers()).filter(({ startedAt }) => startedAt !== recording);
   const root = await navigator.storage.getDirectory();
   const dir = await root.getDirectoryHandle(RECORDINGS_DIR);
-  const pending: number[] = [];
+  const pending: Leftover[] = [];
   for (const { startedAt, file } of candidates) {
     if (file.size === 0) await dir.removeEntry(`${startedAt}.webm`);
-    else pending.push(startedAt);
+    else pending.push({ startedAt, lastModified: file.lastModified });
   }
   if (pending.length === 0) return;
   const language = await lastLanguage();
   await ensureOffscreen(chrome.offscreen.Reason.BLOBS, 'Save recordings left by a crash or reload');
   try {
-    for (const startedAt of pending) await showNotice(await recoverOne(startedAt, language));
+    for (const leftover of pending) await showNotice(await recoverOne(leftover, language));
   } finally {
     // A Start may have happened meanwhile, and it needs this document.
     if ((await readStatus()).state.phase === 'idle') await closeOffscreen();

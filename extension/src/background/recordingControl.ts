@@ -2,6 +2,7 @@
 // so a service worker that slept mid-recording carries on.
 
 import { meetingContextEnabled } from '../shared/flags';
+import { clearLastRecording } from '../shared/lastRecording';
 import { contextForHandoff, identityFromTab, trimToLimit, utcOffsetMin } from '../shared/meetingContext';
 import {
   type ContentEvent,
@@ -102,6 +103,15 @@ async function clearContext(): Promise<void> {
   }
 }
 
+/** A new recording replaces the last one, so the earlier one can no longer be continued. Never fails Start. */
+async function forgetLastRecording(): Promise<void> {
+  try {
+    await clearLastRecording();
+  } catch {
+    console.error('Could not clear the last recording');
+  }
+}
+
 /** Stores the captured tab's identity and the first segment. Never fails Start. */
 async function storeContext(tab: chrome.tabs.Tab, startedAt: number): Promise<void> {
   try {
@@ -162,6 +172,7 @@ async function start(language: RecorderStatus['language']): Promise<void> {
     const state = transition(status.state, { type: 'start', at: Date.now() });
     if (state.phase !== 'recording') return;
     await commit({ state, language, micIncluded: null, notice: null, tabId: tab.id });
+    await forgetLastRecording();
     if (meetingContextEnabled()) await storeContext(tab, state.startedAt);
     await sendToOffscreen({ type: 'offscreen_start', streamId, language, startedAt: state.startedAt });
     await startContext(tab.id, state.startedAt);
@@ -223,6 +234,7 @@ async function offscreenStopped(reason: StopReason): Promise<void> {
       language: status.language,
       process: saving.recordedMs >= MIN_PROCESS_MS,
       context: await contextToSend(),
+      remember: { recordedMs: saving.recordedMs, stoppedAt: Date.now(), stopReason: saving.reason },
     });
   } catch (error) {
     notice = { kind: 'error', message: `Could not save the recording (${messageOf(error)}).` };
