@@ -3,7 +3,15 @@ import type { Language } from './messages';
 
 export const NATIVE_HOST = 'com.meeting_manager.host';
 
-export type Stage = 'queued' | 'extracting' | 'transcribing' | 'summarising' | 'writing' | 'done' | 'failed';
+export type Stage =
+  | 'queued'
+  | 'joining'
+  | 'extracting'
+  | 'transcribing'
+  | 'summarising'
+  | 'writing'
+  | 'done'
+  | 'failed';
 
 export interface JobSummary {
   job_id: string;

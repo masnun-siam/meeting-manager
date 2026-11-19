@@ -37,7 +37,7 @@ The extension talks to the `meeting` binary through Chrome native messaging. Chr
 | `open` | `job_id`, `what` (`summary`\|`folder`) | `{ok}` | Runs `/usr/bin/open` on `summary_path` or the recording's parent dir |
 | `health` | none | `{ok, checks: {name, ok, fix}[]}` | `doctor::checks`, same list as `meeting doctor` ([setup.md](setup.md)), so a `FEATURE_DESKTOP_APP=1` build adds `meeting_path` |
 
-`JobSummary` (`native.ts`) mirrors `jobs::Job`: `job_id`, `recording`, `title`, `stage`, `error`, `started_at`, `updated_at`, `summary_path`. Optional fields are `null`, never omitted. Stages: `queued`, `extracting`, `transcribing`, `summarising`, `writing`, `done`, `failed`.
+`JobSummary` (`native.ts`) mirrors `jobs::Job`: `job_id`, `recording`, `title`, `stage`, `error`, `started_at`, `updated_at`, `summary_path`. Optional fields are `null`, never omitted. Stages: `queued`, `joining` (continue flag on), `extracting`, `transcribing`, `summarising`, `writing`, `done`, `failed`.
 
 ## Archive
 

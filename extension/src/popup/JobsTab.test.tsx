@@ -159,7 +159,16 @@ describe('JobsTab', () => {
   });
 
   it('shows Archive on done and failed rows only', async () => {
-    const stages = ['queued', 'extracting', 'transcribing', 'summarising', 'writing', 'done', 'failed'] as const;
+    const stages = [
+      'queued',
+      'joining',
+      'extracting',
+      'transcribing',
+      'summarising',
+      'writing',
+      'done',
+      'failed',
+    ] as const;
     sendNative.mockResolvedValue(jobs(...stages.map((stage) => job({ job_id: stage, stage }))));
     setup();
 
@@ -240,7 +249,16 @@ describe('JobsTab', () => {
   });
 
   it('shows Trash on done and failed rows only', async () => {
-    const stages = ['queued', 'extracting', 'transcribing', 'summarising', 'writing', 'done', 'failed'] as const;
+    const stages = [
+      'queued',
+      'joining',
+      'extracting',
+      'transcribing',
+      'summarising',
+      'writing',
+      'done',
+      'failed',
+    ] as const;
     sendNative.mockResolvedValue(jobs(...stages.map((stage) => job({ job_id: stage, stage }))));
     setup();
 
