@@ -50,7 +50,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock`, `MEET_CODE` |
 | `src/shared/flags.ts` | Build-time flags, defined in `vite.config.ts` from `FEATURE_MEETING_CONTEXT` and `FEATURE_CONTINUE_RECORDING` (`flagFromEnv`) | `meetingContextEnabled`, `continueRecordingEnabled` |
 | `src/shared/lastRecording.ts` | Last saved recording (flag on) and the pure can-continue rule | `canContinue`, `readLastRecording`, `writeLastRecording`, `clearLastRecording`, `lastRecordingExists`, `folderOf`, `CONTINUE_WINDOW_MS`, `LAST_RECORDING_KEY` |
-| `src/shared/tokens.css`, `tokens.test.ts` | Design tokens, fonts, focus ring, reduced motion; contrast test | `--surface`, `--text`, `--accent`, `--record`, `--focus-ring` |
+| `src/shared/tokens.css`, `tokens.test.ts` | Design tokens, fonts, focus ring, reduced motion; contrast test | `--surface`, `--text`, `--accent`, `--record`, `--focus-ring`, `--chip-<tone>-fill`/`-text` (Jobs stage chips) |
 | `src/shared/fonts/` | Bundled woff2 fonts and their OFL licences | |
 | `src/content/meet.ts` | Meet content script (flag-on build only): 1 s reads, 10 s batches, 60 s give-up, `context_hello` resume | `chrome.runtime.onMessage` listener |
 | `src/content/meetReader.ts` | Pure Meet page reads | `readRoster`, `readTitle`, `readSpeaking`, `diffSpeaking` |
