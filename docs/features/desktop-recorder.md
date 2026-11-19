@@ -8,26 +8,26 @@ The desktop app's recording session: start, pause, resume, stop, the automatic s
 
 | File | Holds |
 |---|---|
-| `mod.rs` | `Recorder` (state machine, `Deps` of fn pointers), `Reason`, `Clock`, `start`/`pause`/`resume`/`stop`/`status`, `on_change`, `begin_saving`, the commands |
+| `mod.rs` | `Recorder` (state machine, `Deps` of fn pointers), `Reason`, `Clock`, `start`/`continue_recording`/`pause`/`resume`/`stop`/`status`, `on_change`, `begin_saving`, the commands; `Part` (a continued part), `save` / `save_part` / `save_moved` |
 | `wav.rs` | `WavWriter` (writer thread, header patching), `repair` (sizes from the file length; used after a write error and by recovery) |
 | `folder.rs` | `new_folder`: `meeting-YYYY-MM-DD_HHMM[-n]` via `meeting::import::create_folder` |
 | `convert.rs` | `to_m4a`: ffmpeg by absolute path, `.part` then rename |
-| `handoff.rs` | `write_context` / `ensure_context` (`context.json`), `finish_recording` (convert, delete WAV, spawn) |
+| `handoff.rs` | `write_context` / `ensure_context` (`context.json`), `finish_recording` (convert, delete WAV, spawn), `finish_part` (the same for `recording-part-N`, spawning the meeting's `recording.m4a`), `part_wav` / `part_m4a` |
 | `notice.rs` | `Notice {kind, message, folder}` and the fixed messages |
 | `recover.rs` | `recover_all` (launch), `retry` (`recorder_retry`), `recover_one` shared by both |
-| `continuable.rs` | The last recording (continue-recording FR-4): store key `last_recording`, `LastRecording`, `Continuable`, the pure rule `offer`, `Recorder::remember_last` / `clear_last` / `continuable`; see [Last recording](#last-recording-continue-recording-fr-4) |
+| `continuable.rs` | The last recording (continue-recording FR-4): store key `last_recording`, `LastRecording`, `Continuable`, the pure rule `offer`, `Recorder::remember_last` / `clear_last` / `continuable` / `last_continuable`; see [Last recording](#last-recording-continue-recording-fr-4) |
 | `sleep.rs` | `register` (`NSWorkspaceWillSleepNotification` observer), `confirm_quit_alert` (`NSAlert`) |
 | `../tray.rs` | The menu-bar item: pure `menu_state(&Status, start_error)`, `setup`, the menu handler, the 1 s title timer |
 
-Tests inject everything through `Recorder::with(&env, Deps { capture, clock, local_minute, open_wav, spawn, check_tool, cap_s, flush_every, confirm_quit, continue_enabled })`: `open_wav` lets a test hand the writer a sink that fills up like a full disk; a fake capture stores its callbacks in a `thread_local!` so the test pushes samples itself; conversion uses the real ffmpeg on `PATH`.
+Tests inject everything through `Recorder::with(&env, Deps { capture, clock, local_minute, open_wav, spawn, spawn_continue, check_tool, cap_s, flush_every, confirm_quit, continue_enabled })`: `open_wav` lets a test hand the writer a sink that fills up like a full disk; a fake capture stores its callbacks in a `thread_local!` so the test pushes samples itself; conversion uses the real ffmpeg on `PATH`.
 
 ## Lifecycle
 
 ```mermaid
 stateDiagram-v2
   [*] --> Idle
-  Idle --> Recording: Start (checks pass)
-  Idle --> Idle: Start refused (no folder left)
+  Idle --> Recording: Start / Continue (checks pass)
+  Idle --> Idle: Start refused (no folder left) / Continue refused (meeting untouched)
   Recording --> Paused: Pause
   Paused --> Recording: Resume
   Recording --> Saving: Stop / cap / capture failed / disk full / sleep / quit (confirmed)
@@ -36,7 +36,7 @@ stateDiagram-v2
   Saving --> Idle: notice set
 ```
 
-One `Mutex<State>` guards `Idle | Starting | Active(Session) | Saving`; every command locks only to check and change the state. `Starting` (reported as `idle`) holds the slot while `start` runs its checks, so a second start is refused; once `open` creates the meeting folder, and before the WAV exists, it also holds that folder so launch recovery skips it (#262). `stop(reason)` takes the session out, ends the stream, finishes the WAV (header patched) and returns; conversion and the spawn run on a thread that sets `idle` and the notice. A second stop finds no session and does nothing, so racing stops save once. A panic in an injected call while starting or saving returns the state to `idle` (a `capture_failed` refusal, or an `error` notice offering a retry). Each session has a watcher thread: the cap, a capture failure and a write error queue a stop for it (never inline: `events` runs on the thread `Stream::stop` joins), and it stops only its own session.
+One `Mutex<State>` guards `Idle | Starting | Active(Session) | Saving`; every command locks only to check and change the state. `Starting` (reported as `idle`) holds the slot while `start` runs its checks, so a second start is refused; once `open` creates the meeting folder, and before the WAV exists, it also holds that folder so launch recovery skips it (#262). A continue holds the existing meeting folder the same way, before the part's WAV exists. `stop(reason)` takes the session out, ends the stream, finishes the WAV (header patched) and returns; conversion and the spawn run on a thread that sets `idle` and the notice. A second stop finds no session and does nothing, so racing stops save once. A panic in an injected call while starting or saving returns the state to `idle` (a `capture_failed` refusal, or an `error` notice offering a retry). Each session has a watcher thread: the cap, a capture failure and a write error queue a stop for it (never inline: `events` runs on the thread `Stream::stop` joins), and it stops only its own session.
 
 ## Start
 
@@ -53,6 +53,27 @@ Checked in this order; any refusal leaves no folder and the state `idle`:
 On success the language is saved to the store setting `language` (a store failure is logged, never fails Start), the notice and start error are cleared, and with the continue flag the store setting `last_recording` is set to JSON `null` (see Last recording). `recorder_status.language` when idle is that setting, `bn` when unset or unreadable.
 
 **Start error (quick-record FR-5).** `Recorder::start_ad_hoc(language)` is the Start from outside the window (the menu bar, #235's links): no event, in `language`, else the last used. When it is refused with any code but `already_recording` (not idle is never a start error), the refusal is kept as `start_error: {code, message}` and announced through `on_change`; the log carries only `recorder: start refused (<code>)`. The window's `recorder_start` never sets it (its reply already shows the refusal). Any successful Start clears it, as does `dismiss_start_error` (`recorder_dismiss_start_error`), which announces only when there was one. Memory only, never stored.
+
+## Continue (continue-recording FR-6, FR-8, FR-9)
+
+Built only with `FEATURE_CONTINUE_RECORDING=1`: `recorder_continue` is registered only then (see [../desktop.md](../desktop.md)). `Recorder::continue_recording()` records the next part of the last recording (`last_continuable`, the stored value re-checked by `offer`) into its meeting folder. It shares `start`'s slot claim, panic guard and activation; the checks run in this order and any refusal leaves the meeting folder, `recording.m4a` and `context.json` as they were:
+
+| Check | Code |
+|---|---|
+| Not idle | `already_recording` |
+| Nothing offered (none stored, older than 2 h, `recording.m4a` or the folder gone, total ≥ cap) | `nothing_to_continue`: "Nothing to continue: the last recording stopped more than 2 hours ago, or was moved." |
+| Start's configuration and permission checks, in Start's order | `not_configured`, `permission_mic`, `permission_audio` |
+| Part WAV, its link or `capture.start` fails | `permission_*` or `capture_failed` (a link that cannot be made: "cannot write audio: …"); only the part's WAV and link are removed |
+
+| Rule | Detail |
+|---|---|
+| Part number N | The stored `parts` + 1 (at least 2), then the first N whose `recording-part-N.partial.wav`, `recording-part-N.m4a` and link are all free |
+| Files | `<folder>/recording-part-N.partial.wav` (same format and flushes as `recording.partial.wav`, mode `0600`), hard-linked at once to `<recordings_dir>/.continuing-<folder name>-part-N.partial.wav` (same inode) so the audio survives the folder being moved. `context.json` is not touched |
+| Language | The earlier part's (D9); saved as the `language` setting, as Start does |
+| Recorded time | `Shared.frames` starts at `recorded_s × 48,000`, so the cap, `elapsed_s` and the menu-bar timer count the whole meeting. `recorder_status.part` is N while the part records or is paused, else `null` |
+| `last_recording` | Not cleared at the continue (the meeting stays the last recording); at the save, written as `{folder, recorded_s: total, parts: N}` once the part is converted. A failed conversion or a full disk leaves it unchanged |
+| Stop | `finish_part` converts to `recording-part-N.m4a`, deletes the part WAV and, when the meeting's total is ≥ 10 s, spawns `<meeting_path> process <folder>/recording.m4a --continue --language <l>` (`spawn::continue_detached`, no `--job-id`). Notices as for Start; a failed conversion or full disk keeps the part WAV with a Retry notice naming the folder. The link is deleted once the part WAV is handled |
+| Moved meeting (D17) | At the save, if the part WAV or `recording.m4a` is no longer in the folder: a new `meeting-…` folder (named from the part's start), the link renamed into it as `recording.partial.wav` (a copy still in the old folder is the same file and is deleted), then Start's save path (`context.json`, `finish_recording`, no `--continue`, the part's frames alone for the 10 s rule). The notice is `error` "Could not add to <folder name>: it was moved; saved as a new meeting." unless the hand-off itself failed, whose notice is kept. The new folder becomes the last recording |
 
 ## Recording
 
@@ -72,6 +93,8 @@ On success the language is saved to the store setting `language` (a store failur
 | `recording.partial.wav` | Start → after a good conversion | Mode `0600`, canonical 44-byte header (PCM, mono, 48 kHz, 16-bit) then little-endian `i16`. Every 5 s the writer flushes and patches the RIFF (offset 4) and data (offset 40) sizes, so a crash leaves a file valid to the last flush. No `sync_all` |
 | `context.json` | Start (rewritten at Stop only if missing) | Mode `0600` (the temp file is created `0600` before the rename), through `meeting::context::check`: `version 1`, `platform "desktop"`, `started_at_ms`, `utc_offset_min`, `time_zone` (from `NSTimeZone`, `null` if `check` would reject it), `url`/`meeting_id`/`tab_title` null, empty lists, `calendar_event` when chosen. An event `check` rejects is left out; logs carry rule names only |
 | `recording.m4a` | Stop | AAC, mono, 64 kbps: `ffmpeg -i <wav> -vn -ac 1 -c:a aac -b:a 64k -f mp4 recording.m4a.part`, renamed on exit 0 |
+| `recording-part-N.partial.wav` | Continue → after a good conversion | As `recording.partial.wav`; while it records, also hard-linked as `<recordings_dir>/.continuing-<folder name>-part-N.partial.wav` |
+| `recording-part-N.m4a` | Stop of a continued part | As `recording.m4a`; the meeting's `recording.m4a` is never rewritten |
 
 ## Stop and notices
 
@@ -79,7 +102,7 @@ On success the language is saved to the store setting `language` (a store failur
 
 | Outcome | `notice.kind` | Message | `folder` |
 |---|---|---|---|
-| ≥ 10 s recorded, spawned `<meeting_path> process <folder>/recording.m4a --language <bn\|en>` | `saved` | Saved, sent for processing | null |
+| ≥ 10 s recorded (a continued part: the meeting's total), spawned `<meeting_path> process <folder>/recording.m4a --language <bn\|en>` (a part: with `--continue`) | `saved` | Saved, sent for processing | null |
 | < 10 s recorded: m4a kept, nothing spawned | `too_short` | Under 10 seconds, so it was saved but not processed. | null |
 | `meeting_path` missing or fails `check_tool` | `setup` | Processing tool not found — run `meeting install` | null |
 | Spawn failed | `error` | Saved, but processing could not be started: <error> | null |
@@ -94,10 +117,11 @@ All run on a blocking thread (permission prompts, joins and ffmpeg block). Repli
 
 | Command | Reply | Errors |
 |---|---|---|
-| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null, continuable: {folder, name, recorded_s, stopped_at}\|null}` (`start_error`: see Start error; `continuable`: see Last recording, always present, `null` when built without the flag) | none |
+| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null, continuable: {folder, name, recorded_s, stopped_at}\|null, part: N\|null}` (`start_error`: see Start error; `continuable`: see Last recording, always present, `null` when built without the flag; `part`: see Continue, always present) | none |
 | `recorder_dismiss_start_error` | `{}`; clears the start error (already clear is fine) | none |
 | `recorder_dismiss_notice` (not flagged) | `{}`; clears the notice (already clear is fine); announced through the change listeners, so the menu bar and pill drop it at once | none |
 | `recorder_start {language, event_occurrence_id\|null}` | `{folder}` | see Start |
+| `recorder_continue` (flag on only; flag off it does not exist) | `{folder}`: the existing meeting folder | see Continue |
 | `recorder_pause` / `recorder_resume` | `{state}` | `not_recording` |
 | `recorder_stop` | `{state: "saving"}` at once | `not_recording` |
 | `recorder_retry {folder}` | `{state: "saving"}` at once | `not_found`, `already_recording` |
@@ -175,7 +199,7 @@ Built only with `FEATURE_CONTINUE_RECORDING=1` (`crate::continue_enabled()`, inj
 
 | Rule | Detail |
 |---|---|
-| Store key | `last_recording`: `{folder, recorded_s, language, stopped_at, parts}` (`stopped_at` Unix epoch ms; `parts` 1 until #281) or JSON `null` |
+| Store key | `last_recording`: `{folder, recorded_s, language, stopped_at, parts}` (`stopped_at` Unix epoch ms; `parts`: the meeting's part count, see Continue) or JSON `null` |
 | Written | By the saving thread of every stop, any reason, before the state returns to `idle` (disk full and failed conversions included); by `recover_one` (launch recovery and Retry, `stopped_at` = the recovery time). A new Start (window, menu bar, `start`/`toggle` link) writes `null` as soon as it records |
 | Offered | `recorder_status.continuable = {folder, name (last path component), recorded_s, stopped_at}` only when `idle` (not `starting`) and `offer` holds: `now - stopped_at <= 2 h`, `recorded_s < cap_s` (3 h; 15 min in debug builds) and `<folder>/recording.m4a` is a file (archived, trashed, moved, deleted or not yet converted: not offered) |
 | Failures | A missing, `null` or invalid value, or a store that cannot be opened: `null`. A failed write logs `recorder: last recording not saved: <error kind>` and never fails the recording. Logs never carry the folder |
