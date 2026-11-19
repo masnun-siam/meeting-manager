@@ -53,6 +53,13 @@ const PAIRS: [string, string, number][] = [
   ['record-text', 'surface', TEXT],
   ['record', 'surface', LARGE_OR_UI],
   ['focus-ring', 'surface', LARGE_OR_UI],
+  // Jobs tab stage chips: 11px text on its tone's fill.
+  ['chip-queued-text', 'chip-queued-fill', TEXT],
+  ['chip-working-text', 'chip-working-fill', TEXT],
+  ['chip-done-text', 'chip-done-fill', TEXT],
+  ['chip-failed-text', 'chip-failed-fill', TEXT],
+  // Job card: text and buttons on the raised card.
+  ['record-text', 'surface-raised', TEXT],
 ];
 
 function failingPairs(palette: Palette): string[] {
