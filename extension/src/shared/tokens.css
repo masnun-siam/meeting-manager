@@ -1,0 +1,87 @@
+/*
+ * Design tokens for the popup and the permission page (FR-15, D13).
+ * Colours are plain #rrggbb so tokens.test.ts can check their contrast.
+ * Dark values come from board "C · New identity"; light values are derived
+ * from it (decision on issue #270).
+ */
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./fonts/inter.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC,
+    U+2122, U+2190-2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./fonts/space-grotesk.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC,
+    U+2122, U+2190-2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  color-scheme: light dark;
+
+  --surface: #faf8f3;
+  --surface-raised: #ffffff;
+  --text: #14161b;
+  --text-muted: #5c616d;
+  --border: #e3dfd6;
+  --accent: #ffb547;
+  --on-accent: #14161b;
+  --accent-text: #9a5b00;
+  --record: #d92d2f;
+  --record-text: #b42318;
+  --focus-ring: #9a5b00;
+
+  --radius-pill: 999px;
+  --radius-card: 16px;
+
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #0f1115;
+    --surface-raised: #1b1e25;
+    --text: #f2efe8;
+    --text-muted: #8a8f9c;
+    --border: #2a2d35;
+    --accent: #ffb547;
+    --on-accent: #0f1115;
+    --accent-text: #ffb547;
+    --record: #ff4d4f;
+    --record-text: #ff4d4f;
+    --focus-ring: #ffb547;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-body);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

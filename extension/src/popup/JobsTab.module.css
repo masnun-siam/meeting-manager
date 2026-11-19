@@ -32,9 +32,9 @@
 }
 
 .meta {
-  color: #5f6368;
+  color: var(--text-muted);
 }
 
 .problem {
-  color: #d93025;
+  color: var(--record-text);
 }
