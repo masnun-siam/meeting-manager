@@ -6,7 +6,7 @@ The Meeting desktop app: a Tauri 2 app whose Rust side (`desktop/src-tauri`, pac
 
 ## Flag
 
-`FEATURE_DESKTOP_APP` is read at build time (`option_env!` in `lib.rs`, on only for the value `1`; see `FLAGS.md`).
+`FEATURE_DESKTOP_APP` is read at build time (`option_env!` in `lib.rs`, on only for the value `1`; see `FLAGS.md`). `FEATURE_CONTINUE_RECORDING` is read the same way (`continue_enabled()`): off, the recorder never writes the store setting `last_recording` and `recorder_status.continuable` is always `null` ([features/desktop-recorder.md](features/desktop-recorder.md#last-recording-continue-recording-fr-4)).
 
 | Built | Window | Registered |
 |---|---|---|
@@ -242,6 +242,7 @@ npm run build && npm run typecheck && npx biome ci . && npm test
 # repo root, after the build above
 cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
 FEATURE_DESKTOP_APP=1 cargo test -p meeting-desktop
+FEATURE_CONTINUE_RECORDING=1 cargo test -p meeting-desktop continuable
 ```
 
 The Rust tests use Tauri's mock runtime (`tauri` feature `test`), which runs `setup` only inside its event loop, so they call `launch` directly.

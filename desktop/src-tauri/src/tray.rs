@@ -262,6 +262,7 @@ mod tests {
             folder: None,
             notice,
             start_error: None,
+            continuable: None,
         }
     }
 
