@@ -1052,7 +1052,7 @@ fn next_part(folder: &Path, recordings: &Path, last: &LastRecording) -> Part {
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut n = last.parts.saturating_add(1).max(2);
     loop {
-        let link = recordings.join(format!(".continuing-{name}-part-{n}.partial.wav"));
+        let link = recordings.join(handoff::part_link(&name, n));
         let taken = [
             folder.join(handoff::part_wav(n)),
             folder.join(handoff::part_m4a(n)),
@@ -1072,7 +1072,7 @@ fn next_part(folder: &Path, recordings: &Path, last: &LastRecording) -> Part {
 }
 
 /// Whether `a` and `b` name the same file (hard links of one inode).
-fn same_file(a: &Path, b: &Path) -> bool {
+pub(super) fn same_file(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     match (fs::metadata(a), fs::metadata(b)) {
         (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),

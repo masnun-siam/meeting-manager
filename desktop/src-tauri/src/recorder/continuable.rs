@@ -115,27 +115,32 @@ impl Recorder {
         self.offered().map(|(_, offered)| offered)
     }
 
+    /// The stored last recording as it is, whether or not it can still be continued; `None` when
+    /// the flag is off, there is none or it cannot be read.
+    pub(super) fn stored_last(&self) -> Option<LastRecording> {
+        if !self.inner.deps.continue_enabled {
+            return None;
+        }
+        let read = self.inner.env.store().and_then(|store| store.setting(KEY));
+        match read {
+            Ok(raw) => parse(&raw?),
+            Err(e) => {
+                tracing::warn!(
+                    "recorder: last recording not read: {}",
+                    meeting::store::error_kind(&e)
+                );
+                None
+            }
+        }
+    }
+
     /// The stored last recording, re-checked by `offer` now: what `recorder_continue` continues.
     pub(super) fn last_continuable(&self) -> Option<LastRecording> {
         self.offered().map(|(last, _)| last)
     }
 
     fn offered(&self) -> Option<(LastRecording, Continuable)> {
-        if !self.inner.deps.continue_enabled {
-            return None;
-        }
-        let read = self.inner.env.store().and_then(|store| store.setting(KEY));
-        let raw = match read {
-            Ok(raw) => raw?,
-            Err(e) => {
-                tracing::warn!(
-                    "recorder: last recording not read: {}",
-                    meeting::store::error_kind(&e)
-                );
-                return None;
-            }
-        };
-        let last = parse(&raw)?;
+        let last = self.stored_last()?;
         let exists = Path::new(&last.folder).join(M4A).is_file();
         let deps = &self.inner.deps;
         let offered = offer(&last, (deps.clock)().now_ms, deps.cap_s, exists)?;
