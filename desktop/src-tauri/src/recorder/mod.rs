@@ -194,7 +194,8 @@ struct Session {
 enum State {
     Idle,
     /// `start` is checking permissions and opening the session; a second start is refused.
-    Starting,
+    /// Holds the new meeting folder once `open` has created it, so recovery skips it.
+    Starting(Option<PathBuf>),
     Active(Box<Session>),
     Saving {
         folder: Option<PathBuf>,
@@ -292,7 +293,7 @@ impl Recorder {
 
     pub fn status(&self) -> Status {
         let (state, frames, language, folder) = match &*self.state() {
-            State::Idle | State::Starting => ("idle", 0, None, None),
+            State::Idle | State::Starting(_) => ("idle", 0, None, None),
             State::Active(s) => {
                 let paused = s.shared.paused.load(Ordering::Relaxed);
                 (
@@ -366,7 +367,7 @@ impl Recorder {
                     "A recording is already running; stop it first",
                 ));
             }
-            *state = State::Starting;
+            *state = State::Starting(None);
         }
         // A panic in an injected call must not leave the recorder stuck in `Starting`.
         let opened = panic::catch_unwind(AssertUnwindSafe(|| self.open(language, event)))
@@ -479,6 +480,9 @@ impl Recorder {
         let now_s = u64::try_from(started.now_ms.div_euclid(1000)).unwrap_or(0);
         let folder = folder::new_folder(&config.recordings_dir, deps.local_minute, now_s)
             .map_err(|e| Refused::new("capture_failed", format!("{e:#}")))?;
+        // Before the WAV exists: launch recovery treats any WAV whose folder the state does not
+        // name as a leftover (#262).
+        *self.state() = State::Starting(Some(folder.clone()));
         let opened = self.open_in(folder.clone(), language, started, event, config.ffmpeg_path);
         if opened.is_err() {
             let _ = fs::remove_dir_all(&folder);
