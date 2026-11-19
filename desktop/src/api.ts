@@ -17,6 +17,11 @@ export type RecorderStatus = {
   notice: Notice | null;
   /** Why the last start from outside the window failed (quick-record FR-5), until dismissed. */
   start_error: { code: string; message: string } | null;
+  /**
+   * The last recording while it can be continued (continue-recording FR-4); `null` unless idle and
+   * built with `FEATURE_CONTINUE_RECORDING`. `stopped_at` is Unix epoch milliseconds.
+   */
+  continuable: { folder: string; name: string; recorded_s: number; stopped_at: number } | null;
 };
 export type RecorderStartError =
   | 'permission_mic'

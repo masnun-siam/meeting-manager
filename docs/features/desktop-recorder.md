@@ -15,10 +15,11 @@ The desktop app's recording session: start, pause, resume, stop, the automatic s
 | `handoff.rs` | `write_context` / `ensure_context` (`context.json`), `finish_recording` (convert, delete WAV, spawn) |
 | `notice.rs` | `Notice {kind, message, folder}` and the fixed messages |
 | `recover.rs` | `recover_all` (launch), `retry` (`recorder_retry`), `recover_one` shared by both |
+| `continuable.rs` | The last recording (continue-recording FR-4): store key `last_recording`, `LastRecording`, `Continuable`, the pure rule `offer`, `Recorder::remember_last` / `clear_last` / `continuable`; see [Last recording](#last-recording-continue-recording-fr-4) |
 | `sleep.rs` | `register` (`NSWorkspaceWillSleepNotification` observer), `confirm_quit_alert` (`NSAlert`) |
 | `../tray.rs` | The menu-bar item: pure `menu_state(&Status, start_error)`, `setup`, the menu handler, the 1 s title timer |
 
-Tests inject everything through `Recorder::with(&env, Deps { capture, clock, local_minute, open_wav, spawn, check_tool, cap_s, flush_every, confirm_quit })`: `open_wav` lets a test hand the writer a sink that fills up like a full disk; a fake capture stores its callbacks in a `thread_local!` so the test pushes samples itself; conversion uses the real ffmpeg on `PATH`.
+Tests inject everything through `Recorder::with(&env, Deps { capture, clock, local_minute, open_wav, spawn, check_tool, cap_s, flush_every, confirm_quit, continue_enabled })`: `open_wav` lets a test hand the writer a sink that fills up like a full disk; a fake capture stores its callbacks in a `thread_local!` so the test pushes samples itself; conversion uses the real ffmpeg on `PATH`.
 
 ## Lifecycle
 
@@ -49,7 +50,7 @@ Checked in this order; any refusal leaves no folder and the state `idle`:
 | `capture.check`, then `capture.request` | `permission_mic`, `permission_audio` (message names the System Settings pane) |
 | Folder, WAV or `capture.start` fails | `permission_*` when the error downcasts to `capture::Denied` (D36), else `capture_failed`; the folder is removed |
 
-On success the language is saved to the store setting `language` (a store failure is logged, never fails Start) and the notice and start error are cleared. `recorder_status.language` when idle is that setting, `bn` when unset or unreadable.
+On success the language is saved to the store setting `language` (a store failure is logged, never fails Start), the notice and start error are cleared, and with the continue flag the store setting `last_recording` is set to JSON `null` (see Last recording). `recorder_status.language` when idle is that setting, `bn` when unset or unreadable.
 
 **Start error (quick-record FR-5).** `Recorder::start_ad_hoc(language)` is the Start from outside the window (the menu bar, #235's links): no event, in `language`, else the last used. When it is refused with any code but `already_recording` (not idle is never a start error), the refusal is kept as `start_error: {code, message}` and announced through `on_change`; the log carries only `recorder: start refused (<code>)`. The window's `recorder_start` never sets it (its reply already shows the refusal). Any successful Start clears it, as does `dismiss_start_error` (`recorder_dismiss_start_error`), which announces only when there was one. Memory only, never stored.
 
@@ -93,7 +94,7 @@ All run on a blocking thread (permission prompts, joins and ffmpeg block). Repli
 
 | Command | Reply | Errors |
 |---|---|---|
-| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null}` (`start_error`: see Start error) | none |
+| `recorder_status` | `{state: idle\|recording\|paused\|saving, elapsed_s, language, folder\|null, notice\|null, start_error: {code, message}\|null, continuable: {folder, name, recorded_s, stopped_at}\|null}` (`start_error`: see Start error; `continuable`: see Last recording, always present, `null` when built without the flag) | none |
 | `recorder_dismiss_start_error` | `{}`; clears the start error (already clear is fine) | none |
 | `recorder_dismiss_notice` (not flagged) | `{}`; clears the notice (already clear is fine); announced through the change listeners, so the menu bar and pill drop it at once | none |
 | `recorder_start {language, event_occurrence_id\|null}` | `{folder}` | see Start |
@@ -126,6 +127,8 @@ On launch `on_launch` runs `recover_all` on its own thread (the window is usable
 | `context.json` | Kept if present (written at Start, with the event). Missing: written without an event, `started_at_ms` from the WAV's creation time (else modified time) |
 | Hand-off | `finish_recording` as a stop does, in the last language (store `language`, default `bn`): m4a, WAV deleted, spawned when ≥ 10 s |
 | Notice | One per run, none when nothing was recovered or failed: `{kind: "recovered", message: "Recovered N recording(s)"}`; with failures `{kind: "error", message: "Recovered N recording(s). Could not convert M: <first error>", folder: <first failed folder>}`. Dropped if a recording was started while recovery ran (that recording's notice wins). Recovery never changes the state |
+
+After `finish_recording`, whatever its outcome, `recover_one` remembers the folder as the last recording, stopped at the recovery time, unless a recording is starting, running or saving, or one was started since the call began (checked under the state lock). With several leftovers the newest one recovered is the last one.
 
 `recorder_retry {folder}` (D33): the folder is canonicalised and must be a direct subfolder of the canonical `recordings_dir` (not `Archive`) holding the WAV, else `not_found` (also for `..`, symlinks out, paths elsewhere, a missing config). Not idle → `already_recording`. Otherwise it answers `saving` at once, and a thread runs the same `recover_one` and sets the notice it returns (`saved`, `too_short`, `setup`, or `error` with the folder again). Works after a disk-full stop and after an ffmpeg failure. Logs carry counts and kinds only.
 
@@ -165,3 +168,16 @@ Built in `tray::setup` on the main thread (skipped with a warning otherwise, so 
 ## Floating indicator
 
 With "Show floating indicator while recording" on (`indicator_enabled`, on by default, read at each start), a recording from any source shows a small pill over every app and Space that stays through pause and saving and then shows the outcome; a `saving` without a recording (retry, recovery, the updater) never shows it. The Rust side (window, show/hide rule, position, settings) is in [desktop.md](../desktop.md#floating-indicator-indicator); the page inside it is `desktop/indicator.html`.
+
+## Last recording (continue-recording FR-4)
+
+Built only with `FEATURE_CONTINUE_RECORDING=1` (`crate::continue_enabled()`, injected as `Deps.continue_enabled`): without it nothing is written and `continuable` is always `null`. Code: `continuable.rs`.
+
+| Rule | Detail |
+|---|---|
+| Store key | `last_recording`: `{folder, recorded_s, language, stopped_at, parts}` (`stopped_at` Unix epoch ms; `parts` 1 until #281) or JSON `null` |
+| Written | By the saving thread of every stop, any reason, before the state returns to `idle` (disk full and failed conversions included); by `recover_one` (launch recovery and Retry, `stopped_at` = the recovery time). A new Start (window, menu bar, `start`/`toggle` link) writes `null` as soon as it records |
+| Offered | `recorder_status.continuable = {folder, name (last path component), recorded_s, stopped_at}` only when `idle` (not `starting`) and `offer` holds: `now - stopped_at <= 2 h`, `recorded_s < cap_s` (3 h; 15 min in debug builds) and `<folder>/recording.m4a` is a file (archived, trashed, moved, deleted or not yet converted: not offered) |
+| Failures | A missing, `null` or invalid value, or a store that cannot be opened: `null`. A failed write logs `recorder: last recording not saved: <error kind>` and never fails the recording. Logs never carry the folder |
+| Cost | One store read and one `is_file` per `recorder_status` poll |
+

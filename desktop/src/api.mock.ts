@@ -60,6 +60,7 @@ export function mockApi(overrides: Partial<Api> = {}): Api {
       folder: null,
       notice: null,
       start_error: null,
+      continuable: null,
     })),
     recorderStart: vi.fn(async () => ({ ok: true as const, folder: '/recordings/meeting-2026-11-12_1000' })),
     recorderPause: vi.fn(async () => ({ ok: true as const, state: 'paused' as const })),

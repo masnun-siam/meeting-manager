@@ -4,6 +4,7 @@
 //! the Rust analogue of the extension's `serial()`. Sleep and quit stops: `sleep.rs`; crash
 //! recovery and `recorder_retry`: `recover.rs`.
 
+mod continuable;
 pub mod convert;
 pub mod folder;
 pub mod handoff;
@@ -36,6 +37,7 @@ use crate::calendar::{self, CalendarError};
 use crate::capture::{self, Capture, Denied, Event, SAMPLE_RATE, Stream};
 use crate::env::Env;
 use crate::reply;
+use continuable::Continuable;
 use handoff::{CheckToolFn, SpawnFn, Tools};
 use notice::Notice;
 use wav::{Chunk, WavWriter};
@@ -90,6 +92,8 @@ pub struct Deps {
     pub flush_every: Duration,
     /// Asks whether to stop the recording and quit (`sleep::confirm_quit_alert`).
     pub confirm_quit: fn() -> bool,
+    /// Built with `FEATURE_CONTINUE_RECORDING=1` (`crate::continue_enabled`).
+    pub continue_enabled: bool,
 }
 
 /// Why a recording stopped; the notice's message starts with it.
@@ -152,6 +156,9 @@ pub struct Status {
     /// Why the last start from a link or the menu bar failed (FR-5), until a Start succeeds or
     /// it is dismissed.
     pub start_error: Option<StartError>,
+    /// The last recording, while it can be continued (continue-recording FR-4); `null` unless
+    /// idle and built with the flag.
+    pub continuable: Option<Continuable>,
 }
 
 /// A start that failed with no window to show it in (FR-5), until the user dismisses it.
@@ -254,6 +261,7 @@ impl Recorder {
                 cap_s: CAP_S,
                 flush_every: FLUSH_EVERY,
                 confirm_quit: sleep::confirm_quit_alert,
+                continue_enabled: crate::continue_enabled(),
             },
         )
     }
@@ -292,8 +300,10 @@ impl Recorder {
     }
 
     pub fn status(&self) -> Status {
-        let (state, frames, language, folder) = match &*self.state() {
-            State::Idle | State::Starting(_) => ("idle", 0, None, None),
+        let (state, frames, language, folder, idle) = match &*self.state() {
+            State::Idle => ("idle", 0, None, None, true),
+            // A start in progress offers nothing: it is about to replace the last recording.
+            State::Starting(_) => ("idle", 0, None, None, false),
             State::Active(s) => {
                 let paused = s.shared.paused.load(Ordering::Relaxed);
                 (
@@ -301,13 +311,14 @@ impl Recorder {
                     s.shared.frames.load(Ordering::Relaxed),
                     Some(s.language),
                     Some(s.folder.clone()),
+                    false,
                 )
             }
             State::Saving {
                 folder,
                 frames,
                 language,
-            } => ("saving", *frames, *language, folder.clone()),
+            } => ("saving", *frames, *language, folder.clone(), false),
         };
         Status {
             state,
@@ -316,6 +327,7 @@ impl Recorder {
             folder: folder.map(|f| f.display().to_string()),
             notice: lock(&self.inner.notice).clone(),
             start_error: lock(&self.inner.start_error).clone(),
+            continuable: if idle { self.continuable() } else { None },
         }
     }
 
@@ -389,6 +401,9 @@ impl Recorder {
         // Cleared before the session is visible, so a fast automatic stop's notice survives.
         *lock(&self.inner.notice) = None;
         *lock(&self.inner.start_error) = None;
+        // The new recording is the last one from here (continue-recording FR-4); cleared before
+        // it is visible too, so a fast automatic stop's `remember_last` is never overwritten.
+        self.clear_last();
         *state = State::Active(Box::new(session));
         // Spawned with the lock held, so a stop queued before it ran finds the session active.
         let weak = Arc::downgrade(&self.inner);
@@ -649,6 +664,8 @@ impl Recorder {
             // Never stuck in `saving`: the WAV, if still there, can be retried.
             let notice = saved
                 .unwrap_or_else(|_| Notice::retry("Saving failed unexpectedly; retry", &folder));
+            // Before `idle`, so a poll never sees `idle` without it.
+            recorder.remember_last(&folder, frames / u64::from(SAMPLE_RATE), language, 1);
             recorder.finish_saving(notice);
         }))
     }
@@ -1142,23 +1159,46 @@ pub(crate) mod tests {
         open_wav: fn(&std::path::Path) -> anyhow::Result<Box<dyn wav::Sink>>,
         confirm_quit: fn() -> bool,
     ) -> Rig {
+        rig_from(name, deps(capture, cap_s, open_wav, confirm_quit))
+    }
+
+    /// A rig built without `FEATURE_CONTINUE_RECORDING`; every other rig has it on.
+    pub(crate) fn rig_unflagged(name: &str) -> Rig {
+        let flagged = deps(ok_capture(), 3 * 3600, wav::open, || true);
+        rig_from(
+            name,
+            Deps {
+                continue_enabled: false,
+                ..flagged
+            },
+        )
+    }
+
+    fn deps(
+        capture: Capture,
+        cap_s: u64,
+        open_wav: fn(&std::path::Path) -> anyhow::Result<Box<dyn wav::Sink>>,
+        confirm_quit: fn() -> bool,
+    ) -> Deps {
+        Deps {
+            capture,
+            clock,
+            local_minute: minute,
+            open_wav,
+            spawn: fake_spawn,
+            check_tool: meeting::spawn::check_tool,
+            cap_s,
+            flush_every: Duration::from_millis(20),
+            confirm_quit,
+            continue_enabled: true,
+        }
+    }
+
+    fn rig_from(name: &str, deps: Deps) -> Rig {
         let home = temp(&format!("recorder-{name}"));
         let env = Env::at(home.clone());
         write_config(&env, ffmpeg());
-        let recorder = Recorder::with(
-            &env,
-            Deps {
-                capture,
-                clock,
-                local_minute: minute,
-                open_wav,
-                spawn: fake_spawn,
-                check_tool: meeting::spawn::check_tool,
-                cap_s,
-                flush_every: Duration::from_millis(20),
-                confirm_quit,
-            },
-        );
+        let recorder = Recorder::with(&env, deps);
         Rig { recorder, home }
     }
 
@@ -1190,7 +1230,8 @@ pub(crate) mod tests {
                 "language": "bn",
                 "folder": null,
                 "notice": null,
-                "start_error": null
+                "start_error": null,
+                "continuable": null
             })
         );
     }
