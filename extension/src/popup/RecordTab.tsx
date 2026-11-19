@@ -159,14 +159,14 @@ export function RecordTab() {
     <div className={styles.tab}>
       <div className={styles.stage}>
         {running ? (
-          <p className={phase === 'recording' ? styles.rec : styles.paused}>
-            {phase === 'recording' ? 'REC' : 'Paused'}
-          </p>
-        ) : null}
-        {running ? (
-          <p role="timer" aria-label="Recorded time" className={styles.timer}>
-            {formatElapsed(elapsedMs(state, now))}
-          </p>
+          <>
+            <p className={phase === 'recording' ? styles.rec : styles.paused}>
+              {phase === 'recording' ? 'REC' : 'Paused'}
+            </p>
+            <p role="timer" aria-label="Recorded time" className={styles.timer}>
+              {formatElapsed(elapsedMs(state, now))}
+            </p>
+          </>
         ) : null}
         {phase === 'idle' ? (
           <p aria-hidden="true" className={`${styles.timer} ${styles.dim}`}>
