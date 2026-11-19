@@ -38,7 +38,7 @@ use crate::capture::{self, Capture, Denied, Event, SAMPLE_RATE, Stream};
 use crate::env::Env;
 use crate::recorder::continuable::LastRecording;
 use crate::reply;
-use continuable::Continuable;
+pub use continuable::Continuable;
 use handoff::{CheckToolFn, SpawnFn, Tools};
 use notice::Notice;
 use wav::{Chunk, WavWriter};
@@ -498,14 +498,26 @@ impl Recorder {
     /// last used. A refusal other than `already_recording` becomes the start error (FR-5).
     pub fn start_ad_hoc(&self, language: Option<Language>) -> Result<PathBuf, Refused> {
         let language = language.unwrap_or_else(|| self.status().language);
-        let started = self.start(language, || Ok(None));
+        self.ad_hoc("start", self.start(language, || Ok(None)))
+    }
+
+    /// An ad hoc continue from outside the window (the menu bar, a link; continue-recording
+    /// FR-6, FR-7). A refusal other than `already_recording`, `nothing_to_continue` included,
+    /// becomes the start error, as for `start_ad_hoc`.
+    pub fn continue_ad_hoc(&self) -> Result<PathBuf, Refused> {
+        self.ad_hoc("continue", self.continue_recording())
+    }
+
+    /// Makes an ad hoc start's or continue's refusal, other than `already_recording`, the start
+    /// error (FR-5).
+    fn ad_hoc(&self, what: &str, started: Result<PathBuf, Refused>) -> Result<PathBuf, Refused> {
         if let Err(r) = &started
             && r.code != "already_recording"
         {
-            tracing::info!("recorder: start refused ({})", r.code);
+            tracing::info!("recorder: {what} refused ({})", r.code);
             {
-                // Under the state lock, as `start` clears it: a Start from the window that
-                // succeeded in the meantime wins, and the stale refusal is dropped.
+                // Under the state lock, as `activate` clears it: a start or continue from the
+                // window that succeeded in the meantime wins, and the stale refusal is dropped.
                 let state = self.state();
                 if matches!(*state, State::Active(_)) {
                     return started;
@@ -2359,7 +2371,7 @@ pub(crate) mod tests {
 
     /// An earlier meeting (`recording.m4a` and `context.json`) stored as the last recording with
     /// `recorded_s` and `parts`, in Bengali (Start in these tests is English).
-    fn earlier(rig: &Rig, recorded_s: u64, parts: u32) -> PathBuf {
+    pub(crate) fn earlier(rig: &Rig, recorded_s: u64, parts: u32) -> PathBuf {
         let folder = rig.home.join("Recordings").join(EARLIER);
         fs::create_dir_all(&folder).unwrap();
         tone_wav(&folder.join(WAV), 1);
@@ -2891,6 +2903,63 @@ pub(crate) mod tests {
         rig.recorder.recover_all();
         assert_eq!(snapshot(&folder), before);
         assert_eq!(rig.state(), "recording");
+        rig.stop(Reason::User);
+    }
+
+    #[test]
+    fn continue_ad_hoc_refusals_become_the_start_error() {
+        let rig = rig("continue-ad-hoc-nothing", ok_capture());
+        let count = counter(&rig);
+        let refused = rig.recorder.continue_ad_hoc().unwrap_err();
+        assert_eq!(
+            start_error(&rig),
+            Some(StartError {
+                code: "nothing_to_continue",
+                message: "Nothing to continue: the last recording stopped more than 2 hours ago, or was moved.".into(),
+            })
+        );
+        assert_eq!(refused.code, "nothing_to_continue");
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        rig.recorder.dismiss_start_error();
+        assert_eq!(start_error(&rig), None);
+
+        let rig = self::rig("continue-ad-hoc-mic", mic_denied_capture());
+        earlier(&rig, 20, 1);
+        assert_eq!(
+            rig.recorder.continue_ad_hoc().unwrap_err().code,
+            "permission_mic"
+        );
+        assert_eq!(
+            start_error(&rig).unwrap().message,
+            "Allow Meeting in System Settings › Privacy & Security › Microphone"
+        );
+    }
+
+    #[test]
+    fn continue_ad_hoc_already_recording_is_not_a_start_error() {
+        let rig = rig("continue-ad-hoc-busy", ok_capture());
+        earlier(&rig, 20, 1);
+        rig.start().unwrap();
+        let count = counter(&rig);
+        assert_eq!(
+            rig.recorder.continue_ad_hoc().unwrap_err().code,
+            "already_recording"
+        );
+        assert_eq!(start_error(&rig), None);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        rig.stop(Reason::User);
+    }
+
+    #[test]
+    fn continue_ad_hoc_success_clears_the_start_error() {
+        let rig = rig("continue-ad-hoc-ok", ok_capture());
+        rig.recorder.continue_ad_hoc().unwrap_err();
+        assert!(start_error(&rig).is_some());
+        let folder = earlier(&rig, 20, 1);
+        assert_eq!(rig.recorder.continue_ad_hoc().unwrap(), folder);
+        let status = rig.recorder.status();
+        assert_eq!((status.state, status.part), ("recording", Some(2)));
+        assert_eq!(status.start_error, None);
         rig.stop(Reason::User);
     }
 
