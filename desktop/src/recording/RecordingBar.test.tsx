@@ -506,3 +506,198 @@ describe('RecordingBar', () => {
     });
   });
 });
+
+describe('Continue (continue-recording FR-6, FR-8)', () => {
+  const NOW = new Date('2026-11-20T10:50:00Z').getTime();
+  const last = (stoppedMinAgo = 5) => ({
+    folder: '/r/meeting-2026-11-20_1000',
+    name: 'meeting-2026-11-20_1000',
+    recorded_s: 2530,
+    stopped_at: NOW - stoppedMinAgo * 60_000,
+  });
+  const cont = () => screen.getByRole('button', { name: 'Continue last recording' });
+  const recorderContinue = vi.mocked(api.recorderContinue);
+
+  beforeEach(() => {
+    vi.setSystemTime(NOW);
+    recorderStatus.mockResolvedValue(statusReply({ continuable: last() }));
+    recorderContinue.mockResolvedValue({ ok: true, folder: '/r/meeting-2026-11-20_1000' });
+  });
+
+  it('idle with continuable shows the "Continue last recording" button with folder, H:MM:SS and N min ago', async () => {
+    setup();
+
+    await waitFor(() => expect(cont()).toBeEnabled());
+    expect(cont()).toHaveAttribute('type', 'button');
+    expect(cont()).toHaveTextContent('Continue');
+    expect(cont()).toHaveAccessibleDescription('meeting-2026-11-20_1000 · 0:42:10 · stopped 5 min ago');
+    expect(start()).toBeEnabled();
+    // Start keeps its place first in the row (the focus fallback after a ×).
+    const buttons = within(screen.getByRole('banner')).getAllByRole('button');
+    expect(buttons.indexOf(start())).toBeLessThan(buttons.indexOf(cont()));
+  });
+
+  it('the poll keeps "N min ago" current', async () => {
+    setup();
+    await waitFor(() => expect(cont()).toHaveAccessibleDescription(/stopped 5 min ago$/));
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(cont()).toHaveAccessibleDescription(/stopped 6 min ago$/);
+  });
+
+  it('Continue from the keyboard moves focus to Pause once recording', async () => {
+    const user = setup();
+    await waitFor(() => expect(cont()).toBeEnabled());
+
+    holdPolls();
+    cont().focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pause' })).toHaveFocus());
+  });
+
+  it('just stopped reads "stopped 0 min ago"', async () => {
+    recorderStatus.mockResolvedValue(statusReply({ continuable: last(0) }));
+    setup();
+
+    await waitFor(() => expect(cont()).toHaveAccessibleDescription(/stopped 0 min ago$/));
+  });
+
+  it('no Continue when continuable is null', async () => {
+    recorderStatus.mockResolvedValue(statusReply({ continuable: null }));
+    setup();
+
+    await waitFor(() => expect(start()).toBeEnabled());
+    expect(screen.queryByRole('button', { name: 'Continue last recording' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/min ago/)).not.toBeInTheDocument();
+  });
+
+  it('the language select stays enabled while idle with continuable, and Continue does not read it', async () => {
+    const user = setup();
+
+    await waitFor(() => expect(cont()).toBeEnabled());
+    expect(language()).toBeEnabled();
+    await user.selectOptions(language(), 'English');
+    expect(language()).toHaveValue('en');
+
+    holdPolls();
+    await user.click(cont());
+    expect(recorderContinue).toHaveBeenCalledWith();
+  });
+
+  it('Continue calls recorderContinue once, shows recording at once and reads the status again', async () => {
+    const user = setup();
+    await waitFor(() => expect(cont()).toBeEnabled());
+
+    recorderStatus.mockClear();
+    recorderStatus.mockResolvedValue(statusReply({ state: 'recording', elapsed_s: 2530, part: 2 }));
+    await user.click(cont());
+
+    expect(recorderContinue).toHaveBeenCalledOnce();
+    expect(await screen.findByRole('timer', { name: 'Recorded time' })).toHaveTextContent('00:42:10');
+    expect(recorderStatus).toHaveBeenCalled();
+    expect(screen.getByText('Continuing · part 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue last recording' })).not.toBeInTheDocument();
+  });
+
+  it('Continue is disabled while the call runs and cannot be pressed twice', async () => {
+    const reply = deferred<Awaited<ReturnType<typeof api.recorderContinue>>>();
+    recorderContinue.mockReturnValue(reply.promise);
+    const user = setup();
+    await waitFor(() => expect(cont()).toBeEnabled());
+
+    holdPolls();
+    await user.click(cont());
+    expect(cont()).toBeDisabled();
+    expect(start()).toBeDisabled();
+    await user.click(cont());
+    expect(recorderContinue).toHaveBeenCalledOnce();
+
+    await act(async () => reply.resolve({ ok: true, folder: '/r/meeting-2026-11-20_1000' }));
+    expect(await screen.findByText('● REC')).toBeInTheDocument();
+  });
+
+  it('is not offered before the first status', async () => {
+    recorderStatus.mockReturnValue(new Promise(() => {}));
+    setup();
+
+    expect(screen.queryByRole('button', { name: 'Continue last recording' })).not.toBeInTheDocument();
+    expect(start()).toBeDisabled();
+  });
+
+  it.each([
+    ['permission_mic', 'Allow Meeting in System Settings › Privacy & Security › Microphone'],
+    ['permission_audio', 'Allow Meeting in System Settings › Privacy & Security › Screen & System Audio Recording'],
+    ['nothing_to_continue', 'message for nothing_to_continue'],
+    ['already_recording', 'message for already_recording'],
+    ['not_configured', 'message for not_configured'],
+    ['capture_failed', 'message for capture_failed'],
+  ] as const)('%s shows its text and Continue and Start stay enabled', async (code, text) => {
+    recorderContinue.mockResolvedValue({ ok: false, code, message: `message for ${code}` });
+    const user = setup();
+
+    await waitFor(() => expect(cont()).toBeEnabled());
+    await user.click(cont());
+    expect(status()).toHaveTextContent(text);
+    expect(cont()).toBeEnabled();
+    expect(start()).toBeEnabled();
+  });
+
+  it('a rejected recorderContinue shows a message', async () => {
+    recorderContinue.mockRejectedValue(new Error('ipc closed'));
+    const user = setup();
+
+    await waitFor(() => expect(cont()).toBeEnabled());
+    await user.click(cont());
+    expect(status()).toHaveTextContent('Could not reach the Meeting app: ipc closed');
+    expect(cont()).toBeEnabled();
+  });
+
+  it('Continue vanishes when a poll reports continuable null', async () => {
+    setup();
+    await waitFor(() => expect(cont()).toBeEnabled());
+
+    recorderStatus.mockResolvedValue(statusReply({ continuable: null }));
+    await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
+    expect(screen.queryByRole('button', { name: 'Continue last recording' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['recording', '● REC'],
+    ['paused', 'II Paused'],
+  ] as const)('part 2 shows "Continuing · part 2" beside %s', async (state, mark) => {
+    recorderStatus.mockResolvedValue(statusReply({ state, part: 2, elapsed_s: 2530, continuable: null }));
+    setup();
+
+    const label = await screen.findByText('Continuing · part 2');
+    expect(label.previousElementSibling).toHaveTextContent(mark);
+  });
+
+  it.each(['recording', 'paused'] as const)('part null shows no part label while %s', async (state) => {
+    recorderStatus.mockResolvedValue(statusReply({ state, part: null, continuable: null }));
+    setup();
+
+    await screen.findByRole('timer');
+    expect(screen.queryByText(/Continuing/)).not.toBeInTheDocument();
+  });
+
+  it.each(['idle', 'saving'] as const)('no part label while %s', async (state) => {
+    recorderStatus.mockResolvedValue(statusReply({ state, part: 2, continuable: null }));
+    setup();
+
+    await waitFor(() => expect(recorderStatus).toHaveBeenCalled());
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.queryByText(/Continuing/)).not.toBeInTheDocument();
+  });
+
+  it('the language select shows the status language and is disabled while a part records', async () => {
+    recorderStatus.mockResolvedValue(
+      statusReply({ state: 'recording', part: 2, language: 'en', elapsed_s: 2530, continuable: null }),
+    );
+    setup();
+
+    await screen.findByText('Continuing · part 2');
+    expect(language()).toHaveValue('en');
+    expect(language()).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Continue last recording' })).not.toBeInTheDocument();
+  });
+});
