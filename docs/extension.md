@@ -41,7 +41,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/background/recover.ts` | Save leftovers on startup | `recoverLeftovers`, `recoveredName` |
 | `src/offscreen/offscreen.ts` | Offscreen message router | `chrome.runtime.onMessage` listener |
 | `src/offscreen/recorder.ts` | MediaRecorder session | `startRecording`, `pauseRecording`, `resumeRecording`, `stopRecording` |
-| `src/popup/Popup.tsx` | Tab shell | `Popup` |
+| `src/popup/Popup.tsx` | Shell: "meeting." wordmark and tabs | `Popup` |
 | `src/popup/RecordTab.tsx` | Record UI | `RecordTab` |
 | `src/popup/useRecorderStatus.ts` | Live status hook | `useRecorderStatus` |
 | `src/popup/useMeetingContext.ts` | Live meeting context hook (flag on; null and no storage read when off) | `useMeetingContext` |
@@ -50,6 +50,8 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock`, `MEET_CODE` |
 | `src/shared/flags.ts` | Build-time flags, defined in `vite.config.ts` from `FEATURE_MEETING_CONTEXT` and `FEATURE_CONTINUE_RECORDING` (`flagFromEnv`) | `meetingContextEnabled`, `continueRecordingEnabled` |
 | `src/shared/lastRecording.ts` | Last saved recording (flag on) and the pure can-continue rule | `canContinue`, `readLastRecording`, `writeLastRecording`, `clearLastRecording`, `lastRecordingExists`, `folderOf`, `CONTINUE_WINDOW_MS`, `LAST_RECORDING_KEY` |
+| `src/shared/tokens.css`, `tokens.test.ts` | Design tokens, fonts, focus ring, reduced motion; contrast test | `--surface`, `--text`, `--accent`, `--record`, `--focus-ring` |
+| `src/shared/fonts/` | Bundled woff2 fonts and their OFL licences | |
 | `src/content/meet.ts` | Meet content script (flag-on build only): 1 s reads, 10 s batches, 60 s give-up, `context_hello` resume | `chrome.runtime.onMessage` listener |
 | `src/content/meetReader.ts` | Pure Meet page reads | `readRoster`, `readTitle`, `readSpeaking`, `diffSpeaking` |
 | `src/shared/messages.ts` | All cross-context types | `ContentCommand`, `ContentEvent`, `PopupCommand`, `OffscreenCommand`, `OffscreenEvent`, `RecorderStatus`, `Notice`, `RECORDER_STATUS_KEY` |
@@ -104,7 +106,9 @@ flowchart LR
 
 ## Conventions
 
-- **CSS modules**: each component has a colocated `<Name>.module.css`, imported as `styles` (Popup, RecordTab, JobsTab, MicPermission). No global CSS.
+- **CSS modules**: each component has a colocated `<Name>.module.css`, imported as `styles` (Popup, RecordTab, JobsTab, MicPermission). The only global CSS is `src/shared/tokens.css`, imported first by each page's `main.tsx`: colour, radius and font tokens (CSS custom properties, a light set and a dark set switched by `prefers-color-scheme`), the `@font-face` rules, `body` defaults, the `:focus-visible` ring and the `prefers-reduced-motion: reduce` reset. Component styles use `var(--…)` tokens, never colour literals.
+- **Colours**: write tokens as plain `#rrggbb`; `src/shared/tokens.test.ts` parses both palettes and checks WCAG 2.1 AA contrast of each foreground/background pair it lists. Add a pair there for any new token used as text or a control boundary.
+- **Fonts**: Inter (body) and Space Grotesk (wordmark, headings) are bundled from `src/shared/fonts/` (Latin subsets, weights 400 to 700, OFL texts beside them); Vite emits them as hashed `dist/assets/*.woff2`. No font or style loads from the network. Other scripts (Bengali) fall back to `system-ui`. How the files were made: `src/shared/fonts/README.md`.
 - **Tests**: colocated `<name>.test.ts(x)`, run by vitest in jsdom with `src/test/setup.ts`. No own test file: `serviceWorker.ts`, `offscreen/offscreen.ts`, `useRecorderStatus.ts` and `useMeetingContext.ts` (covered through `RecordTab.test.tsx`), both `main.tsx`. `manifest.test.ts` sits in `extension/`.
 - **Chrome API mocking**: no shared mock. Tests that touch Chrome APIs call `vi.stubGlobal('chrome', { ...only the APIs they use })`. Browser globals are stubbed the same way (`navigator.permissions`, `navigator.storage`, `navigator.mediaDevices`). `vi.mock` replaces sibling modules (e.g. `nativeClient`, `recordingFile` in `save.test.ts`).
 - **Setup**: `src/test/setup.ts` loads jest-dom matchers and calls Testing Library `cleanup` in `afterEach` (test globals are off, so import `describe/it/expect/vi` from `vitest`).

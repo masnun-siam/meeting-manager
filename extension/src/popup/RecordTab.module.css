@@ -18,11 +18,11 @@
 }
 
 .rec {
-  color: #d93025;
+  color: var(--record-text);
 }
 
 .messages {
-  color: #5f6368;
+  color: var(--text-muted);
 }
 
 .messages p {
@@ -30,7 +30,7 @@
 }
 
 .messages .problem {
-  color: #d93025;
+  color: var(--record-text);
 }
 
 .srOnly {
