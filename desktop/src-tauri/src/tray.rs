@@ -352,6 +352,25 @@ mod tests {
     }
 
     #[test]
+    fn a_dismissed_notice_leaves_no_first_line() {
+        for n in [
+            Notice::retry("ffmpeg failed: boom", std::path::Path::new("/r/m")),
+            Notice::new(Kind::Setup, notice::SETUP),
+        ] {
+            assert!(
+                menu_state(&status("idle", 0, Some(n)), None)
+                    .notice
+                    .is_some()
+            );
+            // After `recorder_dismiss_notice` the status has no notice.
+            assert_eq!(menu_state(&status("idle", 0, None), None).notice, None);
+        }
+        // A start error is cleared by its own command, not by dismissing the notice.
+        let state = menu_state(&status("idle", 0, None), Some("Could not start"));
+        assert_eq!(state.notice.as_deref(), Some("Could not start"));
+    }
+
+    #[test]
     fn the_clock_is_hours_minutes_seconds() {
         assert_eq!(clock(0), "0:00:00");
         assert_eq!(clock(3_725), "1:02:05");

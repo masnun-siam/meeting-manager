@@ -74,6 +74,7 @@ fn configure<R: Runtime>(builder: tauri::Builder<R>, mode: Mode) -> tauri::Build
             recorder::recorder_stop,
             recorder::recorder_retry,
             recorder::recorder_dismiss_start_error,
+            recorder::recorder_dismiss_notice,
             calendar::calendar_status,
             calendar::calendar_events,
             calendar::calendar_event,
@@ -244,7 +245,7 @@ mod tests {
     use super::*;
 
     /// Every command of the PRD's API table.
-    const COMMANDS: [&str; 34] = [
+    const COMMANDS: [&str; 35] = [
         "recorder_status",
         "recorder_start",
         "recorder_pause",
@@ -252,6 +253,7 @@ mod tests {
         "recorder_stop",
         "recorder_retry",
         "recorder_dismiss_start_error",
+        "recorder_dismiss_notice",
         "calendar_status",
         "calendar_events",
         "calendar_event",
@@ -594,6 +596,7 @@ mod tests {
                 "recorder_dismiss_start_error",
                 serde_json::json!({"ok": true}),
             ),
+            ("recorder_dismiss_notice", serde_json::json!({"ok": true})),
             (
                 "indicator_settings",
                 serde_json::json!({"ok": true, "enabled": true}),

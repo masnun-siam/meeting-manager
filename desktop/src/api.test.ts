@@ -74,6 +74,7 @@ const cases: Case[] = [
   ['updateInstall', () => api.updateInstall(), 'update_install', undefined],
   ['setAutoUpdate', () => api.setAutoUpdate({ enabled: true }), 'set_auto_update', { enabled: true }],
   ['recorderDismissStartError', () => api.recorderDismissStartError(), 'recorder_dismiss_start_error', undefined],
+  ['recorderDismissNotice', () => api.recorderDismissNotice(), 'recorder_dismiss_notice', undefined],
   ['indicatorSettings', () => api.indicatorSettings(), 'indicator_settings', undefined],
   [
     'setIndicatorEnabled',

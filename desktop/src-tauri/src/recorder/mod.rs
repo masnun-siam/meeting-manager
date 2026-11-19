@@ -447,6 +447,15 @@ impl Recorder {
         }
     }
 
+    /// Clears the notice; nothing changes when there is none. A kept WAV stays for the next
+    /// launch's recovery.
+    pub fn dismiss_notice(&self) {
+        let dismissed = lock(&self.inner.notice).take();
+        if dismissed.is_some() {
+            self.changed();
+        }
+    }
+
     /// The checks in the order the contract gives, then the folder, the WAV, `context.json` and
     /// the capture stream.
     fn open(
@@ -871,6 +880,16 @@ pub async fn recorder_status<R: Runtime>(app: AppHandle<R>) -> Value {
 pub async fn recorder_dismiss_start_error<R: Runtime>(app: AppHandle<R>) -> Value {
     blocking(app, |app| {
         app.recorder.dismiss_start_error();
+        reply::ok(json!({}))
+    })
+    .await
+}
+
+/// Clears the recorder's notice (continue-recording FR-1); already clear is fine.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn recorder_dismiss_notice<R: Runtime>(app: AppHandle<R>) -> Value {
+    blocking(app, |app| {
+        app.recorder.dismiss_notice();
         reply::ok(json!({}))
     })
     .await
@@ -1770,6 +1789,65 @@ pub(crate) mod tests {
         assert_eq!(count.load(Ordering::SeqCst), 2);
         rig.recorder.dismiss_start_error();
         assert_eq!(count.load(Ordering::SeqCst), 2, "already clear");
+    }
+
+    #[test]
+    fn dismiss_clears_the_notice_once_and_announces() {
+        let rig = rig("notice-dismiss", ok_capture());
+        let count = counter(&rig);
+        rig.recorder.dismiss_notice();
+        assert_eq!(count.load(Ordering::SeqCst), 0, "nothing to dismiss");
+        rig.start().unwrap();
+        push(11 * SECOND);
+        // Start, saving, then idle with the notice.
+        assert_eq!(rig.stop(Reason::User).notice.unwrap().kind, Kind::Saved);
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+        rig.recorder.dismiss_notice();
+        assert_eq!(rig.recorder.status().notice, None);
+        assert_eq!(count.load(Ordering::SeqCst), 4);
+        rig.recorder.dismiss_notice();
+        assert_eq!(count.load(Ordering::SeqCst), 4, "already clear");
+    }
+
+    #[test]
+    fn every_listener_hears_a_dismissal_in_order() {
+        let rig = rig("notice-dismiss-listeners", ok_capture());
+        rig.start().unwrap();
+        rig.stop(Reason::User);
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        for n in 0..2 {
+            let heard = heard.clone();
+            let recorder = rig.recorder.clone();
+            rig.recorder.on_change(move || {
+                // `changed` holds no lock while calling a listener.
+                assert_eq!(recorder.status().notice, None);
+                lock(&heard).push(n);
+            });
+        }
+        rig.recorder.dismiss_notice();
+        assert_eq!(*lock(&heard), [0, 1]);
+    }
+
+    #[test]
+    fn a_dismissed_notice_stays_dismissed_across_polls() {
+        let rig = rig("notice-dismiss-polls", ok_capture());
+        rig.start().unwrap();
+        assert!(rig.stop(Reason::User).notice.is_some());
+        rig.recorder.dismiss_notice();
+        for _ in 0..3 {
+            assert_eq!(rig.recorder.status().notice, None);
+        }
+    }
+
+    #[test]
+    fn a_new_notice_shows_after_a_dismissal() {
+        let rig = rig("notice-dismiss-next", ok_capture());
+        rig.start().unwrap();
+        rig.stop(Reason::User);
+        rig.recorder.dismiss_notice();
+        rig.start().unwrap();
+        push(11 * SECOND);
+        assert_eq!(rig.stop(Reason::User).notice.unwrap().kind, Kind::Saved);
     }
 
     #[test]

@@ -240,6 +240,7 @@ export const setAutoUpdate = (req: { enabled: boolean }) =>
   call<{ auto_update: boolean }, SetAutoUpdateError>('set_auto_update', req);
 
 export const recorderDismissStartError = () => call<object>('recorder_dismiss_start_error');
+export const recorderDismissNotice = () => call<object>('recorder_dismiss_notice');
 export const indicatorSettings = () => call<{ enabled: boolean }, IndicatorSettingsError>('indicator_settings');
 export const setIndicatorEnabled = (req: { enabled: boolean }) =>
   call<{ enabled: boolean }, IndicatorSettingsError>('set_indicator_enabled', req);
