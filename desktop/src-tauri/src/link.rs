@@ -466,10 +466,12 @@ mod tests {
         }
     }
 
-    /// The seven links of the Alfred workflow's `rec` list (alfred-workflow FR-2), in order.
-    const ALFRED_LINKS: [&str; 7] = [
+    /// The eight links of the Alfred workflow's `rec` list (alfred-workflow FR-2, plus
+    /// continue-recording FR-13), in order.
+    const ALFRED_LINKS: [&str; 8] = [
         "meeting-manager://record/toggle",
         "meeting-manager://record/start",
+        "meeting-manager://record/continue",
         "meeting-manager://record/start?language=en",
         "meeting-manager://record/start?language=bn",
         "meeting-manager://record/pause",
