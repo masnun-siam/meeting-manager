@@ -154,7 +154,7 @@ describe('Pill', () => {
     const { user } = await endWith(errorNotice);
 
     await user.click(button('Open Meeting'));
-    expect(screen.getByRole('alert')).toHaveTextContent('No main window');
+    expect(await screen.findByRole('alert')).toHaveTextContent('No main window');
     expect(api.indicatorDismiss).not.toHaveBeenCalled();
     expect(button('Dismiss')).toBeInTheDocument();
   });
