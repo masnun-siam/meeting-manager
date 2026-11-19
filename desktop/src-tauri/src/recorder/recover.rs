@@ -14,7 +14,7 @@ use meeting::Language;
 
 use super::handoff::{self, WAV};
 use super::notice::{Kind, Notice};
-use super::{Clock, Recorder, Refused, State, lock, wav};
+use super::{Clock, Recorder, Refused, SAMPLE_RATE, State, lock, wav};
 
 /// What a conversion killed mid-way leaves; never a recording.
 const PART: &str = "recording.m4a.part";
@@ -66,6 +66,7 @@ impl Recorder {
     /// if empty, the folder are removed). A notice with a `folder` is a failure the user can retry.
     fn recover_one(&self, folder: &Path, language: Language, ffmpeg: &Path) -> Option<Notice> {
         let _one = lock(&self.inner.converting);
+        let starts = self.inner.next_id.load(Ordering::Relaxed);
         if self.session_folder().as_deref() == Some(folder) || !leftover(folder) {
             return None;
         }
@@ -84,9 +85,17 @@ impl Recorder {
         };
         handoff::ensure_context(folder, &self.started_at(&wav), None);
         let tools = self.tools(ffmpeg.to_path_buf());
-        Some(handoff::finish_recording(
-            &tools, folder, language, frames, "",
-        ))
+        let notice = handoff::finish_recording(&tools, folder, language, frames, "");
+        // Counted from now, the recovery (FR-4). Never replaces a recording started meanwhile or
+        // still running: checked under the state lock, which a start takes before it clears the
+        // last recording. `Saving` without a folder is a retry's own state.
+        let state = self.state();
+        let no_session = matches!(*state, State::Idle | State::Saving { folder: None, .. });
+        if no_session && self.inner.next_id.load(Ordering::Relaxed) == starts {
+            self.remember_last(folder, frames / u64::from(SAMPLE_RATE), language, 1);
+        }
+        drop(state);
+        Some(notice)
     }
 
     /// The folder of the recording that is starting, running or saving: never touched by
@@ -222,7 +231,7 @@ mod tests {
     use super::*;
     use crate::recorder::Reason;
     use crate::recorder::convert::tests::{ffmpeg, probe, tone_wav};
-    use crate::recorder::handoff::tests::spawns_under;
+    use crate::recorder::handoff::tests::{clock, spawns_under};
     use crate::recorder::handoff::{CONTEXT, M4A};
     use crate::recorder::tests::{Rig, SECOND, ok_capture, push, rig, write_config};
     use crate::recorder::wav::{Chunk, WavWriter};
@@ -704,5 +713,129 @@ mod tests {
         wait_retry(rig.recorder.retry(folder.to_str().unwrap()).unwrap());
         assert_eq!(rig.recorder.status().notice.unwrap().kind, Kind::TooShort);
         assert!(folder.join(M4A).is_file());
+    }
+
+    /// The stored last recording's folder, recorded seconds and stop time.
+    fn last_recording(rig: &Rig) -> Option<(String, u64, i64)> {
+        let raw = rig
+            .env()
+            .store()
+            .unwrap()
+            .setting("last_recording")
+            .unwrap()?;
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        (!v.is_null()).then(|| {
+            (
+                v["folder"].as_str().unwrap().to_string(),
+                v["recorded_s"].as_u64().unwrap(),
+                v["stopped_at"].as_i64().unwrap(),
+            )
+        })
+    }
+
+    fn offered(rig: &Rig) -> Option<String> {
+        rig.recorder.status().continuable.map(|c| c.folder)
+    }
+
+    #[test]
+    fn a_recovered_recording_counts_from_recovery_time() {
+        let rig = rig("continuable-recovered", ok_capture());
+        let older = leftover_in(&rig, "meeting-2026-11-13_0800", 2);
+        let newest = recordings(&rig).join("meeting-2026-11-13_0900");
+        fs::create_dir_all(&newest).unwrap();
+        killed_wav(&newest.join(WAV), 12);
+        rig.recorder.recover_all();
+        assert!(older.join(M4A).is_file());
+        // The rig's fixed clock, not the WAV's time (today on the real clock).
+        assert_eq!(
+            last_recording(&rig),
+            Some((newest.display().to_string(), 12, clock().now_ms))
+        );
+        assert_eq!(offered(&rig).as_deref(), newest.to_str());
+    }
+
+    #[test]
+    fn recovery_does_not_replace_a_running_recording() {
+        let rig = rig("continuable-recover-running", ok_capture());
+        let folder = rig.start().unwrap();
+        push(3 * SECOND);
+        let old = leftover_in(&rig, "meeting-old", 2);
+        rig.recorder.recover_all();
+        assert!(old.join(M4A).is_file());
+        assert_eq!(last_recording(&rig), None);
+        rig.stop(Reason::User);
+        assert_eq!(offered(&rig).as_deref(), folder.to_str());
+    }
+
+    #[test]
+    fn recovery_does_not_replace_a_recording_started_meanwhile() {
+        let rig = rig("continuable-recover-meanwhile", ok_capture());
+        // An ffmpeg that waits for `go`, so a recording starts and stops mid-recovery.
+        let (started, go) = (rig.home.join("started"), rig.home.join("go"));
+        let slow = rig.home.join("ffmpeg-slow");
+        fs::write(
+            &slow,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\nexec '{}' \"$@\"\n",
+                started.display(),
+                go.display(),
+                ffmpeg().display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&slow, fs::Permissions::from_mode(0o755)).unwrap();
+        write_config(&rig.env(), slow);
+        let old = leftover_in(&rig, "meeting-old", 12);
+
+        let recovering = {
+            let recorder = rig.recorder.clone();
+            thread::spawn(move || recorder.recover_all())
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !started.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "recovery never converted"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        let folder = rig.start().unwrap();
+        push(3 * SECOND);
+        fs::write(&go, b"").unwrap();
+        rig.stop(Reason::User);
+        recovering.join().unwrap();
+        assert!(old.join(M4A).is_file());
+        assert_eq!(offered(&rig).as_deref(), folder.to_str());
+    }
+
+    #[test]
+    fn a_failed_conversion_is_not_continuable_until_retried() {
+        let rig = rig("continuable-retry", ok_capture());
+        write_config(&rig.env(), broken_ffmpeg(&rig));
+        let folder = rig.start().unwrap();
+        push(11 * SECOND);
+        rig.stop(Reason::User);
+        assert!(folder.join(WAV).is_file());
+        assert_eq!(
+            last_recording(&rig).map(|l| l.0).as_deref(),
+            folder.to_str()
+        );
+        assert_eq!(offered(&rig), None);
+
+        write_config(&rig.env(), ffmpeg());
+        wait_retry(rig.recorder.retry(folder.to_str().unwrap()).unwrap());
+        assert_eq!(offered(&rig).as_deref(), folder.to_str());
+        assert_eq!(last_recording(&rig).map(|l| l.1), Some(11));
+    }
+
+    #[test]
+    fn a_full_disk_is_not_continuable_until_retried() {
+        let rig = rig("continuable-disk", ok_capture());
+        let folder = rig.start().unwrap();
+        push(3 * SECOND);
+        rig.stop(Reason::DiskFull);
+        assert_eq!(offered(&rig), None);
+        wait_retry(rig.recorder.retry(folder.to_str().unwrap()).unwrap());
+        assert_eq!(offered(&rig).as_deref(), folder.to_str());
     }
 }

@@ -10,6 +10,7 @@ export function statusReply(extra: Partial<RecorderStatus> = {}): Ok<RecorderSta
     folder: null,
     notice: null,
     start_error: null,
+    continuable: null,
     ...extra,
   };
 }

@@ -423,6 +423,7 @@ pub(crate) mod tests {
             folder: None,
             notice: notice.map(|kind| Notice::new(kind, "m")),
             start_error: None,
+            continuable: None,
         }
     }
 

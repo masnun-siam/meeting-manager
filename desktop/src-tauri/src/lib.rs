@@ -34,6 +34,11 @@ pub fn desktop_enabled() -> bool {
     flag_gate(option_env!("FEATURE_DESKTOP_APP"))
 }
 
+/// Whether the app was built with `FEATURE_CONTINUE_RECORDING=1` (PRD continue-recording FR-14).
+pub fn continue_enabled() -> bool {
+    flag_gate(option_env!("FEATURE_CONTINUE_RECORDING"))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Mode {
     Off,
@@ -364,6 +369,10 @@ mod tests {
         assert_eq!(
             desktop_enabled(),
             flag_gate(option_env!("FEATURE_DESKTOP_APP"))
+        );
+        assert_eq!(
+            continue_enabled(),
+            flag_gate(option_env!("FEATURE_CONTINUE_RECORDING"))
         );
     }
 
