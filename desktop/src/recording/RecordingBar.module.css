@@ -54,6 +54,13 @@
   color: var(--ink-soft);
 }
 
+.part {
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .timer {
   font-family: var(--font-mono);
   font-size: var(--text-2xl);
@@ -127,6 +134,26 @@
 /* Its own shadow would hide the global focus ring, where FR-3 sends focus after the last ×. */
 .start:focus-visible {
   box-shadow: var(--focus);
+}
+
+/* Continue-recording FR-6: the button and its facts wrap together under the controls on narrow windows. */
+.continue {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.facts {
+  min-width: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.folder {
+  font-family: var(--font-mono);
 }
 
 .messages:empty {
