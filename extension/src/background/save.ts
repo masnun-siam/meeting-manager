@@ -1,8 +1,10 @@
 // Saves a finished recording through chrome.downloads and hands it to the native host.
+import { folderOf, writeLastRecording } from '../shared/lastRecording';
 import type { Language, Notice } from '../shared/messages';
 import type { ContextPayload, ProcessRequest } from '../shared/native';
 import { sendNative } from '../shared/nativeClient';
 import { deleteRecordingFile } from '../shared/recordingFile';
+import type { StopReason } from '../shared/recordingState';
 
 const DISK_FULL = 'FILE_NO_SPACE';
 
@@ -12,6 +14,8 @@ export interface SaveOptions {
   language: Language;
   process: boolean;
   context?: ContextPayload;
+  /** Set to store the saved recording as `last_recording` (with FEATURE_CONTINUE_RECORDING). */
+  remember?: { recordedMs: number; stoppedAt: number; stopReason: StopReason | null };
 }
 
 export function recordingName(startedAt: number): string {
@@ -35,7 +39,7 @@ export async function takenNames(base: string): Promise<Set<string>> {
     filenameRegex: `Meetings/${base}(-\\d+)?/recording\\.webm$`,
     exists: true,
   });
-  return new Set(items.map((item) => item.filename.split(/[\\/]/).at(-2) ?? ''));
+  return new Set(items.map((item) => folderOf(item.filename)));
 }
 
 function errorNotice(error: string): Notice {
@@ -46,8 +50,10 @@ function errorNotice(error: string): Notice {
   return { kind: 'error', message };
 }
 
-/** Starts the download and resolves with the saved file's absolute path, or the interruption error. */
-function download(url: string, filename: string): Promise<{ path: string } | { error: string }> {
+type Downloaded = { path: string; id: number } | { error: string };
+
+/** Starts the download and resolves with the saved file's absolute path and download id, or the interruption error. */
+function download(url: string, filename: string): Promise<Downloaded> {
   return new Promise((resolve) => {
     let id: number | undefined;
     const onChanged = (delta: chrome.downloads.DownloadDelta) => {
@@ -55,13 +61,13 @@ function download(url: string, filename: string): Promise<{ path: string } | { e
       if (delta.state?.current === 'complete') {
         done(async () => {
           const [item] = await chrome.downloads.search({ id });
-          return item ? { path: item.filename } : { error: 'FILE_MISSING' };
+          return item ? { path: item.filename, id: delta.id } : { error: 'FILE_MISSING' };
         });
       } else if (delta.state?.current === 'interrupted') {
         done(async () => ({ error: delta.error?.current ?? 'UNKNOWN' }));
       }
     };
-    const done = (result: () => Promise<{ path: string } | { error: string }>) => {
+    const done = (result: () => Promise<Downloaded>) => {
       chrome.downloads.onChanged.removeListener(onChanged);
       result().then(resolve);
     };
@@ -82,8 +88,38 @@ function noticeFor(reply: Awaited<ReturnType<typeof sendNative<ProcessRequest>>>
   return { kind: 'error', message: reply.message };
 }
 
+/** Never fails the save: a write error is logged with a fixed text and nothing else. */
+async function remember(
+  saved: { path: string; id: number },
+  language: Language,
+  { recordedMs, stoppedAt, stopReason }: NonNullable<SaveOptions['remember']>,
+): Promise<void> {
+  try {
+    await writeLastRecording({
+      download_id: saved.id,
+      path: saved.path,
+      folder: folderOf(saved.path),
+      ext: 'webm',
+      recorded_ms: recordedMs,
+      language,
+      stopped_at: stoppedAt,
+      stop_reason: stopReason,
+      parts: 1,
+    });
+  } catch {
+    console.error('Could not store the last recording');
+  }
+}
+
 /** Never throws: every outcome is a notice, and the origin-private file is deleted only after a save succeeds. */
-export async function saveRecording({ startedAt, name, language, process, context }: SaveOptions): Promise<Notice> {
+export async function saveRecording({
+  startedAt,
+  name,
+  language,
+  process,
+  context,
+  remember: toRemember,
+}: SaveOptions): Promise<Notice> {
   const file = (await chrome.runtime.sendMessage({ type: 'offscreen_file_url', startedAt })) as
     | { url: string }
     | { error: string }
@@ -91,6 +127,7 @@ export async function saveRecording({ startedAt, name, language, process, contex
   if (!file || 'error' in file) return errorNotice(file?.error ?? 'no recording file');
   const saved = await download(file.url, `Meetings/${name}/recording.webm`);
   if ('error' in saved) return errorNotice(saved.error);
+  if (toRemember) await remember(saved, language, toRemember);
   // The file is saved; a failed cleanup must not stop processing. Recovery (#28) tolerates a leftover.
   await deleteRecordingFile(startedAt).catch(() => undefined);
   if (!process) return { kind: 'too_short' };

@@ -4,7 +4,10 @@ import { defineConfig } from 'vite';
 import manifest, { flagFromEnv } from './manifest.config.ts';
 
 export default defineConfig({
-  define: { __FEATURE_MEETING_CONTEXT__: JSON.stringify(flagFromEnv()) },
+  define: {
+    __FEATURE_MEETING_CONTEXT__: JSON.stringify(flagFromEnv()),
+    __FEATURE_CONTINUE_RECORDING__: JSON.stringify(flagFromEnv(process.env, 'FEATURE_CONTINUE_RECORDING')),
+  },
   plugins: [react(), crx({ manifest })],
   build: {
     rollupOptions: {
