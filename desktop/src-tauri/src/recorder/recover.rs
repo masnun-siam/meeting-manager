@@ -141,28 +141,43 @@ impl Recorder {
             spawn: self.inner.deps.spawn_continue,
             ..self.tools(ffmpeg.to_path_buf())
         };
+        let rate = u64::from(SAMPLE_RATE);
+        // The meeting's totals once `frames` more are converted up to part `n`.
+        let totals = |frames: u64, n: u32| {
+            earlier.as_ref().map_or((frames / rate, n), |last| {
+                (last.recorded_s + frames / rate, last.parts.max(n))
+            })
+        };
         let (mut frames, mut highest) = (0, None);
         for &n in parts {
             let wav = folder.join(handoff::part_wav(n));
-            match wav::repair(&wav) {
+            let failed = match wav::repair(&wav) {
                 Ok(0) => {
                     let _ = fs::remove_file(&wav);
+                    continue;
                 }
-                Ok(part) => {
-                    if let Err(notice) = handoff::convert_part(&tools, folder, n, "") {
-                        return Some(notice);
+                Ok(part) => match handoff::convert_part(&tools, folder, n, "") {
+                    Ok(()) => {
+                        frames += part;
+                        highest = Some(n);
+                        continue;
                     }
-                    frames += part;
-                    highest = Some(n);
-                }
+                    Err(notice) => notice,
+                },
                 Err(e) => {
                     tracing::warn!("recorder: a leftover part could not be repaired; it is kept");
-                    return Some(Notice::retry(format!("{e:#}"), folder));
+                    Notice::retry(format!("{e:#}"), folder)
                 }
+            };
+            // Parts converted before the failure count in the meeting's totals, so the retry
+            // that converts the rest hands off the whole meeting with its right length.
+            if let Some(converted) = highest {
+                let (recorded_s, parts) = totals(frames, converted);
+                self.remember_recovered(starts, folder, recorded_s, language, parts);
             }
+            return Some(failed);
         }
         let n = highest?;
-        let rate = u64::from(SAMPLE_RATE);
         let notice = match &earlier {
             Some(last) => {
                 let total = last.recorded_s * rate + frames;
@@ -173,9 +188,7 @@ impl Recorder {
             // worse than a too-short one).
             None => handoff::hand_off(&tools, folder, language, u64::MAX, ""),
         };
-        let (recorded_s, parts) = earlier.map_or((frames / rate, n), |last| {
-            (last.recorded_s + frames / rate, last.parts.max(n))
-        });
+        let (recorded_s, parts) = totals(frames, n);
         self.remember_recovered(starts, folder, recorded_s, language, parts);
         Some(notice)
     }
@@ -199,7 +212,7 @@ impl Recorder {
     }
 
     /// Settles each part link `.continuing-<meeting>-part-N.partial.wav` left directly under `dir`
-    /// (D17) before the folders are scanned, oldest first. A link of the running session is
+    /// (D17) before the folders are scanned, in name order. A link of the running session is
     /// left alone; other hidden files and names that do not parse are ignored.
     fn settle_links(&self, dir: &Path) {
         let Ok(entries) = fs::read_dir(dir) else {
@@ -1451,6 +1464,29 @@ mod tests {
                 .code,
             "not_found"
         );
+    }
+
+    #[test]
+    fn parts_converted_before_a_failure_count_in_the_retry() {
+        let rig = rig("recover-part-later-fails", ok_capture());
+        let folder = meeting_in(&rig, 20);
+        killed_wav(&folder.join(handoff::part_wav(2)), 3);
+        fs::write(folder.join(handoff::part_wav(3)), b"short").unwrap();
+        rig.recorder.recover_all();
+        assert!(folder.join(handoff::part_m4a(2)).is_file());
+        assert_eq!(bytes(&folder.join(handoff::part_wav(3))), b"short");
+        assert_eq!(rig.recorder.status().notice.unwrap().kind, Kind::Error);
+        assert!(continues_under(&folder).is_empty());
+        let last = stored(&rig);
+        assert_eq!((last.recorded_s, last.parts), (23, 2));
+
+        // A good part 3 now: the retry hands off the whole meeting, counted once.
+        fs::remove_file(folder.join(handoff::part_wav(3))).unwrap();
+        killed_wav(&folder.join(handoff::part_wav(3)), 4);
+        wait_retry(rig.recorder.retry(folder.to_str().unwrap()).unwrap());
+        assert_eq!(continues_under(&folder).len(), 1);
+        let last = stored(&rig);
+        assert_eq!((last.recorded_s, last.parts), (27, 3));
     }
 
     #[test]
