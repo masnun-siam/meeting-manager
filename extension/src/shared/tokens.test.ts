@@ -58,8 +58,9 @@ const PAIRS: [string, string, number][] = [
   ['chip-working-text', 'chip-working-fill', TEXT],
   ['chip-done-text', 'chip-done-fill', TEXT],
   ['chip-failed-text', 'chip-failed-fill', TEXT],
-  // Job card: text and buttons on the raised card.
+  // Job card: error text and the focus ring on the raised card.
   ['record-text', 'surface-raised', TEXT],
+  ['focus-ring', 'surface-raised', LARGE_OR_UI],
 ];
 
 function failingPairs(palette: Palette): string[] {
