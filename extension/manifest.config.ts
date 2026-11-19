@@ -1,7 +1,8 @@
 import { defineManifest } from '@crxjs/vite-plugin';
 import pkg from './package.json' with { type: 'json' };
 
-export const flagFromEnv = (env: NodeJS.ProcessEnv = process.env): boolean => env.FEATURE_MEETING_CONTEXT === '1';
+export const flagFromEnv = (env: NodeJS.ProcessEnv = process.env, name = 'FEATURE_MEETING_CONTEXT'): boolean =>
+  env[name] === '1';
 
 export function buildManifest(contextEnabled: boolean) {
   return {
