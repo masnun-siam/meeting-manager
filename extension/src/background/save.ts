@@ -144,9 +144,8 @@ export async function saveRecording(options: SaveOptions): Promise<Notice> {
   })) as FileUrl;
   if (!file || 'error' in file) return errorNotice(file?.error ?? 'no recording file');
   if (!options.continuing) return (await saveMeeting(file.url, options)).notice;
-  const moved = await savePart(file.url, options, options.continuing);
-  if (moved === null) return savePartFallback(file.url, options, options.continuing);
-  return moved;
+  const partNotice = await savePart(file.url, options, options.continuing);
+  return partNotice ?? savePartFallback(file.url, options, options.continuing);
 }
 
 /** Saves a new meeting folder holding `recording.webm`; `saved` is false when the download failed. */
