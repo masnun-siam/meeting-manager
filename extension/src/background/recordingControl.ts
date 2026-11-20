@@ -7,6 +7,7 @@ import { contextForHandoff, identityFromTab, trimToLimit, utcOffsetMin } from '.
 import {
   type ContentEvent,
   type ContextHelloReply,
+  type DismissTarget,
   MEETING_CONTEXT_KEY,
   type MeetingContextState,
   type Notice,
@@ -261,6 +262,23 @@ async function offscreenError(message: string): Promise<void> {
   await writeStatus({ ...status, notice: { kind: 'error', message } });
 }
 
+/** Clears one Record tab message in the status, with no state or badge change. Anything else is ignored. */
+async function dismiss(what: DismissTarget): Promise<void> {
+  const status = await readStatus();
+  switch (what) {
+    case 'notice':
+      await writeStatus({ ...status, notice: null });
+      return;
+    case 'stop':
+      // The reason only shows when idle.
+      if (status.state.phase === 'idle') await writeStatus({ ...status, state: { phase: 'idle', lastStop: null } });
+      return;
+    case 'mic':
+      await writeStatus({ ...status, micWarningDismissed: true });
+      return;
+  }
+}
+
 export function handlePopupCommand(command: PopupCommand): Promise<void> {
   return serial(async () => {
     switch (command.type) {
@@ -271,6 +289,8 @@ export function handlePopupCommand(command: PopupCommand): Promise<void> {
         return pauseOrResume(command.type);
       case 'stop':
         return requestStop(await readStatus(), 'user');
+      case 'dismiss':
+        return dismiss(command.what);
     }
   });
 }

@@ -54,7 +54,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/shared/fonts/` | Bundled woff2 fonts and their OFL licences | |
 | `src/content/meet.ts` | Meet content script (flag-on build only): 1 s reads, 10 s batches, 60 s give-up, `context_hello` resume | `chrome.runtime.onMessage` listener |
 | `src/content/meetReader.ts` | Pure Meet page reads | `readRoster`, `readTitle`, `readSpeaking`, `diffSpeaking` |
-| `src/shared/messages.ts` | All cross-context types | `ContentCommand`, `ContentEvent`, `PopupCommand`, `OffscreenCommand`, `OffscreenEvent`, `RecorderStatus`, `Notice`, `RECORDER_STATUS_KEY` |
+| `src/shared/messages.ts` | All cross-context types | `ContentCommand`, `ContentEvent`, `PopupCommand`, `OffscreenCommand`, `OffscreenEvent`, `RecorderStatus`, `Notice`, `DismissTarget`, `RECORDER_STATUS_KEY` |
 | `src/shared/recordingState.ts` | Pure lifecycle | `transition`, `elapsedMs`, `remainingMs`, `RECORDING_CAP_MS` |
 | `src/shared/recordingFile.ts` | OPFS file per recording | `appendChunk`, `getRecordingFile`, `deleteRecordingFile`, `RECORDINGS_DIR` |
 | `src/shared/micPermission.ts` | Mic permission helpers | `micPermissionState`, `openMicPermissionPage`, `MIC_PERMISSION_PAGE` |
@@ -79,7 +79,7 @@ flowchart LR
 
 | Direction | Type | `type` values |
 |---|---|---|
-| Popup -> SW | `PopupCommand` | `start`, `pause`, `resume`, `stop` |
+| Popup -> SW | `PopupCommand` | `start`, `pause`, `resume`, `stop`, `dismiss {what: 'notice' \| 'stop' \| 'mic'}` |
 | SW -> offscreen | `OffscreenCommand` | `offscreen_start`, `offscreen_pause`, `offscreen_resume`, `offscreen_stop`, `offscreen_file_url` |
 | Offscreen -> SW | `OffscreenEvent` | `offscreen_started`, `offscreen_stopped`, `offscreen_error` |
 | SW -> Meet content script (`tabs.sendMessage`) | `ContentCommand` | `context_start` (after the Start commit, Meet tabs only; answered `{ ok: true }`), `context_stop` (at Stop, before the download; answered with the final batch) |
@@ -95,7 +95,7 @@ flowchart LR
 
 | Store | Key | Holds | Written by |
 |---|---|---|---|
-| `chrome.storage.session` | `RECORDER_STATUS_KEY` (`'recorder'`) | `RecorderStatus` (state, language, micIncluded, notice, tabId) | SW only |
+| `chrome.storage.session` | `RECORDER_STATUS_KEY` (`'recorder'`) | `RecorderStatus` (state, language, micIncluded, micWarningDismissed?, notice, tabId) | SW only |
 | `chrome.storage.session` | `MEETING_CONTEXT_KEY` (`'meeting_context'`), flag on only | `MeetingContextState`: tab identity, recording segments, title, participants, speaking intervals (recording-clock ms), `truncated`, FR-5 `capture` and `reloadHint`; written at Start, merged per batch, sent with `process`, cleared after hand-off | SW only |
 | `chrome.storage.local` | `language` | Last chosen `'bn'` or `'en'` | `RecordTab`; read by `recover.ts` |
 | `chrome.storage.local` | `LAST_RECORDING_KEY` (`'last_recording'`), `FEATURE_CONTINUE_RECORDING` only | `LastRecording`: `download_id`, `path`, `folder`, `ext`, `recorded_ms`, `language`, `stopped_at`, `stop_reason` (`null` when recovered), `parts`; survives a browser restart | Written by `save.ts` after a completed download (stops and recovery); removed by Start |

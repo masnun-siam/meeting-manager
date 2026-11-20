@@ -68,6 +68,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function readCss(): string {
+  return readFileSync(join(import.meta.dirname, 'RecordTab.module.css'), 'utf8');
+}
+const css = readCss;
+
 function setup() {
   const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
   render(<RecordTab />);
@@ -250,6 +255,220 @@ describe('RecordTab', () => {
     expect(await screen.findByText('Could not reach the recorder: Receiving end does not exist.')).toBeInTheDocument();
   });
 
+  describe('dismissing messages', () => {
+    const SAVED = 'Saved, sent for processing';
+    const TAB_CLOSED = 'Stopped because the recorded tab was closed.';
+    const MIC = 'Microphone not included: recording tab audio only.';
+    const UNREACHABLE = 'Could not reach the recorder: Receiving end does not exist.';
+    const stoppedByTab = (extra: Partial<RecorderStatus> = {}) =>
+      status({ phase: 'idle', lastStop: 'tab_closed' }, { notice: { kind: 'saved' }, ...extra });
+    const dismissButtons = () => screen.queryAllByRole('button', { name: 'Dismiss message' });
+
+    /** What the service worker does after a `dismiss`: writes the status, which fires `onChanged`. */
+    function write(next: RecorderStatus) {
+      stored = next;
+      act(() => listener({ recorder: { newValue: next } }));
+    }
+
+    function failOnce() {
+      sendMessage.mockRejectedValueOnce(new Error('Receiving end does not exist.'));
+    }
+
+    it('puts a 24 px × named "Dismiss message" on each line', async () => {
+      stored = stoppedByTab();
+      failOnce();
+      const user = setup();
+
+      await user.click(await screen.findByRole('button', { name: 'Start recording' }));
+      await screen.findByText(UNREACHABLE);
+
+      const buttons = dismissButtons();
+      expect(buttons).toHaveLength(3);
+      for (const button of buttons) {
+        expect(button).toHaveAttribute('type', 'button');
+        expect(button.className).toBe(buttons[0].className);
+      }
+      expect(css()).toMatch(/\.dismiss\s*\{[^}]*width: 24px;[^}]*height: 24px;/);
+    });
+
+    it('puts a × on the mic warning', async () => {
+      stored = recording({ micIncluded: false });
+      setup();
+
+      await screen.findByText(MIC);
+      expect(dismissButtons()).toHaveLength(1);
+    });
+
+    it.each<[string, RecorderStatus, string, 'notice' | 'stop' | 'mic']>([
+      ['the notice', status(initialRecordingState, { notice: { kind: 'saved' } }), SAVED, 'notice'],
+      ['the stop reason', status({ phase: 'idle', lastStop: 'tab_closed' }), TAB_CLOSED, 'stop'],
+      ['the mic warning', recording({ micIncluded: false }), MIC, 'mic'],
+    ])('sends dismiss for %s', async (_, value, text, what) => {
+      stored = value;
+      const user = setup();
+
+      await screen.findByText(text);
+      await user.click(screen.getByRole('button', { name: 'Dismiss message' }));
+
+      expect(sendMessage).toHaveBeenCalledWith({ type: 'dismiss', what });
+      expect(screen.getByText(text)).toBeInTheDocument(); // until the status changes
+    });
+
+    it('drops closed lines when the status changes and does not show them on reopening', async () => {
+      stored = stoppedByTab();
+      const user = setup();
+
+      await screen.findByText(SAVED);
+      await user.click(dismissButtons()[0]);
+      write(stoppedByTab({ notice: null }));
+      await waitFor(() => expect(screen.queryByText(SAVED)).not.toBeInTheDocument());
+      await user.click(dismissButtons()[0]);
+      write(status(initialRecordingState));
+      await waitFor(() => expect(screen.getByRole('status')).toBeEmptyDOMElement());
+
+      cleanup();
+      setup();
+      await screen.findByRole('button', { name: 'Start recording' });
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    });
+
+    it('does not show a dismissed mic warning', async () => {
+      stored = recording({ micIncluded: false, micWarningDismissed: true });
+      setup();
+
+      await screen.findByRole('timer');
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    });
+
+    it('hides a send error without sending anything, and shows the next one', async () => {
+      failOnce();
+      const user = setup();
+      const start = await screen.findByRole('button', { name: 'Start recording' });
+
+      await user.click(start);
+      await user.click(await screen.findByRole('button', { name: 'Dismiss message' }));
+
+      expect(screen.queryByText(UNREACHABLE)).not.toBeInTheDocument();
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+
+      failOnce();
+      await user.click(start);
+      expect(await screen.findByText(UNREACHABLE)).toBeInTheDocument();
+    });
+
+    it('keeps a send error while another line is dismissed', async () => {
+      stored = status(initialRecordingState, { notice: { kind: 'saved' } });
+      failOnce();
+      const user = setup();
+
+      await user.click(await screen.findByRole('button', { name: 'Start recording' }));
+      await screen.findByText(UNREACHABLE);
+      await user.click(dismissButtons()[1]);
+
+      expect(sendMessage).toHaveBeenLastCalledWith({ type: 'dismiss', what: 'notice' });
+      expect(screen.getByText(UNREACHABLE)).toBeInTheDocument();
+    });
+
+    it('shows the reach error and keeps the line when the dismiss cannot be sent', async () => {
+      stored = status(initialRecordingState, { notice: { kind: 'saved' } });
+      failOnce();
+      const user = setup();
+
+      await screen.findByText(SAVED);
+      await user.click(screen.getByRole('button', { name: 'Dismiss message' }));
+
+      expect(await screen.findByText(UNREACHABLE)).toBeInTheDocument();
+      expect(screen.getByText(SAVED)).toBeInTheDocument();
+      expect(dismissButtons()).toHaveLength(2);
+    });
+
+    it('moves focus to the next ×, then to Start recording', async () => {
+      stored = stoppedByTab();
+      const user = setup();
+
+      await screen.findByText(SAVED);
+      await user.click(dismissButtons()[0]);
+      write(stoppedByTab({ notice: null }));
+      await waitFor(() => expect(dismissButtons()).toHaveLength(1));
+      expect(dismissButtons()[0]).toHaveFocus();
+
+      await user.click(dismissButtons()[0]);
+      write(status(initialRecordingState));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Start recording' })).toHaveFocus());
+    });
+
+    it('moves focus to the last × when the last of several lines closes', async () => {
+      stored = stoppedByTab();
+      const user = setup();
+
+      await screen.findByText(TAB_CLOSED);
+      await user.click(dismissButtons()[1]);
+      write(stoppedByTab({ state: { phase: 'idle', lastStop: null } }));
+
+      await waitFor(() => expect(dismissButtons()).toHaveLength(1));
+      expect(dismissButtons()[0]).toHaveFocus();
+    });
+
+    it('does not pull focus back when another line goes later', async () => {
+      stored = stoppedByTab();
+      const user = setup();
+
+      await screen.findByText(SAVED);
+      await user.click(dismissButtons()[0]); // the service worker changes nothing
+      const start = screen.getByRole('button', { name: 'Start recording' });
+      start.focus();
+      write(stoppedByTab({ state: { phase: 'idle', lastStop: null } }));
+
+      await waitFor(() => expect(screen.queryByText(TAB_CLOSED)).not.toBeInTheDocument());
+      expect(start).toHaveFocus();
+    });
+
+    it('moves focus to Pause while recording', async () => {
+      stored = recording({ micIncluded: false });
+      const user = setup();
+
+      await user.click(await screen.findByRole('button', { name: 'Dismiss message' }));
+      write(recording({ micIncluded: false, micWarningDismissed: true }));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Pause' })).toHaveFocus());
+    });
+
+    it('moves focus to the Record tab while saving', async () => {
+      const saving = (extra: Partial<RecorderStatus> = {}) =>
+        status({ phase: 'saving', startedAt: T0 - 60_000, recordedMs: 60_000, reason: 'user' }, extra);
+      stored = saving({ notice: { kind: 'error', message: 'Disk full' } });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(
+        <>
+          <button type="button" id="tab-record">
+            Record
+          </button>
+          <RecordTab />
+        </>,
+      );
+
+      await user.click(await screen.findByRole('button', { name: 'Dismiss message' }));
+      write(saving());
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Record' })).toHaveFocus());
+    });
+
+    it.each(['{Enter}', ' '])('closes with the keyboard: %s', async (key) => {
+      stored = status(initialRecordingState, { notice: { kind: 'saved' } });
+      const user = setup();
+
+      await screen.findByText(SAVED);
+      await user.tab();
+      expect(screen.getByRole('button', { name: 'Start recording' })).toHaveFocus();
+      await user.tab(); // the language choices, one stop
+      await user.tab();
+      expect(screen.getByRole('button', { name: 'Dismiss message' })).toHaveFocus();
+      await user.keyboard(key);
+
+      expect(sendMessage).toHaveBeenCalledWith({ type: 'dismiss', what: 'notice' });
+    });
+  });
+
   describe('context line', () => {
     const paused = () => status({ phase: 'paused', startedAt: T0 - 300_000, recordedMs: 61_000 });
 
@@ -403,6 +622,15 @@ describe('RecordTab', () => {
       );
     });
 
+    it('has no × on the context line', async () => {
+      stored = recording();
+      storedContext = context({ capture: 'captured', participants: people(2) });
+      setup();
+
+      await waitFor(() => expect(visibleLine()).toBe('Meet - abc-defg-hij · 2 seen'));
+      expect(screen.queryByRole('button', { name: 'Dismiss message' })).not.toBeInTheDocument();
+    });
+
     it('keeps the line while paused', async () => {
       stored = paused();
       storedContext = context({ capture: 'captured', participants: people(2) });
@@ -472,7 +700,7 @@ describe('formatElapsed', () => {
 });
 
 describe('RecordTab.module.css', () => {
-  const css = readFileSync(join(import.meta.dirname, 'RecordTab.module.css'), 'utf8');
+  const css = readCss();
 
   it('stops the REC pulse under reduced motion', () => {
     expect(css).toMatch(/\.rec::before\s*\{[^}]*animation: pulse/);

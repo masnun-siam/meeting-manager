@@ -166,6 +166,39 @@
   color: var(--text-muted);
 }
 
+.line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.line p {
+  flex: 1;
+  padding: 4px 0;
+}
+
+.dismiss {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dismiss:hover {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
 .info {
   color: var(--text-muted);
 }
