@@ -145,9 +145,11 @@ flowchart TD
 1. List `recordings/<digits>.webm`. Skip the file of a recording in progress (`status.state.startedAt`).
 2. Delete empty files.
 3. Create an offscreen document with reason `BLOBS`.
-4. For each file: name `<recordingName>-recovered` (`recoveredName`, plus `nextFreeName`), then `saveRecording` with `process: true` and the last language from `storage.local` (`bn` if unset).
+4. Flag on: drop every `continuing_parts` entry with no file left (a deleted empty file, or a Continue whose `offscreen_start` failed), except the current recording's.
+5. For each file: name `<recordingName>-recovered` (`recoveredName`, plus `nextFreeName`), then `saveRecording` with `process: true` and the last language from `storage.local` (`bn` if unset).
    Flag on, a saved leftover becomes `last_recording` with `stopped_at` = the recovery time, `stop_reason: null` and `recorded_ms` estimated as the file's last write minus its start (paused time included), capped at 3 h (`estimatedRecordedMs`).
-5. Show each result as a `Notice` in the status. Close the offscreen document only if the status is still `idle`.
+   **Continued part** (FR-12, flag on): when the file has a `continuing_parts` entry and Chrome's download history still has an existing `Meetings/<folder>/recording.webm` (`findMeeting`, folder escaped in the regex), `saveRecording` also gets `continuing` with that Chrome-reported path and download id, the entry's `part` and `language`, and `partMs` = the estimate. It saves `recording-part-N.webm` into the folder and sends `process_part` (see [Continue](#continue)); `recorded_ms` is the earlier total (`last_recording.recorded_ms` when `last_recording` is that folder, else 0) plus the estimate, capped at 3 h. Folder not found: recovered as a new `-recovered` meeting as above, and the save drops the entry. A failed download keeps the file and the entry for the next start.
+6. Show each result as a `Notice` in the status. Close the offscreen document only if the status is still `idle`.
 
 ## Errors and notices
 

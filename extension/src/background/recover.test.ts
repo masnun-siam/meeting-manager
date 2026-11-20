@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONTINUING_PARTS_KEY } from '../shared/continuingParts';
+import { LAST_RECORDING_KEY } from '../shared/lastRecording';
 import { RECORDER_STATUS_KEY, type RecorderStatus } from '../shared/messages';
 import { RECORDING_CAP_MS } from '../shared/recordingState';
 import { estimatedRecordedMs, recoveredName, recoverLeftovers } from './recover';
 import { saveRecording } from './save';
+
+const flag = vi.hoisted(() => ({ continueOn: false }));
+vi.mock('../shared/flags', () => ({ continueRecordingEnabled: () => flag.continueOn }));
 
 vi.mock('./save', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./save')>()),
@@ -15,6 +20,10 @@ let local: Record<string, unknown>;
 let files: Map<string, number>;
 let modified: Map<string, number>;
 let hasDocument: boolean;
+let meetings: { id: number; filename: string }[];
+const search = vi.fn();
+const localGet = vi.fn();
+const sessionSet = vi.fn();
 const createDocument = vi.fn();
 const closeDocument = vi.fn();
 
@@ -22,8 +31,20 @@ const status = () => stored[RECORDER_STATUS_KEY] as RecorderStatus;
 const savedStarts = () => vi.mocked(saveRecording).mock.calls.map(([options]) => options.startedAt);
 
 beforeEach(() => {
+  flag.continueOn = false;
   stored = {};
   local = {};
+  meetings = [];
+  // Chrome matches the regex against each item's absolute filename.
+  search
+    .mockReset()
+    .mockImplementation(async ({ filenameRegex }: { filenameRegex: string }) =>
+      meetings.filter((item) => new RegExp(filenameRegex).test(item.filename)),
+    );
+  sessionSet.mockReset().mockImplementation(async (items: Record<string, unknown>) => {
+    Object.assign(stored, items);
+  });
+  localGet.mockReset().mockImplementation(async (key: string) => ({ [key]: local[key] }));
   hasDocument = false;
   files = new Map();
   modified = new Map();
@@ -48,10 +69,14 @@ beforeEach(() => {
     storage: {
       session: {
         get: async (key: string) => ({ [key]: stored[key] }),
-        set: async (items: Record<string, unknown>) => void Object.assign(stored, items),
+        set: sessionSet,
       },
-      local: { get: async (key: string) => ({ [key]: local[key] }) },
+      local: {
+        get: localGet,
+        set: async (items: Record<string, unknown>) => void Object.assign(local, items),
+      },
     },
+    downloads: { search },
     offscreen: {
       hasDocument: async () => hasDocument,
       createDocument,
@@ -146,4 +171,137 @@ describe('recoverLeftovers', () => {
     expect(saveRecording).not.toHaveBeenCalled();
     expect(createDocument).not.toHaveBeenCalled();
   });
+});
+
+describe('recoverLeftovers of a continued part', () => {
+  const FOLDER = 'meeting-2026-01-01_0959';
+  const RECORDING = `/Users/me/Downloads/Meetings/${FOLDER}/recording.webm`;
+  const entry = { folder: FOLDER, part: 2, language: 'en' as const };
+  const NOW = new Date('2026-11-20T10:00:00Z').getTime();
+  const options = (call = 0) => vi.mocked(saveRecording).mock.calls[call][0];
+
+  beforeEach(() => {
+    flag.continueOn = true;
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    local.language = 'bn';
+    local[CONTINUING_PARTS_KEY] = { 1000: entry };
+    files.set('1000.webm', 5);
+    modified.set('1000.webm', 1000 + 20_000);
+  });
+
+  it('saves the leftover as the next part of its meeting, in the part language, from the Chrome-reported file', async () => {
+    meetings = [{ id: 7, filename: RECORDING }];
+    local[LAST_RECORDING_KEY] = validLast();
+    await recoverLeftovers();
+
+    expect(saveRecording).toHaveBeenCalledTimes(1);
+    expect(options()).toEqual({
+      startedAt: 1000,
+      name: recoveredName(1000),
+      language: 'en',
+      process: true,
+      remember: { recordedMs: 80_000, stoppedAt: NOW, stopReason: null },
+      continuing: { folder: FOLDER, part: 2, partMs: 20_000, recording: { path: RECORDING, downloadId: 7 } },
+    });
+    expect(search).toHaveBeenCalledWith({ filenameRegex: `/Meetings/${FOLDER}/recording\\.webm$`, exists: true });
+  });
+
+  it('counts from zero when last_recording is another meeting, and never above the cap', async () => {
+    meetings = [{ id: 7, filename: RECORDING }];
+    local[LAST_RECORDING_KEY] = { ...validLast(), folder: 'other', recorded_ms: RECORDING_CAP_MS };
+    await recoverLeftovers();
+    expect(options().remember?.recordedMs).toBe(20_000);
+
+    vi.mocked(saveRecording).mockClear();
+    files.set('1000.webm', 5);
+    local[LAST_RECORDING_KEY] = { ...validLast(), recorded_ms: RECORDING_CAP_MS - 5_000 };
+    await recoverLeftovers();
+    expect(options().remember?.recordedMs).toBe(RECORDING_CAP_MS);
+  });
+
+  it('treats a folder name as text, not a pattern', async () => {
+    local[CONTINUING_PARTS_KEY] = { 1000: { ...entry, folder: 'meeting.(x)' } };
+    meetings = [{ id: 7, filename: '/d/Meetings/meetingA(x)/recording.webm' }];
+    await recoverLeftovers();
+    expect(options().continuing).toBeUndefined();
+  });
+
+  it('recovers as today when the folder is gone; the save then drops the entry', async () => {
+    meetings = [{ id: 8, filename: '/d/Meetings/meeting-2026-01-01_0959-2/recording.webm' }];
+    await recoverLeftovers();
+
+    expect(options()).toEqual(expect.objectContaining({ name: recoveredName(1000), language: 'bn', process: true }));
+    expect(options().continuing).toBeUndefined();
+  });
+
+  it('handles a part and a plain leftover in order, one notice each', async () => {
+    meetings = [{ id: 7, filename: RECORDING }];
+    files.set('2000.webm', 5);
+    vi.mocked(saveRecording)
+      .mockResolvedValueOnce({ kind: 'error', message: 'first' })
+      .mockResolvedValueOnce({ kind: 'too_short' });
+    await recoverLeftovers();
+
+    const notices = sessionSet.mock.calls.map(([items]) => (items[RECORDER_STATUS_KEY] as RecorderStatus).notice);
+    expect(savedStarts()).toEqual([1000, 2000]);
+    expect(options(0).continuing?.part).toBe(2);
+    expect(options(1).continuing).toBeUndefined();
+    expect(options(1).language).toBe('bn');
+    expect(notices).toEqual([{ kind: 'error', message: 'first' }, { kind: 'too_short' }]);
+  });
+
+  it('drops the entry of a deleted empty file and of a part with no file, but keeps the current recording', async () => {
+    files.set('1000.webm', 0);
+    files.set('3000.webm', 5);
+    local[CONTINUING_PARTS_KEY] = { 1000: entry, 2000: entry, 3000: entry, 4000: entry };
+    stored[RECORDER_STATUS_KEY] = {
+      state: { phase: 'recording', startedAt: 4000, recordedMs: 0, resumedAt: 4000 },
+      language: 'bn',
+      micIncluded: true,
+      notice: null,
+      tabId: 1,
+      continuing: { folder: FOLDER, part: 2, base_ms: 0 },
+    };
+    files.set('4000.webm', 5);
+    await recoverLeftovers();
+
+    expect(local[CONTINUING_PARTS_KEY]).toEqual({ 3000: entry, 4000: entry });
+    expect(savedStarts()).toEqual([3000]);
+  });
+
+  it('keeps the file and the entry when the save fails, for the next start', async () => {
+    meetings = [{ id: 7, filename: RECORDING }];
+    vi.mocked(saveRecording).mockResolvedValueOnce({ kind: 'error', message: 'Could not save' });
+    await recoverLeftovers();
+
+    expect(files.has('1000.webm')).toBe(true);
+    expect(local[CONTINUING_PARTS_KEY]).toEqual({ 1000: entry });
+  });
+
+  it('with the flag off reads no entry and recovers as today', async () => {
+    flag.continueOn = false;
+    meetings = [{ id: 7, filename: RECORDING }];
+    await recoverLeftovers();
+
+    expect(localGet.mock.calls.map(([key]) => key)).toEqual(['language']);
+    expect(search).not.toHaveBeenCalled();
+    expect(options()).toEqual(expect.objectContaining({ name: recoveredName(1000), language: 'bn' }));
+    expect(options().continuing).toBeUndefined();
+    expect(local[CONTINUING_PARTS_KEY]).toEqual({ 1000: entry });
+  });
+
+  function validLast() {
+    return {
+      download_id: 7,
+      path: RECORDING,
+      folder: FOLDER,
+      ext: 'webm',
+      recorded_ms: 60_000,
+      language: 'en',
+      stopped_at: 0,
+      stop_reason: 'user',
+      parts: 1,
+    };
+  }
 });
