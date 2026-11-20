@@ -8,7 +8,10 @@ import type {
   RecorderStatus,
 } from '../shared/messages';
 import { elapsedMs, initialRecordingState, type StopReason } from '../shared/recordingState';
+import { ContinueCard } from './ContinueCard';
+import { formatElapsed } from './formatElapsed';
 import styles from './RecordTab.module.css';
+import { useContinuable } from './useContinuable';
 import { useMeetingContext } from './useMeetingContext';
 import { useRecorderStatus } from './useRecorderStatus';
 
@@ -33,16 +36,6 @@ const CONTEXT_OTHER = 'names are captured on Google Meet only';
 
 function isLanguage(value: unknown): value is Language {
   return LANGUAGES.some((option) => option.value === value);
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, '0');
-}
-
-/** `H:MM:SS`, e.g. `0:04:01`. */
-export function formatElapsed(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  return `${Math.floor(total / 3600)}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
 }
 
 function noticeText(notice: Notice): string {
@@ -159,6 +152,7 @@ function Message({ text, tone, onDismiss, dismissRef }: MessageProps) {
 export function RecordTab() {
   const status = useRecorderStatus();
   const context = useMeetingContext();
+  const continuable = useContinuable(status);
   const [language, setLanguage] = useStoredLanguage();
   const [sendError, setSendError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -231,9 +225,14 @@ export function RecordTab() {
       <div className={styles.stage}>
         {running ? (
           <>
-            <p className={phase === 'recording' ? styles.rec : styles.paused}>
-              {phase === 'recording' ? 'REC' : 'Paused'}
-            </p>
+            <div className={styles.state}>
+              <p className={phase === 'recording' ? styles.rec : styles.paused}>
+                {phase === 'recording' ? 'REC' : 'Paused'}
+              </p>
+              {status?.continuing ? (
+                <p className={styles.continuing}>Continuing · part {status.continuing.part}</p>
+              ) : null}
+            </div>
             <p role="timer" aria-label="Recorded time" className={styles.timer}>
               {formatElapsed(elapsedMs(state, now))}
             </p>
@@ -298,6 +297,10 @@ export function RecordTab() {
           ))}
         </div>
       </div>
+
+      {continuable ? (
+        <ContinueCard last={continuable.last} now={continuable.now} onContinue={() => send({ type: 'continue' })} />
+      ) : null}
 
       <div role="status" className={styles.messages}>
         {line ? (

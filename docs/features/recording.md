@@ -1,6 +1,6 @@
 # Recording a meeting
 
-Covers: extension/src/popup/RecordTab.tsx, extension/src/popup/useRecorderStatus.ts, extension/src/popup/Popup.tsx, extension/src/popup/main.tsx, extension/src/popup/index.html, extension/src/background/, extension/src/offscreen/, extension/src/permission/, extension/src/shared/messages.ts, extension/src/shared/recordingState.ts, extension/src/shared/recordingFile.ts, extension/src/shared/micPermission.ts
+Covers: extension/src/popup/RecordTab.tsx, extension/src/popup/ContinueCard.tsx, extension/src/popup/useContinuable.ts, extension/src/popup/formatElapsed.ts, extension/src/popup/useRecorderStatus.ts, extension/src/popup/Popup.tsx, extension/src/popup/main.tsx, extension/src/popup/index.html, extension/src/background/, extension/src/offscreen/, extension/src/permission/, extension/src/shared/messages.ts, extension/src/shared/recordingState.ts, extension/src/shared/recordingFile.ts, extension/src/shared/micPermission.ts
 
 The user presses Start in the popup. The extension records the active tab and the mic, saves a `recording.webm` to `Downloads/Meetings/<name>/`, and asks the `meeting` tool to process it. Component overview: [extension.md](../extension.md). What happens after the hand-off: [processing.md](processing.md). Native call details: [native-messaging.md](native-messaging.md).
 
@@ -8,7 +8,9 @@ The user presses Start in the popup. The extension records the active tab and th
 
 | Part | File | Responsibility |
 |---|---|---|
-| Record tab | `popup/RecordTab.tsx` | Large `H:MM:SS` timer (dimmed `0:00:00` when idle), round "Start recording" button, then REC (pulsing dot, static under Reduce motion) or Paused label with Pause / Resume and Stop & save, the "বাংলা \| English" radio group (disabled unless idle), "Saving…", messages, context line (flag on). Sends `PopupCommand`. |
+| Record tab | `popup/RecordTab.tsx` | Large `H:MM:SS` timer (dimmed `0:00:00` when idle), round "Start recording" button, then REC (pulsing dot, static under Reduce motion) or Paused label (with "Continuing · part N" beside it while `status.continuing` is set) with Pause / Resume and Stop & save, the "বাংলা \| English" radio group (disabled unless idle, showing `status.language` then), the Continue card (idle, flag on), "Saving…", messages, context line (flag on). Sends `PopupCommand`. Times use `formatElapsed` (`popup/formatElapsed.ts`). |
+| Continue card | `popup/ContinueCard.tsx` | "Continue last recording", the folder, its recorded `H:MM:SS`, "stopped N min ago" plus "· tab closed" or "· capture ended" (none for `user` or a recovered `null`), and a Continue button that sends `{type: 'continue'}` (stored language untouched). |
+| Continuable hook | `popup/useContinuable.ts` | Flag on only (otherwise no storage or downloads call): reads `last_recording` once and again on each `storage.local` change of that key, runs `lastRecordingExists` when it changes and on every status write while idle (so a failed Continue's notice hides the card), and applies `canContinue` with a clock refreshed every 30 s. |
 | Status hook | `popup/useRecorderStatus.ts` | Live `RecorderStatus` from `chrome.storage.session`. |
 | Context hook | `popup/useMeetingContext.ts` | Live `meeting_context` from `chrome.storage.session`, flag on only. |
 | Control | `background/recordingControl.ts` | Owns state, badge, offscreen lifecycle, stop and save orchestration. |
@@ -72,7 +74,7 @@ Rules:
 
 ## Continue (next part)
 
-`FEATURE_CONTINUE_RECORDING=1` only; FR-5, FR-8, FR-9 in [continue-recording.md](../prds/continue-recording.md). The popup card that sends it is #276.
+`FEATURE_CONTINUE_RECORDING=1` only; FR-5, FR-8, FR-9 in [continue-recording.md](../prds/continue-recording.md). The popup sends it from the Continue card (`popup/ContinueCard.tsx`, see Who does what).
 
 - Popup sends `continue` (no fields). `continueRecording` (inside `serial()`) returns at once with the flag off (no storage access) or when not idle, then reads `last_recording` and re-runs `canContinue` with `lastRecordingExists`. A failed check records nothing and writes the error notice `Nothing to continue: the last recording stopped more than 2 hours ago, or was moved.` (`NOTHING_TO_CONTINUE`).
 - Otherwise it runs Start's body (`begin`): mic permission flow, active tab of the last focused window, `getMediaStreamId`, `ensureOffscreen`, badge `REC`. Differences: the language is `last.language`; the state starts at `recordedMs = last.recorded_ms` (the `start` event's `baseMs`), so the popup timer, the 3 h cap and the 10 s rule count the meeting total; the status carries `continuing: {folder, part: last.parts + 1, base_ms}`; `continuing_parts[startedAt] = {folder, part, language}` (`shared/continuingParts.ts`, `chrome.storage.local`) is written before `offscreen_start`, which carries `baseMs`; `last_recording` is kept; no meeting context is stored, `context_start` is not sent and `context_hello` answers `recording: false`.

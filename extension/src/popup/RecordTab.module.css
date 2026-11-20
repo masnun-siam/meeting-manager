@@ -29,6 +29,18 @@
   color: var(--text-dim);
 }
 
+.state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.continuing {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .rec,
 .paused {
   display: flex;
