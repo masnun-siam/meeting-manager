@@ -72,6 +72,7 @@ jobs:
       - run: cargo build --release -p meeting
         env:
           FEATURE_DESKTOP_APP: "1"
+          FEATURE_CONTINUE_RECORDING: "1"
       # The Tauri CLI's own APPLE_CERTIFICATE import only accepts trusted identities and
       # refuses a self-signed one; codesign signs with it untrusted. So the identity goes
       # into a keychain of this job's own, and Tauri gets only its name.
@@ -104,6 +105,7 @@ jobs:
         working-directory: desktop
         env:
           FEATURE_DESKTOP_APP: "1"
+          FEATURE_CONTINUE_RECORDING: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Overrides the ad-hoc `signingIdentity` that local builds use.
