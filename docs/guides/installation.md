@@ -22,10 +22,10 @@ Set up Meeting Manager on macOS with Google Chrome. For the shortest path to a f
 ```sh
 git clone https://github.com/masnun-siam/meeting-manager.git
 cd meeting-manager
-cargo install --path crates/meeting
+FEATURE_CONTINUE_RECORDING=1 cargo install --path crates/meeting
 ```
 
-This puts `meeting` in `~/.cargo/bin` (make sure that is on your `PATH`). Install it there rather than running it from `target/`: Chrome's native-host manifest points at the binary that ran `meeting install`.
+`FEATURE_CONTINUE_RECORDING=1` lets the tool join the parts of a continued recording into one meeting; without it a continued part is left alone and the extension's Continue gets `bad_request`. Build the tool and the extension (section 4) with the same flag. This puts `meeting` in `~/.cargo/bin` (make sure that is on your `PATH`). Install it there rather than running it from `target/`: Chrome's native-host manifest points at the binary that ran `meeting install`.
 
 ## 3. Configure it
 
@@ -48,8 +48,10 @@ Recordings are read from `~/Downloads/Meetings`. If Chrome saves downloads somew
 ```sh
 cd extension
 npm ci
-npm run build
+FEATURE_CONTINUE_RECORDING=1 npm run build
 ```
+
+`FEATURE_CONTINUE_RECORDING=1` builds the Continue card that carries on the last recording into the same meeting; releases of the tool and the app have it on since v0.5.0, so build the extension with it to match. Without it the extension behaves as before and nothing else changes.
 
 In Chrome, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and choose `extension/dist/`. The extension ID is fixed at `obbaikcmcdooakogedoiiflflbbhpgdh`, which is what the native host trusts. Pin it to the toolbar.
 
@@ -86,14 +88,14 @@ FEATURE_DESKTOP_APP=1 npm run tauri build
 
 Move `Meeting.app` from `target/release/bundle/macos/` (at the repository root) to `/Applications`. The app is ad-hoc signed, so open it the first time with right-click › **Open**, then grant the permissions it asks for. Because the signature changes with every local build, macOS may ask for Microphone, System Audio Recording and Calendar permission again after a rebuild. Releases from GitHub are signed with one fixed certificate, so the permissions carry over when the app updates itself.
 
-Built without the flag, the app only shows "Built without FEATURE_DESKTOP_APP".
+Built without the flag, the app only shows "Built without FEATURE_DESKTOP_APP". Add `FEATURE_CONTINUE_RECORDING=1` to both commands for the app's Continue button and menu item, which releases have on since v0.5.0.
 
 ## Update
 
 ```sh
 git pull
-cargo install --path crates/meeting
-cd extension && npm ci && npm run build
+FEATURE_CONTINUE_RECORDING=1 cargo install --path crates/meeting
+cd extension && npm ci && FEATURE_CONTINUE_RECORDING=1 npm run build
 ```
 
 Then click the reload icon on the extension in `chrome://extensions`. The binary path stays the same, so `meeting install` is only needed again if you install `meeting` somewhere else.
