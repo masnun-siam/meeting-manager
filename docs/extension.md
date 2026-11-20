@@ -45,6 +45,9 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/popup/RecordTab.tsx` | Record UI | `RecordTab` |
 | `src/popup/useRecorderStatus.ts` | Live status hook | `useRecorderStatus` |
 | `src/popup/useMeetingContext.ts` | Live meeting context hook (flag on; null and no storage read when off) | `useMeetingContext` |
+| `src/popup/ContinueCard.tsx` | Continue card on the idle Record tab (flag on) | `ContinueCard` |
+| `src/popup/useContinuable.ts` | The `last_recording` to offer, live (flag on; null and no storage or downloads call when off) | `useContinuable`, `RECHECK_MS` |
+| `src/popup/formatElapsed.ts` | `H:MM:SS` time text | `formatElapsed` |
 | `src/popup/JobsTab.tsx`, `useJobs.ts` | Jobs UI | see [features/native-messaging.md](features/native-messaging.md) |
 | `src/permission/MicPermission.tsx` | Mic grant page | `MicPermission` |
 | `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock`, `MEET_CODE` |
@@ -108,7 +111,7 @@ flowchart LR
 
 ## Conventions
 
-- **CSS modules**: each component has a colocated `<Name>.module.css`, imported as `styles` (Popup, RecordTab, JobsTab, MicPermission). The only global CSS is `src/shared/tokens.css`, imported first by each page's `main.tsx`: colour, radius and font tokens (CSS custom properties, a light set and a dark set switched by `prefers-color-scheme`), the `@font-face` rules, `body` defaults, the `:focus-visible` ring and the `prefers-reduced-motion: reduce` reset. Component styles use `var(--…)` tokens, never colour literals.
+- **CSS modules**: each component has a colocated `<Name>.module.css`, imported as `styles` (Popup, RecordTab, ContinueCard, JobsTab, MicPermission). The only global CSS is `src/shared/tokens.css`, imported first by each page's `main.tsx`: colour, radius and font tokens (CSS custom properties, a light set and a dark set switched by `prefers-color-scheme`), the `@font-face` rules, `body` defaults, the `:focus-visible` ring and the `prefers-reduced-motion: reduce` reset. Component styles use `var(--…)` tokens, never colour literals.
 - **Colours**: write tokens as plain `#rrggbb`; `src/shared/tokens.test.ts` parses both palettes and checks WCAG 2.1 AA contrast of each foreground/background pair it lists. Add a pair there for any new token used as text or a control boundary.
 - **Fonts**: Inter (body) and Space Grotesk (wordmark, headings) are bundled from `src/shared/fonts/` (Latin subsets, weights 400 to 700, OFL texts beside them); Vite emits them as hashed `dist/assets/*.woff2`. No font or style loads from the network. Other scripts (Bengali) fall back to `system-ui`. How the files were made: `src/shared/fonts/README.md`.
 - **Tests**: colocated `<name>.test.ts(x)`, run by vitest in jsdom with `src/test/setup.ts`. No own test file: `serviceWorker.ts`, `offscreen/offscreen.ts`, `useRecorderStatus.ts` and `useMeetingContext.ts` (covered through `RecordTab.test.tsx`), both `main.tsx`. `manifest.test.ts` sits in `extension/`.

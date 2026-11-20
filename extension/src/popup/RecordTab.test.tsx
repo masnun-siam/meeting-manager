@@ -3,12 +3,16 @@ import { join } from 'node:path';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LastRecording } from '../shared/lastRecording';
 import type { MeetingContextState, Notice, RecorderStatus } from '../shared/messages';
 import { initialRecordingState, type RecordingState } from '../shared/recordingState';
-import { formatElapsed, RecordTab } from './RecordTab';
+import { RecordTab } from './RecordTab';
 
-const flag = vi.hoisted(() => ({ on: false }));
-vi.mock('../shared/flags', () => ({ meetingContextEnabled: () => flag.on }));
+const flag = vi.hoisted(() => ({ on: false, continueOn: false }));
+vi.mock('../shared/flags', () => ({
+  meetingContextEnabled: () => flag.on,
+  continueRecordingEnabled: () => flag.continueOn,
+}));
 
 const T0 = new Date('2026-01-01T10:00:00Z').getTime();
 
@@ -23,6 +27,9 @@ let stored: RecorderStatus | null;
 let storedContext: MeetingContextState | null;
 let local: Record<string, unknown>;
 let listeners: ((changes: Record<string, { newValue?: unknown }>) => void)[];
+let localListeners: ((changes: Record<string, { newValue?: unknown }>) => void)[];
+let downloadExists: boolean;
+const search = vi.fn();
 const sessionGet = vi.fn();
 
 const listener = (changes: Record<string, { newValue?: unknown }>) => {
@@ -35,6 +42,10 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(T0);
   flag.on = false;
+  flag.continueOn = false;
+  localListeners = [];
+  downloadExists = true;
+  search.mockReset().mockImplementation(async () => (downloadExists ? [{ id: 7 }] : []));
   stored = null;
   storedContext = null;
   local = {};
@@ -56,9 +67,19 @@ beforeEach(() => {
           removeListener: vi.fn(),
         },
       },
-      local: { get: vi.fn(async () => local), set: localSet },
+      local: {
+        get: vi.fn(async () => local),
+        set: localSet,
+        onChanged: {
+          addListener: vi.fn((fn) => {
+            localListeners.push(fn);
+          }),
+          removeListener: vi.fn(),
+        },
+      },
     },
     runtime: { sendMessage },
+    downloads: { search },
   });
 });
 
@@ -687,15 +708,172 @@ describe('RecordTab', () => {
   });
 });
 
-describe('formatElapsed', () => {
-  it.each([
-    [0, '0:00:00'],
-    [999, '0:00:00'],
-    [61_000, '0:01:01'],
-    [3_599_000, '0:59:59'],
-    [3 * 3_600_000, '3:00:00'],
-  ])('formats %i ms as %s', (ms, text) => {
-    expect(formatElapsed(ms)).toBe(text);
+describe('Continue card', () => {
+  const MIN = 60_000;
+  const lastRecording = (extra: Partial<LastRecording> = {}): LastRecording => ({
+    download_id: 7,
+    path: '/Users/me/Downloads/Meetings/meeting-2026-01-01_0959/recording.webm',
+    folder: 'meeting-2026-01-01_0959',
+    ext: 'webm',
+    recorded_ms: MIN,
+    language: 'en',
+    stopped_at: T0 - MIN,
+    stop_reason: 'tab_closed',
+    parts: 1,
+    ...extra,
+  });
+
+  beforeEach(() => {
+    flag.continueOn = true;
+    local = { language: 'bn', last_recording: lastRecording() };
+  });
+
+  it('shows the last recording and its Continue button between the controls and the messages', async () => {
+    setup();
+
+    const card = await screen.findByRole('region', { name: 'Continue last recording' });
+    expect(card).toHaveTextContent('meeting-2026-01-01_0959');
+    expect(card).toHaveTextContent('0:01:00');
+    expect(screen.getByText('stopped 1 min ago · tab closed')).toBeInTheDocument();
+    const language = screen.getByRole('radiogroup', { name: 'Language' });
+    expect(language.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(card.compareDocumentPosition(screen.getByRole('status')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends exactly continue, keeping the stored language', async () => {
+    const user = setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Continue' }));
+
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'continue' });
+    expect(localSet).not.toHaveBeenCalled();
+  });
+
+  it('shows the reach error when Continue cannot be sent', async () => {
+    sendMessage.mockRejectedValue(new Error('No SW'));
+    const user = setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByText('Could not reach the recorder: No SW')).toBeInTheDocument();
+  });
+
+  it('keeps the language control usable for a new Start', async () => {
+    const user = setup();
+    await screen.findByRole('button', { name: 'Continue' });
+
+    await user.click(screen.getByRole('radio', { name: 'English' }));
+    await user.click(screen.getByRole('button', { name: 'Start recording' }));
+
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'start', language: 'en' });
+  });
+
+  it('is reachable by Tab', async () => {
+    const user = setup();
+    const button = await screen.findByRole('button', { name: 'Continue' });
+
+    for (let i = 0; i < 5 && document.activeElement !== button; i++) await user.tab();
+
+    expect(button).toHaveFocus();
+  });
+
+  it('shows no card and reads nothing with the flag off', async () => {
+    flag.continueOn = false;
+    setup();
+
+    await screen.findByRole('button', { name: 'Start recording' });
+    await act(async () => {});
+    expect(screen.queryByRole('region', { name: 'Continue last recording' })).not.toBeInTheDocument();
+    expect(chrome.storage.local.get).not.toHaveBeenCalledWith('last_recording');
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, () => void]>([
+    ['nothing is stored', () => (local = {})],
+    ['it stopped 2 h 1 min ago', () => (local = { last_recording: lastRecording({ stopped_at: T0 - 121 * MIN }) })],
+    ['the download is gone', () => (downloadExists = false)],
+    ['it reached 3 h', () => (local = { last_recording: lastRecording({ recorded_ms: 180 * MIN }) })],
+    ['recording', () => (stored = recording())],
+    ['paused', () => (stored = status({ phase: 'paused', startedAt: T0, recordedMs: 0 }))],
+    ['saving', () => (stored = status({ phase: 'saving', startedAt: T0, recordedMs: 0, reason: 'user' }))],
+  ])('shows no card when %s', async (_, arrange) => {
+    arrange();
+    setup();
+
+    await waitFor(() => expect(chrome.storage.local.get).toHaveBeenCalledWith('last_recording'));
+    await act(async () => {});
+    expect(screen.queryByRole('region', { name: 'Continue last recording' })).not.toBeInTheDocument();
+  });
+
+  it('hides the card when the 2 h window runs out in an open popup', async () => {
+    local = { last_recording: lastRecording({ stopped_at: T0 - 119 * MIN - 50_000 }) };
+    setup();
+    await screen.findByRole('button', { name: 'Continue' });
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+  });
+
+  it('shows the card when a save finishes while the popup is open', async () => {
+    local = {};
+    setup();
+    await waitFor(() => expect(localListeners).toHaveLength(1));
+    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+
+    local = { last_recording: lastRecording({ stopped_at: T0, stop_reason: 'user' }) };
+    act(() => {
+      for (const fn of localListeners) fn({ last_recording: { newValue: local.last_recording } });
+    });
+
+    expect(await screen.findByRole('button', { name: 'Continue' })).toBeInTheDocument();
+    expect(screen.getByText('stopped 0 min ago')).toBeInTheDocument();
+  });
+
+  it('hides the card when a failed Continue writes its notice', async () => {
+    stored = status(initialRecordingState);
+    setup();
+    await screen.findByRole('button', { name: 'Continue' });
+
+    downloadExists = false;
+    act(() =>
+      listener({
+        recorder: {
+          newValue: status(initialRecordingState, {
+            notice: { kind: 'error', message: 'Nothing to continue: moved.' },
+          }),
+        },
+      }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument());
+    expect(screen.getByText('Nothing to continue: moved.')).toBeInTheDocument();
+  });
+
+  it('shows Continuing · part N and the meeting total while a continued part records', async () => {
+    stored = status(
+      { phase: 'recording', startedAt: T0, recordedMs: MIN, resumedAt: T0 },
+      { language: 'en', continuing: { folder: 'meeting-2026-01-01_0959', part: 2, base_ms: MIN } },
+    );
+    setup();
+
+    expect(await screen.findByText('Continuing · part 2')).toBeInTheDocument();
+    expect(screen.getByText('REC')).toBeInTheDocument();
+    expect(screen.getByRole('timer')).toHaveTextContent(/^0:01:00$/);
+    expect(screen.getByRole('radio', { name: 'English' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'English' })).toBeDisabled();
+    expect(screen.queryByRole('region', { name: 'Continue last recording' })).not.toBeInTheDocument();
+  });
+
+  it('shows nothing extra while recording without continuing', async () => {
+    stored = recording();
+    setup();
+
+    await screen.findByText('REC');
+    expect(screen.queryByText(/Continuing/)).not.toBeInTheDocument();
   });
 });
 

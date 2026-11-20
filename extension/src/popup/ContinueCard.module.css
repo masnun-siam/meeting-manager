@@ -1,0 +1,57 @@
+.card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.card p {
+  margin: 0;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.folder {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+}
+
+.continue {
+  flex: none;
+  min-height: 36px;
+  padding: 0 18px;
+  border: 1px solid var(--text);
+  border-radius: var(--radius-pill);
+  background: var(--text);
+  color: var(--surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
