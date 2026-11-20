@@ -110,7 +110,8 @@ sequenceDiagram
 
 - `spawn::process_detached` runs `<exe> process <recording> [--language bn|en] [--job-id <id>]` (the host always passes the job id) with `process_group(0)` and null stdio, so the job outlives the host. `<exe>` is `Host.exe`, the running binary; `PATH` is never used.
 - `saveRecording` maps replies via `noticeFor`: `ok` gives `saved`; `host_missing` or `not_configured` gives a `setup` notice; anything else is `error`. A thrown error becomes "Could not reach the meeting tool: ...".
-- `process` is only sent when the recording ran at least `MIN_PROCESS_MS` (10 s, `background/recordingControl.ts`); otherwise `saveRecording` returns the `too_short` notice.
+- `process` is only sent when the recording ran at least `MIN_PROCESS_MS` (10 s, `background/save.ts`); otherwise `saveRecording` returns the `too_short` notice.
+- A continued part (flag on) is sent as `process_part {path, language}` with the Chrome-reported path of `recording-part-N.webm` beside the meeting's `recording.webm`, when the meeting total is at least 10 s; the replies map through the same `noticeFor`, so an old tool's `bad_request` shows as an error notice. See [recording.md](recording.md) Continue.
 
 ## Popup Jobs tab
 

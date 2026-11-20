@@ -65,6 +65,7 @@ describe('Popup', () => {
       micIncluded: null,
       notice,
       tabId: null,
+      continuing: null,
     });
     let onChanged: (changes: Record<string, { newValue?: unknown }>) => void = () => {};
     vi.stubGlobal('chrome', {

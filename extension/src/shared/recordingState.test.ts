@@ -24,6 +24,23 @@ describe('recordingState', () => {
     expect(remainingMs(recording, 0)).toBe(RECORDING_CAP_MS);
   });
 
+  it('start with a base counts from the earlier total', () => {
+    const base = 42 * 60_000 + 10_000;
+    const state = run([{ type: 'start', at: 0, baseMs: base }]);
+    expect(elapsedMs(state, 0)).toBe(base);
+    expect(elapsedMs(state, 30_000)).toBe(base + 30_000);
+  });
+
+  it('start with a base of 2:59:00 leaves 60 s to the cap', () => {
+    const state = run([{ type: 'start', at: 0, baseMs: RECORDING_CAP_MS - 60_000 }]);
+    expect(remainingMs(state, 0)).toBe(60_000);
+  });
+
+  it('start never counts a base above the cap', () => {
+    const state = run([{ type: 'start', at: 0, baseMs: RECORDING_CAP_MS + 1 }]);
+    expect(elapsedMs(state, 0)).toBe(RECORDING_CAP_MS);
+  });
+
   it('excludes paused time from elapsed (FR-2)', () => {
     const state = run(
       [

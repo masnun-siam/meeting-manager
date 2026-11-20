@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LAST_RECORDING_KEY } from '../shared/lastRecording';
+import { CONTINUING_PARTS_KEY } from '../shared/continuingParts';
+import { LAST_RECORDING_KEY, type LastRecording } from '../shared/lastRecording';
 import {
   type ContextUpdate,
   MEETING_CONTEXT_KEY,
@@ -14,6 +15,7 @@ import {
   handleOffscreenEvent,
   handlePopupCommand,
   handleTabRemoved,
+  NOTHING_TO_CONTINUE,
   OFFSCREEN_PAGE,
 } from './recordingControl';
 import { saveRecording } from './save';
@@ -48,6 +50,8 @@ const sendMessage = vi.fn();
 const tabsCreate = vi.fn();
 const tabsQuery = vi.fn();
 const tabsSendMessage = vi.fn();
+const downloadsSearch = vi.fn();
+const localGet = vi.fn();
 
 const status = () => stored[RECORDER_STATUS_KEY] as RecorderStatus;
 const sent = () => sendMessage.mock.calls.map(([m]) => m.type);
@@ -79,6 +83,8 @@ beforeEach(() => {
     mock.mockReset();
   }
   getMediaStreamId.mockResolvedValue('stream-1');
+  downloadsSearch.mockReset().mockResolvedValue([{ id: 1 }]);
+  localGet.mockReset().mockImplementation(async (key: string) => ({ [key]: local[key] }));
   tabsQuery.mockReset().mockResolvedValue([{ id: TAB }]);
   createDocument.mockImplementation(async () => {
     hasDocument = true;
@@ -100,6 +106,10 @@ beforeEach(() => {
         },
       },
       local: {
+        get: localGet,
+        set: async (items: Record<string, unknown>) => {
+          Object.assign(local, items);
+        },
         remove: async (key: string) => {
           if (failLocalRemove) throw new Error('quota');
           delete local[key];
@@ -109,6 +119,7 @@ beforeEach(() => {
     action: { setBadgeText, setBadgeBackgroundColor: vi.fn() },
     tabs: { query: tabsQuery, create: tabsCreate, sendMessage: tabsSendMessage },
     tabCapture: { getMediaStreamId },
+    downloads: { search: downloadsSearch },
     offscreen: {
       hasDocument: async () => hasDocument,
       createDocument,
@@ -149,6 +160,7 @@ describe('start', () => {
       micIncluded: null,
       notice: null,
       tabId: TAB,
+      continuing: null,
     });
     expect(setBadgeText).toHaveBeenLastCalledWith({ text: 'REC' });
     expect(sendMessage).toHaveBeenCalledWith({
@@ -582,6 +594,7 @@ describe('dismiss', () => {
     micIncluded: null,
     notice: { kind: 'saved' },
     tabId: null,
+    continuing: null,
     ...extra,
   });
 
@@ -662,5 +675,166 @@ describe('ordering', () => {
     ]);
     expect(status().state.phase).toBe('paused');
     expect(status().micIncluded).toBe(true);
+  });
+});
+
+describe('continue', () => {
+  const LAST: LastRecording = {
+    download_id: 1,
+    path: '/Users/me/Downloads/Meetings/meeting-2026-01-01_1000/recording.webm',
+    folder: 'meeting-2026-01-01_1000',
+    ext: 'webm',
+    recorded_ms: 42 * 60_000 + 10_000,
+    language: 'bn',
+    stopped_at: T0 - 60_000,
+    stop_reason: 'user',
+    parts: 1,
+  };
+  const continuing = { folder: LAST.folder, part: 2, base_ms: LAST.recorded_ms };
+  const continueRecording = () => handlePopupCommand({ type: 'continue' });
+
+  beforeEach(() => {
+    flag.continueOn = true;
+    local[LAST_RECORDING_KEY] = LAST;
+  });
+
+  it("records the active tab as the next part, from the earlier total and in the earlier part's language", async () => {
+    await continueRecording();
+    expect(tabsQuery).toHaveBeenCalledWith({ active: true, lastFocusedWindow: true });
+    expect(getMediaStreamId).toHaveBeenCalledWith({ targetTabId: TAB });
+    expect(downloadsSearch).toHaveBeenCalledWith({ id: 1, exists: true });
+    expect(status()).toEqual({
+      state: { phase: 'recording', startedAt: T0, recordedMs: LAST.recorded_ms, resumedAt: T0 },
+      language: 'bn',
+      micIncluded: null,
+      notice: null,
+      tabId: TAB,
+      continuing,
+    });
+    expect(setBadgeText).toHaveBeenLastCalledWith({ text: 'REC' });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'offscreen_start',
+      streamId: 'stream-1',
+      language: 'bn',
+      startedAt: T0,
+      baseMs: LAST.recorded_ms,
+    });
+  });
+
+  it('links the part to its meeting before the offscreen document starts', async () => {
+    sendMessage.mockImplementation(async () => {
+      expect(local[CONTINUING_PARTS_KEY]).toEqual({ [T0]: { folder: LAST.folder, part: 2, language: 'bn' } });
+    });
+    await continueRecording();
+    expect(sent()).toEqual(['offscreen_start']);
+  });
+
+  it('keeps the last recording, stores no context and sends no context_start', async () => {
+    flag.on = true;
+    tabsQuery.mockResolvedValue([{ id: TAB, url: 'https://meet.google.com/abc-defg-hij', title: 'Standup' }]);
+    await continueRecording();
+    expect(local[LAST_RECORDING_KEY]).toEqual(LAST);
+    expect(stored[MEETING_CONTEXT_KEY]).toBeUndefined();
+    expect(tabsSendMessage).not.toHaveBeenCalled();
+    const recordedTab = { id: EXTENSION, tab: { id: TAB } as chrome.tabs.Tab };
+    expect(await handleContentEvent({ type: 'context_hello' }, recordedTab)).toEqual({ recording: false });
+  });
+
+  it('opens the mic page and does nothing else when the permission is prompt', async () => {
+    permission = 'prompt';
+    await continueRecording();
+    expect(tabsCreate).toHaveBeenCalledWith({ url: `chrome-extension://id/${MIC_PERMISSION_PAGE}` });
+    expect(getMediaStreamId).not.toHaveBeenCalled();
+    expect(stored[RECORDER_STATUS_KEY]).toBeUndefined();
+    permission = 'granted';
+    await continueRecording();
+    expect(status().continuing).toEqual(continuing);
+  });
+
+  it.each<[string, PopupCommand]>([
+    ['continue', { type: 'continue' }],
+    ['start', { type: 'start', language: 'en' }],
+  ])('starts one recording when continue and %s come together', async (_name, second) => {
+    await Promise.all([continueRecording(), handlePopupCommand(second)]);
+    expect(getMediaStreamId).toHaveBeenCalledTimes(1);
+    expect(sent()).toEqual(['offscreen_start']);
+    expect(status().continuing).toEqual(continuing);
+    expect(status().notice).toBeNull();
+  });
+
+  it.each<[string, () => void]>([
+    [
+      'stopped more than 2 hours ago',
+      () => (local[LAST_RECORDING_KEY] = { ...LAST, stopped_at: T0 - 2 * 3_600_000 - 1 }),
+    ],
+    ['moved', () => downloadsSearch.mockResolvedValue([])],
+    ['at the 3 h cap', () => (local[LAST_RECORDING_KEY] = { ...LAST, recorded_ms: 3 * 3_600_000 })],
+    ['not stored', () => delete local[LAST_RECORDING_KEY]],
+  ])('records nothing and says so when the last recording %s', async (_name, arrange) => {
+    arrange();
+    await continueRecording();
+    expect(getMediaStreamId).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(status().state.phase).toBe('idle');
+    expect(status().notice).toEqual({ kind: 'error', message: NOTHING_TO_CONTINUE });
+  });
+
+  it('is ignored with no storage access and no notice when the flag is off', async () => {
+    flag.continueOn = false;
+    await continueRecording();
+    expect(localGet).not.toHaveBeenCalled();
+    expect(downloadsSearch).not.toHaveBeenCalled();
+    expect(stored[RECORDER_STATUS_KEY]).toBeUndefined();
+  });
+
+  it('is ignored while recording', async () => {
+    await startRecording();
+    sendMessage.mockClear();
+    await continueRecording();
+    expect(sent()).toEqual([]);
+    expect(status().continuing).toBeNull();
+    expect(status().notice).toBeNull();
+  });
+
+  it('saves the part with the total for the 10 s rule and the part alone for the fallback', async () => {
+    local[LAST_RECORDING_KEY] = { ...LAST, recorded_ms: 4_000 };
+    await continueRecording();
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    vi.setSystemTime(T0 + 8_000);
+    await handlePopupCommand({ type: 'stop' });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    expect(saveRecording).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        startedAt: T0,
+        language: 'bn',
+        process: true,
+        remember: expect.objectContaining({ recordedMs: 12_000 }),
+        continuing: {
+          folder: LAST.folder,
+          part: 2,
+          partMs: 8_000,
+          recording: { path: LAST.path, downloadId: 1 },
+        },
+      }),
+    );
+    expect(status().continuing).toBeNull();
+    expect(status().state.phase).toBe('idle');
+  });
+
+  it('saves the part without its meeting when the last recording is gone by the stop', async () => {
+    await continueRecording();
+    delete local[LAST_RECORDING_KEY];
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handlePopupCommand({ type: 'stop' });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    expect(vi.mocked(saveRecording).mock.lastCall?.[0].continuing).toMatchObject({ recording: null });
+  });
+
+  it('passes no continuing to a plain recording', async () => {
+    await startRecording();
+    await handleOffscreenEvent({ type: 'offscreen_started', micIncluded: true });
+    await handlePopupCommand({ type: 'stop' });
+    await handleOffscreenEvent({ type: 'offscreen_stopped', startedAt: T0, reason: 'user' });
+    expect(vi.mocked(saveRecording).mock.lastCall?.[0].continuing).toBeUndefined();
   });
 });

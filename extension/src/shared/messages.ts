@@ -9,6 +9,8 @@ export type Language = 'bn' | 'en';
 /** Popup → service worker. */
 export type PopupCommand =
   | { type: 'start'; language: Language }
+  /** Records the next part of the last recording; the language comes from `last_recording`. */
+  | { type: 'continue' }
   | { type: 'pause' }
   | { type: 'resume' }
   | { type: 'stop' }
@@ -20,7 +22,8 @@ export type DismissTarget = 'notice' | 'stop' | 'mic';
 
 /** Service worker → offscreen document. */
 export type OffscreenCommand =
-  | { type: 'offscreen_start'; streamId: string; language: Language; startedAt: number }
+  /** `baseMs`: the earlier parts' recorded time, for a continued part. */
+  | { type: 'offscreen_start'; streamId: string; language: Language; startedAt: number; baseMs?: number }
   | { type: 'offscreen_pause' }
   | { type: 'offscreen_resume' }
   | { type: 'offscreen_stop' }
@@ -81,6 +84,15 @@ export interface RecorderStatus {
   notice: Notice | null;
   /** The captured tab, so `tabs.onRemoved` still matches after the service worker slept. */
   tabId: number | null;
+  /** Set while recording the next part of the last recording; `base_ms` is the earlier parts' total. */
+  continuing: Continuing | null;
+}
+
+export interface Continuing {
+  folder: string;
+  /** This part's number: 2 for the first continued part. */
+  part: number;
+  base_ms: number;
 }
 
 export const RECORDER_STATUS_KEY = 'recorder';

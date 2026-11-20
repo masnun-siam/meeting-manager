@@ -1,12 +1,14 @@
 // Recording control: the service worker's state owner. Every handler reads the status from storage first,
 // so a service worker that slept mid-recording carries on.
 
-import { meetingContextEnabled } from '../shared/flags';
-import { clearLastRecording } from '../shared/lastRecording';
+import { rememberContinuingPart } from '../shared/continuingParts';
+import { continueRecordingEnabled, meetingContextEnabled } from '../shared/flags';
+import { canContinue, clearLastRecording, lastRecordingExists, readLastRecording } from '../shared/lastRecording';
 import { contextForHandoff, identityFromTab, trimToLimit, utcOffsetMin } from '../shared/meetingContext';
 import {
   type ContentEvent,
   type ContextHelloReply,
+  type Continuing,
   type DismissTarget,
   MEETING_CONTEXT_KEY,
   type MeetingContextState,
@@ -28,11 +30,13 @@ import {
   settleContext,
   startContext,
 } from './contextSession';
-import { nextFreeName, recordingName, saveRecording, takenNames } from './save';
+import { MIN_PROCESS_MS, nextFreeName, recordingName, type SaveOptions, saveRecording, takenNames } from './save';
 
 export const OFFSCREEN_PAGE = 'src/offscreen/offscreen.html';
 
-const MIN_PROCESS_MS = 10_000;
+/** The desktop's `nothing_to_continue` text. */
+export const NOTHING_TO_CONTINUE =
+  'Nothing to continue: the last recording stopped more than 2 hours ago, or was moved.';
 
 const BADGE_COLOR = '#d93025';
 
@@ -42,6 +46,7 @@ const idleStatus: RecorderStatus = {
   micIncluded: null,
   notice: null,
   tabId: null,
+  continuing: null,
 };
 
 let queue: Promise<unknown> = Promise.resolve();
@@ -155,11 +160,34 @@ async function resetWithError(status: RecorderStatus, message: string): Promise<
     micIncluded: null,
     notice: { kind: 'error', message },
     tabId: null,
+    continuing: null,
   });
 }
 
 async function start(language: RecorderStatus['language']): Promise<void> {
+  await begin(await readStatus(), language, null);
+}
+
+/** Continue: re-checks the last recording, then records the next part of it as Start records a meeting. */
+async function continueRecording(): Promise<void> {
+  if (!continueRecordingEnabled()) return;
   const status = await readStatus();
+  if (status.state.phase !== 'idle') return;
+  const last = await readLastRecording();
+  const exists = last !== null && (await lastRecordingExists(last));
+  if (last === null || !canContinue({ last, phase: status.state.phase, now: Date.now(), exists })) {
+    await writeStatus({ ...status, notice: { kind: 'error', message: NOTHING_TO_CONTINUE } });
+    return;
+  }
+  await begin(status, last.language, { folder: last.folder, part: last.parts + 1, base_ms: last.recorded_ms });
+}
+
+/** Start's body: a continued part keeps the meeting's language, counts from its total and captures no context. */
+async function begin(
+  status: RecorderStatus,
+  language: RecorderStatus['language'],
+  continuing: Continuing | null,
+): Promise<void> {
   if (status.state.phase !== 'idle') return;
   if ((await micPermissionState()) === 'prompt') {
     await openMicPermissionPage();
@@ -170,9 +198,16 @@ async function start(language: RecorderStatus['language']): Promise<void> {
     if (tab?.id === undefined) throw new Error('No active tab to record');
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
     await ensureOffscreen();
-    const state = transition(status.state, { type: 'start', at: Date.now() });
+    const baseMs = continuing?.base_ms;
+    const state = transition(status.state, { type: 'start', at: Date.now(), ...(continuing ? { baseMs } : {}) });
     if (state.phase !== 'recording') return;
-    await commit({ state, language, micIncluded: null, notice: null, tabId: tab.id });
+    await commit({ state, language, micIncluded: null, notice: null, tabId: tab.id, continuing });
+    if (continuing) {
+      // Written before the recording exists, so a crash always leaves the link for recovery (#277).
+      await rememberContinuingPart(state.startedAt, { folder: continuing.folder, part: continuing.part, language });
+      await sendToOffscreen({ type: 'offscreen_start', streamId, language, startedAt: state.startedAt, baseMs });
+      return;
+    }
     await forgetLastRecording();
     if (meetingContextEnabled()) await storeContext(tab, state.startedAt);
     await sendToOffscreen({ type: 'offscreen_start', streamId, language, startedAt: state.startedAt });
@@ -236,6 +271,7 @@ async function offscreenStopped(reason: StopReason): Promise<void> {
       process: saving.recordedMs >= MIN_PROCESS_MS,
       context: await contextToSend(),
       remember: { recordedMs: saving.recordedMs, stoppedAt: Date.now(), stopReason: saving.reason },
+      ...(status.continuing ? { continuing: await partToSave(status.continuing, saving.recordedMs) } : {}),
     });
   } catch (error) {
     notice = { kind: 'error', message: `Could not save the recording (${messageOf(error)}).` };
@@ -249,7 +285,22 @@ async function offscreenStopped(reason: StopReason): Promise<void> {
     micIncluded: null,
     notice: status.notice?.kind === 'error' ? status.notice : notice,
     tabId: null,
+    continuing: null,
   });
+}
+
+/** The save's view of a continued part; the meeting's `recording.webm` comes from `last_recording`. */
+async function partToSave(
+  { folder, part, base_ms }: Continuing,
+  recordedMs: number,
+): Promise<NonNullable<SaveOptions['continuing']>> {
+  const last = await readLastRecording().catch(() => null);
+  return {
+    folder,
+    part,
+    partMs: recordedMs - base_ms,
+    recording: last && last.folder === folder ? { path: last.path, downloadId: last.download_id } : null,
+  };
 }
 
 async function offscreenError(message: string): Promise<void> {
@@ -284,6 +335,8 @@ export function handlePopupCommand(command: PopupCommand): Promise<void> {
     switch (command.type) {
       case 'start':
         return start(command.language);
+      case 'continue':
+        return continueRecording();
       case 'pause':
       case 'resume':
         return pauseOrResume(command.type);
@@ -325,8 +378,13 @@ export function handleContentEvent(
     const status = await readStatus();
     const { state } = status;
     const running = state.phase === 'recording' || state.phase === 'paused';
+    // A continued part captures no context (PRD non-goal).
     const fromRecordedTab =
-      meetingContextEnabled() && sender.id === chrome.runtime.id && sender.tab?.id === status.tabId && running;
+      meetingContextEnabled() &&
+      !status.continuing &&
+      sender.id === chrome.runtime.id &&
+      sender.tab?.id === status.tabId &&
+      running;
     if (event.type === 'context_hello') {
       return fromRecordedTab && running ? { recording: true, startedAt: state.startedAt } : { recording: false };
     }
