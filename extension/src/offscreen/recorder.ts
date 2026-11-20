@@ -107,7 +107,7 @@ export async function startRecording(cmd: Extract<OffscreenCommand, { type: 'off
     );
     const s: Session = {
       startedAt: cmd.startedAt,
-      state: transition(initialRecordingState, { type: 'start', at: Date.now() }),
+      state: transition(initialRecordingState, { type: 'start', at: Date.now(), baseMs: cmd.baseMs }),
       recorder,
       ctx,
       streams,

@@ -49,6 +49,7 @@ MV3 extension (React 19, Vite, `@crxjs/vite-plugin`, vitest, biome). It records 
 | `src/permission/MicPermission.tsx` | Mic grant page | `MicPermission` |
 | `src/shared/meetingContext.ts` | Pure context helpers | `identityFromTab`, `contextForHandoff`, `trimToLimit`, `cleanText`, `formatClock`, `MEET_CODE` |
 | `src/shared/flags.ts` | Build-time flags, defined in `vite.config.ts` from `FEATURE_MEETING_CONTEXT` and `FEATURE_CONTINUE_RECORDING` (`flagFromEnv`) | `meetingContextEnabled`, `continueRecordingEnabled` |
+| `src/shared/continuingParts.ts` | Continued part -> meeting link (flag on) | `rememberContinuingPart`, `readContinuingPart`, `forgetContinuingPart`, `CONTINUING_PARTS_KEY` |
 | `src/shared/lastRecording.ts` | Last saved recording (flag on) and the pure can-continue rule | `canContinue`, `readLastRecording`, `writeLastRecording`, `clearLastRecording`, `lastRecordingExists`, `folderOf`, `CONTINUE_WINDOW_MS`, `LAST_RECORDING_KEY` |
 | `src/shared/tokens.css`, `tokens.test.ts` | Design tokens, fonts, focus ring, reduced motion; contrast test | `--surface`, `--text`, `--accent`, `--record`, `--focus-ring`, `--chip-<tone>-fill`/`-text` (Jobs stage chips) |
 | `src/shared/fonts/` | Bundled woff2 fonts and their OFL licences | |
@@ -79,7 +80,7 @@ flowchart LR
 
 | Direction | Type | `type` values |
 |---|---|---|
-| Popup -> SW | `PopupCommand` | `start`, `pause`, `resume`, `stop`, `dismiss {what: 'notice' \| 'stop' \| 'mic'}` |
+| Popup -> SW | `PopupCommand` | `start`, `continue` (flag on; next part of `last_recording`), `pause`, `resume`, `stop`, `dismiss {what: 'notice' \| 'stop' \| 'mic'}` |
 | SW -> offscreen | `OffscreenCommand` | `offscreen_start`, `offscreen_pause`, `offscreen_resume`, `offscreen_stop`, `offscreen_file_url` |
 | Offscreen -> SW | `OffscreenEvent` | `offscreen_started`, `offscreen_stopped`, `offscreen_error` |
 | SW -> Meet content script (`tabs.sendMessage`) | `ContentCommand` | `context_start` (after the Start commit, Meet tabs only; answered `{ ok: true }`), `context_stop` (at Stop, before the download; answered with the final batch) |
@@ -95,10 +96,11 @@ flowchart LR
 
 | Store | Key | Holds | Written by |
 |---|---|---|---|
-| `chrome.storage.session` | `RECORDER_STATUS_KEY` (`'recorder'`) | `RecorderStatus` (state, language, micIncluded, micWarningDismissed?, notice, tabId) | SW only |
+| `chrome.storage.session` | `RECORDER_STATUS_KEY` (`'recorder'`) | `RecorderStatus` (state, language, micIncluded, micWarningDismissed?, notice, tabId, continuing `{folder, part, base_ms}` or `null`) | SW only |
 | `chrome.storage.session` | `MEETING_CONTEXT_KEY` (`'meeting_context'`), flag on only | `MeetingContextState`: tab identity, recording segments, title, participants, speaking intervals (recording-clock ms), `truncated`, FR-5 `capture` and `reloadHint`; written at Start, merged per batch, sent with `process`, cleared after hand-off | SW only |
 | `chrome.storage.local` | `language` | Last chosen `'bn'` or `'en'` | `RecordTab`; read by `recover.ts` |
-| `chrome.storage.local` | `LAST_RECORDING_KEY` (`'last_recording'`), `FEATURE_CONTINUE_RECORDING` only | `LastRecording`: `download_id`, `path`, `folder`, `ext`, `recorded_ms`, `language`, `stopped_at`, `stop_reason` (`null` when recovered), `parts`; survives a browser restart | Written by `save.ts` after a completed download (stops and recovery); removed by Start |
+| `chrome.storage.local` | `LAST_RECORDING_KEY` (`'last_recording'`), `FEATURE_CONTINUE_RECORDING` only | `LastRecording`: `download_id`, `path`, `folder`, `ext`, `recorded_ms`, `language`, `stopped_at`, `stop_reason` (`null` when recovered), `parts`; survives a browser restart | Written by `save.ts` after a completed download (stops, saved parts and recovery); removed by Start, kept by Continue |
+| `chrome.storage.local` | `CONTINUING_PARTS_KEY` (`'continuing_parts'`), `FEATURE_CONTINUE_RECORDING` only | `{<startedAt>: {folder, part, language}}`: the meeting a continued part's temp file belongs to | Written by Continue before `offscreen_start`; removed by `save.ts` after the part's download completes; read by recovery (#277) |
 | Origin-private file system | `recordings/<startedAt>.webm` | Chunks of an in-progress or unsaved recording | Offscreen (`appendChunk`); SW deletes |
 
 - Module variables in the SW are not state. Every handler calls `readStatus()` first.

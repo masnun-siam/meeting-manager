@@ -127,6 +127,7 @@ describe('recoverLeftovers', () => {
       micIncluded: true,
       notice: null,
       tabId: 1,
+      continuing: null,
     };
     files.set('1000.webm', 5);
     files.set('2000.webm', 5);

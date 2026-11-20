@@ -199,6 +199,18 @@ describe('stopping', () => {
     expect(sent().at(-1)).toEqual({ type: 'offscreen_stopped', startedAt: START.startedAt, reason: 'cap' });
   });
 
+  it('stops with the cap after 60 s of recorded time when continuing from 2:59:00', async () => {
+    await startRecording({ ...START, baseMs: RECORDING_CAP_MS - 60_000 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    pauseRecording();
+    await vi.advanceTimersByTimeAsync(HOUR);
+    resumeRecording();
+    await vi.advanceTimersByTimeAsync(30_000 - 1);
+    expect(sent().some((e) => e.type === 'offscreen_stopped')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sent().at(-1)).toEqual({ type: 'offscreen_stopped', startedAt: START.startedAt, reason: 'cap' });
+  });
+
   it('stops with capture_ended when the video track ends', async () => {
     await startRecording(START);
     tabVideo.dispatchEvent(new Event('ended'));

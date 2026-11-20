@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONTINUING_PARTS_KEY } from '../shared/continuingParts';
 import { LAST_RECORDING_KEY } from '../shared/lastRecording';
 import { sendNative } from '../shared/nativeClient';
-import { nextFreeName, recordingName, saveRecording, takenNames } from './save';
+import { movedNotice, nextFreeName, recordingName, saveRecording, takenNames } from './save';
 
 vi.mock('../shared/nativeClient', () => ({ sendNative: vi.fn() }));
 const flag = vi.hoisted(() => ({ continueOn: false }));
@@ -17,6 +18,7 @@ const download = vi.fn();
 const search = vi.fn();
 const sendMessage = vi.fn();
 const localSet = vi.fn();
+let local: Record<string, unknown>;
 
 /** `download` resolves with id 5, then Chrome reports `delta` for it. */
 function finishWith(delta: Record<string, unknown>) {
@@ -29,12 +31,16 @@ function finishWith(delta: Record<string, unknown>) {
 beforeEach(() => {
   for (const m of [download, search, sendMessage, removeEntry, localSet, vi.mocked(sendNative)]) m.mockReset();
   flag.continueOn = false;
+  local = {};
+  localSet.mockImplementation(async (items: Record<string, unknown>) => {
+    Object.assign(local, items);
+  });
   sendMessage.mockResolvedValue({ url: 'blob:x' });
   removeEntry.mockResolvedValue(undefined);
   search.mockResolvedValue([{ filename: '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm' }]);
   vi.stubGlobal('chrome', {
     runtime: { sendMessage },
-    storage: { local: { set: localSet } },
+    storage: { local: { set: localSet, get: async (key: string) => ({ [key]: local[key] }) } },
     downloads: {
       download,
       search,
@@ -218,5 +224,163 @@ describe('saveRecording remembers the last recording', () => {
     expect(error).toHaveBeenCalledWith('Could not store the last recording');
     expect(sendNative).toHaveBeenCalled();
     error.mockRestore();
+  });
+});
+
+describe('saveRecording a continued part', () => {
+  const DIR = '/Users/me/Downloads/Meetings/meeting-2026-10-19_0900';
+  const RECORDING = `${DIR}/recording.webm`;
+  const PART = `${DIR}/recording-part-2.webm`;
+  const NEW = '/Users/me/Downloads/Meetings/meeting-2026-10-19_1430/recording.webm';
+  const continuing = {
+    folder: 'meeting-2026-10-19_0900',
+    part: 2,
+    partMs: 8_000,
+    recording: { path: RECORDING, downloadId: 1 },
+  };
+  const part = {
+    ...opts,
+    continuing,
+    remember: { recordedMs: 12_000, stoppedAt: STARTED + 8_000, stopReason: 'user' as const },
+  };
+  const ENTRY = { [STARTED]: { folder: continuing.folder, part: 2, language: 'en' } };
+
+  /** The earlier recording exists unless `moved`; each download completes at the next path of `saved`. */
+  function chromeHas({ moved = false, saved = [PART] }: { moved?: boolean; saved?: string[] } = {}) {
+    const paths = [...saved];
+    let current = '';
+    search.mockImplementation(async (query: { id: number; exists?: boolean }) => {
+      if (query.exists) return moved ? [] : [{ id: 1, filename: RECORDING }];
+      return [{ filename: current }];
+    });
+    download.mockImplementation(async () => {
+      current = paths.shift() ?? '';
+      setTimeout(() => listener({ id: 5, state: { current: 'complete' } }), 0);
+      return 5;
+    });
+  }
+
+  beforeEach(() => {
+    flag.continueOn = true;
+    local[CONTINUING_PARTS_KEY] = ENTRY;
+  });
+
+  it('saves recording-part-N beside recording.webm and sends process_part', async () => {
+    chromeHas();
+    vi.mocked(sendNative).mockResolvedValue({ ok: true, job_id: 'j1' });
+    expect(await saveRecording(part)).toEqual({ kind: 'saved' });
+    expect(search).toHaveBeenCalledWith({ id: 1, exists: true });
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(download).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: 'Meetings/meeting-2026-10-19_0900/recording-part-2.webm' }),
+    );
+    expect(sendNative).toHaveBeenCalledWith({ type: 'process_part', path: PART, language: 'en' });
+    expect(removeEntry).toHaveBeenCalledWith(STARTED);
+    expect(local[CONTINUING_PARTS_KEY]).toEqual({});
+  });
+
+  it('rewrites the last recording with the part count and total, keeping recording.webm', async () => {
+    chromeHas();
+    vi.mocked(sendNative).mockResolvedValue({ ok: true, job_id: 'j1' });
+    await saveRecording(part);
+    expect(local[LAST_RECORDING_KEY]).toEqual({
+      download_id: 1,
+      path: RECORDING,
+      folder: 'meeting-2026-10-19_0900',
+      ext: 'webm',
+      recorded_ms: 12_000,
+      language: 'en',
+      stopped_at: STARTED + 8_000,
+      stop_reason: 'user',
+      parts: 2,
+    });
+  });
+
+  it('saves but does not hand off a total under 10 s', async () => {
+    chromeHas();
+    expect(await saveRecording({ ...part, process: false })).toEqual({ kind: 'too_short' });
+    expect(sendNative).not.toHaveBeenCalled();
+    expect(local[CONTINUING_PARTS_KEY]).toEqual({});
+  });
+
+  it('keeps the file and the link when the download is interrupted', async () => {
+    search.mockResolvedValue([{ id: 1, filename: RECORDING }]);
+    finishWith({ state: { current: 'interrupted' }, error: { current: 'FILE_NO_SPACE' } });
+    expect(await saveRecording(part)).toMatchObject({ kind: 'error', message: expect.stringContaining('Disk full') });
+    expect(removeEntry).not.toHaveBeenCalled();
+    expect(local[CONTINUING_PARTS_KEY]).toEqual(ENTRY);
+    expect(sendNative).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['bad_request', { kind: 'error', message: 'msg' }],
+    ['host_missing', { kind: 'setup', message: 'msg' }],
+    ['not_configured', { kind: 'setup', message: 'msg' }],
+  ] as const)('maps %s from an old or missing tool', async (code, notice) => {
+    chromeHas();
+    vi.mocked(sendNative).mockResolvedValue({ ok: false, code, message: 'msg' });
+    expect(await saveRecording(part)).toEqual(notice);
+  });
+
+  it('saves a new meeting when the folder was moved, processing the part alone from 10 s', async () => {
+    chromeHas({ moved: true, saved: [NEW] });
+    vi.mocked(sendNative).mockResolvedValue({ ok: true, job_id: 'j1' });
+    const notice = await saveRecording({ ...part, continuing: { ...continuing, partMs: 10_000 } });
+    expect(notice).toEqual({
+      kind: 'error',
+      message: 'Could not add to meeting-2026-10-19_0900: it was moved; saved as a new meeting.',
+    });
+    expect(notice).toEqual(movedNotice(continuing.folder));
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(download).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: 'Meetings/meeting-2026-10-19_1430/recording.webm' }),
+    );
+    expect(sendNative).toHaveBeenCalledWith({ type: 'process', path: NEW, language: 'en' });
+    expect(local[LAST_RECORDING_KEY]).toMatchObject({ path: NEW, recorded_ms: 10_000, parts: 1 });
+    expect(local[CONTINUING_PARTS_KEY]).toEqual({});
+    expect(removeEntry).toHaveBeenCalledWith(STARTED);
+  });
+
+  it('does not process a moved part shorter than 10 s alone, even when the total is longer', async () => {
+    chromeHas({ moved: true, saved: [NEW] });
+    expect(await saveRecording(part)).toEqual(movedNotice(continuing.folder));
+    expect(sendNative).not.toHaveBeenCalled();
+  });
+
+  it('saves a new meeting when the last recording was no longer known', async () => {
+    chromeHas({ saved: [NEW] });
+    expect(await saveRecording({ ...part, continuing: { ...continuing, recording: null } })).toEqual(
+      movedNotice(continuing.folder),
+    );
+    expect(search).not.toHaveBeenCalledWith({ id: 1, exists: true });
+    expect(download).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: 'Meetings/meeting-2026-10-19_1430/recording.webm' }),
+    );
+  });
+
+  it.each([
+    ['a uniquified name', `${DIR}/recording-part-2 (1).webm`],
+    ['another directory', '/Users/me/Downloads/Meetings/meeting-2026-10-19_0900 (1)/recording-part-2.webm'],
+  ])('treats %s as a moved folder and saves a new meeting', async (_name, stray) => {
+    chromeHas({ saved: [stray, NEW] });
+    vi.mocked(sendNative).mockResolvedValue({ ok: true, job_id: 'j1' });
+    expect(await saveRecording({ ...part, continuing: { ...continuing, partMs: 10_000 } })).toEqual(
+      movedNotice(continuing.folder),
+    );
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(sendNative).toHaveBeenCalledTimes(1);
+    expect(sendNative).toHaveBeenCalledWith({ type: 'process', path: NEW, language: 'en' });
+    expect(local[LAST_RECORDING_KEY]).toMatchObject({ path: NEW, parts: 1 });
+  });
+
+  it('keeps the file when the new-meeting fallback download fails too', async () => {
+    search.mockResolvedValue([]);
+    finishWith({ state: { current: 'interrupted' }, error: { current: 'NETWORK_FAILED' } });
+    expect(await saveRecording(part)).toMatchObject({
+      kind: 'error',
+      message: expect.stringContaining('(NETWORK_FAILED)'),
+    });
+    expect(removeEntry).not.toHaveBeenCalled();
+    expect(local[CONTINUING_PARTS_KEY]).toEqual(ENTRY);
   });
 });

@@ -11,7 +11,8 @@ export type RecordingState =
   | { phase: 'saving'; startedAt: number; recordedMs: number; reason: StopReason };
 
 export type RecordingEvent =
-  | { type: 'start'; at: number }
+  /** `baseMs`: recorded time carried over from earlier parts of the same meeting, so the cap counts the total. */
+  | { type: 'start'; at: number; baseMs?: number }
   | { type: 'pause'; at: number }
   | { type: 'resume'; at: number }
   | { type: 'stop'; at: number; reason: StopReason }
@@ -40,7 +41,12 @@ export function transition(state: RecordingState, event: RecordingEvent): Record
   switch (event.type) {
     case 'start':
       return state.phase === 'idle'
-        ? { phase: 'recording', startedAt: event.at, recordedMs: 0, resumedAt: event.at }
+        ? {
+            phase: 'recording',
+            startedAt: event.at,
+            recordedMs: Math.min(RECORDING_CAP_MS, event.baseMs ?? 0),
+            resumedAt: event.at,
+          }
         : state;
     case 'pause':
       return state.phase === 'recording'
