@@ -186,6 +186,7 @@ export function RecordTab() {
   }
 
   async function send(command: PopupCommand) {
+    pendingFocus.current = null;
     setSendError(null);
     await post(command);
   }
@@ -196,13 +197,13 @@ export function RecordTab() {
   const startRef = useRef<HTMLButtonElement>(null);
   const pauseResumeRef = useRef<HTMLButtonElement>(null);
   const dismissRefs = useRef(new Map<LineKind, HTMLButtonElement>());
-  /** The closed line's index and how many lines there were; focus moves once the list gets shorter. */
-  const pendingFocus = useRef<{ index: number; count: number } | null>(null);
+  /** The closed line and its index; focus moves once that line is gone. Any other command drops it. */
+  const pendingFocus = useRef<{ kind: LineKind; index: number } | null>(null);
 
   // After every render: a status-backed line disappears only when storage changes, so focus cannot move in the click.
   useEffect(() => {
     const pending = pendingFocus.current;
-    if (!pending || lines.length >= pending.count) return;
+    if (!pending || lines.some((message) => message.kind === pending.kind)) return;
     pendingFocus.current = null;
     if (lines.length > 0) {
       dismissRefs.current.get(lines[Math.min(pending.index, lines.length - 1)].kind)?.focus();
@@ -214,7 +215,7 @@ export function RecordTab() {
   });
 
   async function dismiss(kind: LineKind, index: number) {
-    pendingFocus.current = { index, count: lines.length };
+    pendingFocus.current = { kind, index };
     if (kind === 'send') {
       setSendError(null);
       return;

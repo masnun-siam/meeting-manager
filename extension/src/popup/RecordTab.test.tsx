@@ -409,6 +409,20 @@ describe('RecordTab', () => {
       expect(dismissButtons()[0]).toHaveFocus();
     });
 
+    it('does not pull focus back when another line goes later', async () => {
+      stored = stoppedByTab();
+      const user = setup();
+
+      await screen.findByText(SAVED);
+      await user.click(dismissButtons()[0]); // the service worker changes nothing
+      const start = screen.getByRole('button', { name: 'Start recording' });
+      start.focus();
+      write(stoppedByTab({ state: { phase: 'idle', lastStop: null } }));
+
+      await waitFor(() => expect(screen.queryByText(TAB_CLOSED)).not.toBeInTheDocument());
+      expect(start).toHaveFocus();
+    });
+
     it('moves focus to Pause while recording', async () => {
       stored = recording({ micIncluded: false });
       const user = setup();
