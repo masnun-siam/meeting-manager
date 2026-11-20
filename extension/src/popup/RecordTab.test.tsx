@@ -837,6 +837,8 @@ describe('Continue card', () => {
     stored = status(initialRecordingState);
     setup();
     await screen.findByRole('button', { name: 'Continue' });
+    await act(async () => {});
+    expect(search).toHaveBeenCalledTimes(1);
 
     downloadExists = false;
     act(() =>
