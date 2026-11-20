@@ -204,7 +204,7 @@ describe('recoverLeftovers of a continued part', () => {
       remember: { recordedMs: 80_000, stoppedAt: NOW, stopReason: null },
       continuing: { folder: FOLDER, part: 2, partMs: 20_000, recording: { path: RECORDING, downloadId: 7 } },
     });
-    expect(search).toHaveBeenCalledWith({ filenameRegex: `Meetings/${FOLDER}/recording\\.webm$`, exists: true });
+    expect(search).toHaveBeenCalledWith({ filenameRegex: `/Meetings/${FOLDER}/recording\\.webm$`, exists: true });
   });
 
   it('counts from zero when last_recording is another meeting, and never above the cap', async () => {

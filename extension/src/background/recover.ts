@@ -46,7 +46,7 @@ function escapeRegex(text: string): string {
 /** The meeting's `recording.webm` as Chrome reports it, or null once the folder is moved, deleted or forgotten. */
 async function findMeeting(folder: string): Promise<{ path: string; downloadId: number } | null> {
   const [item] = await chrome.downloads.search({
-    filenameRegex: `Meetings/${escapeRegex(folder)}/recording\\.webm$`,
+    filenameRegex: `/Meetings/${escapeRegex(folder)}/recording\\.webm$`,
     exists: true,
   });
   return item ? { path: item.filename, downloadId: item.id } : null;
