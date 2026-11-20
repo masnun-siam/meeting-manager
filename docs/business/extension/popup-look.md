@@ -6,21 +6,21 @@ The source of truth for how this feature works for the business, as it is live t
 
 ## What it does
 
-The Chrome extension's popup (Record and Jobs tabs) and its microphone permission page get their own visual identity, in light and dark, without changing what the extension does. Planned, not live yet.
+The Chrome extension's popup (Record and Jobs tabs) and its microphone permission page get their own visual identity, in light and dark, without changing what the extension does.
 
 ## Rules
 
 - **R-1 Own identity, light and dark.** The popup and permission page use the "meeting." identity (amber accent, red record colour, Space Grotesk and Inter fonts shipped inside the extension), following macOS light or dark; the popup is 360 px wide.
   - Acceptance: the popup is dark in macOS dark mode and light in light mode, and its fonts render with the network off.
-  - Delivery: not delivered
+  - Delivery: delivered — `meeting-manager@77b569d` PR #287
   - Sources: [continue-recording PRD](../../prds/continue-recording.md) FR-15, D12, D13, D15
-- **R-2 Record and Jobs tabs.** Record shows a large timer, a round record button, a two-choice language control, the Continue card when available, and closable messages; while recording, a pulsing REC label, Pause/Resume and Stop & save. Jobs shows each job as a card with a coloured stage chip and today's actions.
+- **R-2 Record and Jobs tabs.** Record shows a large timer, a round record button, a two-choice language control, the Continue card when available (only in a build with `FEATURE_CONTINUE_RECORDING`), and closable messages; while recording, a pulsing REC label, Pause/Resume and Stop & save. Jobs shows each job as a card with a coloured stage chip and today's actions.
   - Acceptance: every recording state and job state renders as described and works as before.
-  - Delivery: not delivered
+  - Delivery: delivered — `meeting-manager@a4fd82d` PR #291, PR #293
   - Sources: [continue-recording PRD](../../prds/continue-recording.md) FR-16, FR-17
 - **R-3 Accessible and unchanged.** Motion stops with Reduce motion; contrast meets WCAG 2.1 AA in both palettes; every control is keyboard usable with a name. No extension behaviour, stored data or request changes.
   - Acceptance: with Reduce motion nothing pulses; existing behaviour tests pass with only named text and selector updates.
-  - Delivery: not delivered
+  - Delivery: delivered — `meeting-manager@a4fd82d` PR #287, PR #291, PR #293
   - Sources: [continue-recording PRD](../../prds/continue-recording.md) FR-18, FR-19
 
 ## Decisions
@@ -39,6 +39,8 @@ None.
 
 - 2026-11-20 request (team) R-1 R-2 R-3 the extension UI looks bad and should be beautiful and interactive [continue-recording PRD](../../prds/continue-recording.md)
 - 2026-11-20 planned (team) R-1 R-2 R-3 direction C from the mockups, PRD [continue-recording](../../prds/continue-recording.md)
+- 2026-11-20 delivered R-1 R-3 identity, light/dark tokens, bundled fonts, popup shell and permission page `meeting-manager@77b569d` PR #287 (merged 2026-11-19)
+- 2026-11-20 delivered R-2 R-3 Record tab in the new identity and Jobs tab cards with stage chips `meeting-manager@a4fd82d` PR #291, PR #293 (merged 2026-11-19)
 
 ## Related
 
