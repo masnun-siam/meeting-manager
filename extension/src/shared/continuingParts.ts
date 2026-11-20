@@ -45,3 +45,12 @@ export async function forgetContinuingPart(startedAt: number): Promise<void> {
   const { [startedAt]: _removed, ...rest } = all;
   await chrome.storage.local.set({ [CONTINUING_PARTS_KEY]: rest });
 }
+
+/** Drops every entry whose part has no origin-private file left (a Start that failed after the entry was written). */
+export async function forgetContinuingPartsWithout(startedAts: ReadonlySet<number>): Promise<void> {
+  if (!continueRecordingEnabled()) return;
+  const all = await readAll();
+  const kept = Object.fromEntries(Object.entries(all).filter(([key]) => startedAts.has(Number(key))));
+  if (Object.keys(kept).length === Object.keys(all).length) return;
+  await chrome.storage.local.set({ [CONTINUING_PARTS_KEY]: kept });
+}
