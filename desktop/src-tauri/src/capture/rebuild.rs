@@ -264,6 +264,21 @@ mod tests {
         health: Box<dyn FnMut() -> Option<String> + Send>,
         during: Box<dyn FnMut() + Send>,
     ) -> Fake {
+        spawn_with_give_up(settle, failures, build_time, health, during, 500 * MS)
+    }
+
+    /// `spawn` with the give-up window named. These tests drive the worker with real sleeps, and
+    /// a loaded runner makes every one of them longer than asked; a test that is not about giving
+    /// up asks for a window wide enough that the stretch cannot reach it, because a worker that
+    /// gives up after that much churn is right to.
+    fn spawn_with_give_up(
+        settle: Duration,
+        failures: usize,
+        build_time: Duration,
+        health: Box<dyn FnMut() -> Option<String> + Send>,
+        during: Box<dyn FnMut() + Send>,
+        give_up: Duration,
+    ) -> Fake {
         let builds = Arc::new(AtomicUsize::new(0));
         let halts = Arc::new(AtomicUsize::new(0));
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -273,7 +288,7 @@ mod tests {
             policy: Policy {
                 settle,
                 retry: 5 * MS,
-                give_up: 500 * MS,
+                give_up,
                 health: 20 * MS,
             },
             build: Box::new({
@@ -420,7 +435,7 @@ mod tests {
     #[test]
     fn health_waits_for_a_pending_rebuild_that_fixes_it() {
         let fixed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let fake = spawn(
+        let fake = spawn_with_give_up(
             50 * MS,
             0,
             Duration::ZERO,
@@ -432,9 +447,13 @@ mod tests {
                 let fixed = fixed.clone();
                 move || fixed.store(true, Ordering::SeqCst)
             }),
+            5000 * MS,
         );
-        // Keep a rebuild pending past the first health tick (20 ms), then let it succeed.
-        for _ in 0..50 {
+        // Keep a rebuild pending past the first health tick (20 ms), then let it succeed. The
+        // churn ends by the clock rather than after a count of sleeps: a fixed count of 2 ms
+        // sleeps runs far longer on a loaded runner, which gave up instead of rebuilding.
+        let churn = Instant::now();
+        while churn.elapsed() < 60 * MS {
             fake.tx.send(Msg::Changed).unwrap();
             thread::sleep(2 * MS);
         }
